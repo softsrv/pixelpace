@@ -1,0 +1,121 @@
+{{define "title"}}Profile{{end}}
+
+{{define "content"}}
+<div class="space-y-6">
+
+  <div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+      <h2 class="card-title">Account</h2>
+      <p class="text-base-content/70">{{.User.Email}}</p>
+      <p class="text-xs text-base-content/50">Member since {{.User.CreatedAt.Time.Format "January 2, 2006"}}</p>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+      <h3 class="card-title text-lg">Change Password</h3>
+
+      <div id="password-result"></div>
+
+      <form hx-post="/profile/change-password"
+            hx-target="#password-result"
+            hx-swap="innerHTML"
+            class="space-y-4 mt-2">
+        <div class="form-control">
+          <label class="label" for="current_password">
+            <span class="label-text">Current Password</span>
+          </label>
+          <div class="relative">
+            <input id="current_password" name="current_password" type="password" required
+                   class="input input-bordered w-full pr-10"
+                   autocomplete="current-password" />
+            <button type="button" tabindex="-1"
+                    data-toggle-pwd="current_password"
+                    class="absolute inset-y-0 right-0 flex items-center px-3 text-base-content/40 hover:text-base-content">
+              <svg class="eye h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <svg class="eye-off h-5 w-5 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="form-control">
+          <label class="label" for="new_password">
+            <span class="label-text">New Password</span>
+          </label>
+          <div class="relative">
+            <input id="new_password" name="new_password" type="password" required
+                   class="input input-bordered w-full pr-10"
+                   autocomplete="new-password" />
+            <button type="button" tabindex="-1"
+                    data-toggle-pwd="new_password"
+                    class="absolute inset-y-0 right-0 flex items-center px-3 text-base-content/40 hover:text-base-content">
+              <svg class="eye h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <svg class="eye-off h-5 w-5 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="form-control">
+          <label class="label" for="confirm_password">
+            <span class="label-text">Confirm New Password</span>
+          </label>
+          <div class="relative">
+            <input id="confirm_password" name="confirm_password" type="password" required
+                   class="input input-bordered w-full pr-10"
+                   autocomplete="new-password" />
+            <button type="button" tabindex="-1"
+                    data-toggle-pwd="confirm_password"
+                    class="absolute inset-y-0 right-0 flex items-center px-3 text-base-content/40 hover:text-base-content">
+              <svg class="eye h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+              </svg>
+              <svg class="eye-off h-5 w-5 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-full">Change Password</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+      <h3 class="card-title text-lg">Active Sessions</h3>
+      <div hx-get="/auth/sessions" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+        <span class="loading loading-spinner loading-sm"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-xl border border-error">
+    <div class="card-body">
+      <p class="text-sm text-base-content/70">Permanently delete your account and all associated data. This cannot be undone.</p>
+
+      <div id="delete-result" class="mt-2"></div>
+
+      <form hx-post="/profile/delete"
+            hx-target="#delete-result"
+            hx-swap="innerHTML"
+            hx-confirm="Are you sure you want to permanently delete your account? This cannot be undone."
+            class="mt-4">
+        <button type="submit" class="btn btn-error btn-outline w-full">Delete Account</button>
+      </form>
+    </div>
+  </div>
+
+</div>
+{{end}}

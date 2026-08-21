@@ -1,0 +1,43 @@
+{{define "title"}}Verify Email{{end}}
+
+{{define "content"}}
+<div class="card bg-base-100 shadow-xl">
+  <div class="card-body items-center text-center">
+
+    {{if .RetryAfter}}
+      <div class="text-5xl mb-2">⏳</div>
+      <h2 class="card-title text-2xl">Too many requests</h2>
+      <p class="text-base-content/70">You can request a new link in <strong>{{.RetryAfter}} minute{{if gt .RetryAfter 1}}s{{end}}</strong>.</p>
+
+    {{else if .Expired}}
+      <div class="text-5xl mb-2">⏰</div>
+      <h2 class="card-title text-2xl">Link expired</h2>
+      <p class="text-base-content/70 mb-4">Your verification link has expired. Log in to request a new one.</p>
+      <a href="/login" class="btn btn-primary">Log in</a>
+
+    {{else if .Error}}
+      <div class="text-5xl mb-2">⚠️</div>
+      <h2 class="card-title text-2xl">Link invalid or already used</h2>
+      <p class="text-base-content/70 mb-4">This verification link is not valid. Log in to request a new one.</p>
+      <a href="/login" class="btn btn-primary">Log in</a>
+
+    {{else if .Resent}}
+      <div class="text-5xl mb-2">✉️</div>
+      <h2 class="card-title text-2xl">Check your inbox</h2>
+      <p class="text-base-content/70">A new verification link has been sent to your email address.</p>
+
+    {{else}}
+      <div class="text-5xl mb-2">✉️</div>
+      <h2 class="card-title text-2xl">Check your inbox</h2>
+      <p class="text-base-content/70 mb-6">
+        We sent a verification link to your email address. Click the link to activate your account.
+        It expires in 24 hours.
+      </p>
+      <form method="post" action="/auth/resend-verification">
+        <button type="submit" class="btn btn-ghost btn-sm">Resend link</button>
+      </form>
+    {{end}}
+
+  </div>
+</div>
+{{end}}

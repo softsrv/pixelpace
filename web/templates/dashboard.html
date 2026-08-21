@@ -1,0 +1,17 @@
+{{define "title"}}Dashboard{{end}}
+
+{{define "content"}}
+<div class="space-y-6">
+  <div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+      <h2 class="card-title">Welcome back</h2>
+      <p class="text-base-content/70">{{.User.Email}}</p>
+      {{if not .User.EmailVerified}}
+      <div class="alert alert-warning mt-2">
+        <span>Your email is not verified. <a href="/verify-email" class="link">Verify now</a></span>
+      </div>
+      {{end}}
+    </div>
+  </div>
+</div>
+{{end}}

@@ -46,17 +46,19 @@ document.body.addEventListener('token-expired', async function () {
   var PM5_GENERAL_STATUS_DISTANCE_SCALE_METERS = 0.1;
   var PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_OFFSET = 0;
   var PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_SCALE_SECONDS = 0.01;
-  var PM5_ADDITIONAL_STATUS_1_STROKE_RATE_OFFSET = 4;
-  var PM5_ADDITIONAL_STATUS_1_HEART_RATE_OFFSET = 5;
+  var PM5_ADDITIONAL_STATUS_1_STROKE_RATE_OFFSET = 5;
+  var PM5_ADDITIONAL_STATUS_1_HEART_RATE_OFFSET = 6;
   var PM5_ADDITIONAL_STATUS_1_HEART_RATE_INVALID = 255;
-  var PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_OFFSET = 6;
+  var PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_OFFSET = 7;
   var PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_SCALE_SECONDS = 0.01;
   var PM5_ADDITIONAL_STATUS_2_ELAPSED_TIME_OFFSET = 0;
   var PM5_ADDITIONAL_STATUS_2_ELAPSED_TIME_SCALE_SECONDS = 0.01;
-  var PM5_ADDITIONAL_STATUS_2_TOTAL_CALORIES_OFFSET = 7;
+  var PM5_ADDITIONAL_STATUS_2_TOTAL_CALORIES_OFFSET = 6;
   var PM5_STROKE_DATA_ELAPSED_TIME_OFFSET = 0;
   var PM5_STROKE_DATA_ELAPSED_TIME_SCALE_SECONDS = 0.01;
-  var PM5_STROKE_DATA_STROKE_POWER_OFFSET = 7;
+  var PM5_STROKE_DATA_STROKE_COUNT_OFFSET = 16;
+  var PM5_ADDITIONAL_STROKE_DATA_STROKE_POWER_OFFSET = 3;
+  var PM5_ADDITIONAL_STROKE_DATA_STROKE_COUNT_OFFSET = 7;
   var pm5Characteristics = {
     // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing General Status.
     generalStatus: {
@@ -89,11 +91,13 @@ document.body.addEventListener('token-expired', async function () {
       uuid: 'ce060035-43e5-11e4-916c-0800200c9a66',
       elapsedTimeOffset: PM5_STROKE_DATA_ELAPSED_TIME_OFFSET,
       elapsedTimeScaleSeconds: PM5_STROKE_DATA_ELAPSED_TIME_SCALE_SECONDS,
-      strokePowerOffset: PM5_STROKE_DATA_STROKE_POWER_OFFSET
+      strokeCountOffset: PM5_STROKE_DATA_STROKE_COUNT_OFFSET
     },
     // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing Additional Stroke Data.
     additionalStrokeData: {
-      uuid: 'ce060036-43e5-11e4-916c-0800200c9a66'
+      uuid: 'ce060036-43e5-11e4-916c-0800200c9a66',
+      strokePowerOffset: PM5_ADDITIONAL_STROKE_DATA_STROKE_POWER_OFFSET,
+      strokeCountOffset: PM5_ADDITIONAL_STROKE_DATA_STROKE_COUNT_OFFSET
     }
   };
   var pm5CharacteristicsByUuid = {};
@@ -106,6 +110,7 @@ document.body.addEventListener('token-expired', async function () {
     pace: 0,
     strokeRate: 0,
     power: 0,
+    strokeCount: 0,
     calories: 0,
     heartRate: 0
   };
@@ -151,6 +156,7 @@ document.body.addEventListener('token-expired', async function () {
     if (key === 'pace') el.textContent = formatDuration(value) + ' /500m';
     if (key === 'strokeRate') el.textContent = Math.round(value || 0) + ' spm';
     if (key === 'power') el.textContent = Math.round(value || 0) + ' W';
+    if (key === 'strokeCount') el.textContent = Math.round(value || 0);
     if (key === 'calories') el.textContent = Math.round(value || 0) + ' kcal';
     if (key === 'heartRate') el.textContent = Math.round(value || 0) + ' bpm';
   }
@@ -198,6 +204,10 @@ document.body.addEventListener('token-expired', async function () {
 
     if (typeof def.strokePowerOffset === 'number' && hasBytes(dv, def.strokePowerOffset, 2)) {
       metrics.power = dv.getUint16(def.strokePowerOffset, true);
+    }
+
+    if (typeof def.strokeCountOffset === 'number' && hasBytes(dv, def.strokeCountOffset, 2)) {
+      metrics.strokeCount = dv.getUint16(def.strokeCountOffset, true);
     }
 
     return metrics;

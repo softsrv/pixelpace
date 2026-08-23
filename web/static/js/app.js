@@ -38,12 +38,194 @@ document.body.addEventListener('token-expired', async function () {
   if (!connectBtn) return;
 
   var connectionInfo = document.getElementById('bt-connection-info');
+  var metricsRegion = document.getElementById('bt-metrics');
   var concept2ServiceUuid = 'ce060000-43e5-11e4-916c-0800200c9a66';
+  var PM5_GENERAL_STATUS_ELAPSED_TIME_OFFSET = 0;
+  var PM5_GENERAL_STATUS_ELAPSED_TIME_SCALE_SECONDS = 0.01;
+  var PM5_GENERAL_STATUS_DISTANCE_OFFSET = 3;
+  var PM5_GENERAL_STATUS_DISTANCE_SCALE_METERS = 0.1;
+  var PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_OFFSET = 0;
+  var PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_SCALE_SECONDS = 0.01;
+  var PM5_ADDITIONAL_STATUS_1_STROKE_RATE_OFFSET = 4;
+  var PM5_ADDITIONAL_STATUS_1_HEART_RATE_OFFSET = 5;
+  var PM5_ADDITIONAL_STATUS_1_HEART_RATE_INVALID = 255;
+  var PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_OFFSET = 6;
+  var PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_SCALE_SECONDS = 0.01;
+  var PM5_ADDITIONAL_STATUS_2_ELAPSED_TIME_OFFSET = 0;
+  var PM5_ADDITIONAL_STATUS_2_ELAPSED_TIME_SCALE_SECONDS = 0.01;
+  var PM5_ADDITIONAL_STATUS_2_TOTAL_CALORIES_OFFSET = 7;
+  var PM5_STROKE_DATA_ELAPSED_TIME_OFFSET = 0;
+  var PM5_STROKE_DATA_ELAPSED_TIME_SCALE_SECONDS = 0.01;
+  var PM5_STROKE_DATA_STROKE_POWER_OFFSET = 7;
+  var pm5Characteristics = {
+    // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing General Status.
+    generalStatus: {
+      uuid: 'ce060031-43e5-11e4-916c-0800200c9a66',
+      elapsedTimeOffset: PM5_GENERAL_STATUS_ELAPSED_TIME_OFFSET,
+      elapsedTimeScaleSeconds: PM5_GENERAL_STATUS_ELAPSED_TIME_SCALE_SECONDS,
+      distanceOffset: PM5_GENERAL_STATUS_DISTANCE_OFFSET,
+      distanceScaleMeters: PM5_GENERAL_STATUS_DISTANCE_SCALE_METERS
+    },
+    // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing Additional Status 1.
+    additionalStatus1: {
+      uuid: 'ce060032-43e5-11e4-916c-0800200c9a66',
+      elapsedTimeOffset: PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_OFFSET,
+      elapsedTimeScaleSeconds: PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_SCALE_SECONDS,
+      strokeRateOffset: PM5_ADDITIONAL_STATUS_1_STROKE_RATE_OFFSET,
+      heartRateOffset: PM5_ADDITIONAL_STATUS_1_HEART_RATE_OFFSET,
+      heartRateInvalid: PM5_ADDITIONAL_STATUS_1_HEART_RATE_INVALID,
+      currentPaceOffset: PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_OFFSET,
+      currentPaceScaleSeconds: PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_SCALE_SECONDS
+    },
+    // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing Additional Status 2.
+    additionalStatus2: {
+      uuid: 'ce060033-43e5-11e4-916c-0800200c9a66',
+      elapsedTimeOffset: PM5_ADDITIONAL_STATUS_2_ELAPSED_TIME_OFFSET,
+      elapsedTimeScaleSeconds: PM5_ADDITIONAL_STATUS_2_ELAPSED_TIME_SCALE_SECONDS,
+      totalCaloriesOffset: PM5_ADDITIONAL_STATUS_2_TOTAL_CALORIES_OFFSET
+    },
+    // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing Stroke Data.
+    strokeData: {
+      uuid: 'ce060035-43e5-11e4-916c-0800200c9a66',
+      elapsedTimeOffset: PM5_STROKE_DATA_ELAPSED_TIME_OFFSET,
+      elapsedTimeScaleSeconds: PM5_STROKE_DATA_ELAPSED_TIME_SCALE_SECONDS,
+      strokePowerOffset: PM5_STROKE_DATA_STROKE_POWER_OFFSET
+    },
+    // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing Additional Stroke Data.
+    additionalStrokeData: {
+      uuid: 'ce060036-43e5-11e4-916c-0800200c9a66'
+    }
+  };
+  var pm5CharacteristicsByUuid = {};
+  Object.keys(pm5Characteristics).forEach(function (key) {
+    pm5CharacteristicsByUuid[pm5Characteristics[key].uuid] = pm5Characteristics[key];
+  });
+  var zeroMetrics = {
+    elapsedTime: 0,
+    distance: 0,
+    pace: 0,
+    strokeRate: 0,
+    power: 0,
+    calories: 0,
+    heartRate: 0
+  };
 
   function showConnectionInfo(message) {
     if (!connectionInfo) return;
     connectionInfo.textContent = message;
     connectionInfo.classList.remove('hidden');
+  }
+
+  function u24le(dv, offset) {
+    return dv.getUint8(offset) | (dv.getUint8(offset + 1) << 8) | (dv.getUint8(offset + 2) << 16);
+  }
+
+  function hasBytes(dv, offset, length) {
+    return dv && dv.byteLength >= offset + length;
+  }
+
+  function formatDuration(totalSeconds) {
+    var seconds = Math.max(0, Math.floor(totalSeconds || 0));
+    var h = Math.floor(seconds / 3600);
+    var m = Math.floor((seconds % 3600) / 60);
+    var s = seconds % 60;
+
+    if (h > 0) {
+      return h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+    }
+
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function metricEl(key) {
+    if (!metricsRegion) return null;
+    return metricsRegion.querySelector('[data-metric="' + key + '"]');
+  }
+
+  function renderMetric(key, value) {
+    var el = metricEl(key);
+    if (!el) return;
+
+    if (key === 'elapsedTime') el.textContent = formatDuration(value);
+    if (key === 'distance') el.textContent = Math.round(value || 0) + ' m';
+    if (key === 'pace') el.textContent = formatDuration(value) + ' /500m';
+    if (key === 'strokeRate') el.textContent = Math.round(value || 0) + ' spm';
+    if (key === 'power') el.textContent = Math.round(value || 0) + ' W';
+    if (key === 'calories') el.textContent = Math.round(value || 0) + ' kcal';
+    if (key === 'heartRate') el.textContent = Math.round(value || 0) + ' bpm';
+  }
+
+  function renderMetrics(metrics) {
+    Object.keys(metrics).forEach(function (key) {
+      renderMetric(key, metrics[key]);
+    });
+  }
+
+  function showZeroMetrics() {
+    if (metricsRegion) metricsRegion.classList.remove('hidden');
+    renderMetrics(zeroMetrics);
+  }
+
+  function decodePm5Notification(uuid, dv) {
+    var def = pm5CharacteristicsByUuid[uuid];
+    var metrics = {};
+    if (!def || !dv) return metrics;
+
+    if (typeof def.elapsedTimeOffset === 'number' && hasBytes(dv, def.elapsedTimeOffset, 3)) {
+      metrics.elapsedTime = u24le(dv, def.elapsedTimeOffset) * def.elapsedTimeScaleSeconds;
+    }
+
+    if (typeof def.distanceOffset === 'number' && hasBytes(dv, def.distanceOffset, 3)) {
+      metrics.distance = u24le(dv, def.distanceOffset) * def.distanceScaleMeters;
+    }
+
+    if (typeof def.strokeRateOffset === 'number' && hasBytes(dv, def.strokeRateOffset, 1)) {
+      metrics.strokeRate = dv.getUint8(def.strokeRateOffset);
+    }
+
+    if (typeof def.heartRateOffset === 'number' && hasBytes(dv, def.heartRateOffset, 1)) {
+      var heartRate = dv.getUint8(def.heartRateOffset);
+      metrics.heartRate = heartRate === def.heartRateInvalid ? 0 : heartRate;
+    }
+
+    if (typeof def.currentPaceOffset === 'number' && hasBytes(dv, def.currentPaceOffset, 2)) {
+      metrics.pace = dv.getUint16(def.currentPaceOffset, true) * def.currentPaceScaleSeconds;
+    }
+
+    if (typeof def.totalCaloriesOffset === 'number' && hasBytes(dv, def.totalCaloriesOffset, 2)) {
+      metrics.calories = dv.getUint16(def.totalCaloriesOffset, true);
+    }
+
+    if (typeof def.strokePowerOffset === 'number' && hasBytes(dv, def.strokePowerOffset, 2)) {
+      metrics.power = dv.getUint16(def.strokePowerOffset, true);
+    }
+
+    return metrics;
+  }
+
+  function onNotify(event) {
+    renderMetrics(decodePm5Notification(event.target.uuid, event.target.value));
+  }
+
+  async function getOptionalCharacteristic(service, def) {
+    try {
+      return await service.getCharacteristic(def.uuid);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function subscribeToPm5Metrics(server) {
+    var svc = await server.getPrimaryService(concept2ServiceUuid);
+    var keys = Object.keys(pm5Characteristics);
+
+    for (var i = 0; i < keys.length; i++) {
+      var ch = await getOptionalCharacteristic(svc, pm5Characteristics[keys[i]]);
+      if (!ch) continue;
+
+      await ch.startNotifications();
+      ch.addEventListener('characteristicvaluechanged', onNotify);
+    }
   }
 
   connectBtn.addEventListener('click', async function () {
@@ -67,6 +249,13 @@ document.body.addEventListener('token-expired', async function () {
       var server = await device.gatt.connect();
       var status = server.connected ? 'Connected' : 'Connection status unknown';
       showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — ' + status);
+      showZeroMetrics();
+
+      try {
+        await subscribeToPm5Metrics(server);
+      } catch (_) {
+        showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — ' + status + '. Connected, but live rowing data could not be started.');
+      }
     } catch (err) {
       if (err && err.name === 'NotFoundError') {
         showConnectionInfo('No rowing machine selected. Choose a Concept2 rowing machine to connect.');

@@ -20,6 +20,40 @@
       <p class="text-base-content/70">Connect a Concept2 PM5 rowing machine with Web Bluetooth.</p>
       <button id="bt-connect-btn" type="button" class="btn btn-primary">Connect Rowing Machine</button>
       <div id="bt-connection-info" class="alert alert-info hidden" role="status" aria-live="polite"></div>
+      <div id="bt-metrics" class="hidden grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-live="polite">
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Elapsed time</div>
+          <div id="bt-metric-elapsed-time" class="stat-value text-2xl" data-metric="elapsedTime">0:00</div>
+        </div>
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Distance</div>
+          <div id="bt-metric-distance" class="stat-value text-2xl" data-metric="distance">0 m</div>
+        </div>
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Pace / 500m</div>
+          <div id="bt-metric-pace" class="stat-value text-2xl" data-metric="pace">0:00</div>
+        </div>
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Stroke rate</div>
+          <div id="bt-metric-stroke-rate" class="stat-value text-2xl" data-metric="strokeRate">0 spm</div>
+        </div>
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Power</div>
+          <div id="bt-metric-power" class="stat-value text-2xl" data-metric="power">0 W</div>
+        </div>
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Calories</div>
+          <div id="bt-metric-calories" class="stat-value text-2xl" data-metric="calories">0 kcal</div>
+        </div>
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Stroke count</div>
+          <div id="bt-metric-stroke-count" class="stat-value text-2xl" data-metric="strokeCount">0</div>
+        </div>
+        <div class="stat rounded-box bg-base-200">
+          <div class="stat-title">Heart rate</div>
+          <div id="bt-metric-heart-rate" class="stat-value text-2xl" data-metric="heartRate">0 bpm</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>

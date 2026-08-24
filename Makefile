@@ -19,7 +19,7 @@ export
 ## ── Development ─────────────────────────────────────────────────────────────
 
 # Full hot-reload: smtp4dev container + Go (air) + Tailwind watch in parallel
-dev: smtp4dev
+dev: smtp4dev migrate-up
 	$(MAKE) -j2 air tailwind-watch
 
 smtp4dev:

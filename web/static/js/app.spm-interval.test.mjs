@@ -1,11 +1,95 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 
 import { spmToIntervalMs } from './spm-interval.mjs';
 
 var appJs = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
 var dashboardHtml = readFileSync(new URL('../../templates/dashboard.html', import.meta.url), 'utf8');
+
+function metricElement() {
+  return {
+    textContent: '',
+    classList: {
+      add: function () {},
+      remove: function () {},
+      toggle: function () {}
+    },
+    querySelector: function () { return { classList: this.classList }; },
+    getAttribute: function () { return ''; },
+    closest: function () { return null; },
+    addEventListener: function () {}
+  };
+}
+
+function runDashboardApp(devMode) {
+  var metricEls = {};
+  ['elapsedTime', 'distance', 'pace', 'strokeRate', 'power', 'strokeCount', 'calories', 'heartRate'].forEach(function (key) {
+    metricEls[key] = metricElement();
+  });
+
+  var metricsRegion = metricElement();
+  metricsRegion.querySelector = function (selector) {
+    var match = selector.match(/\[data-metric="(.+)"\]/);
+    return match ? metricEls[match[1]] : null;
+  };
+
+  var connectBtn = metricElement();
+  var connectionInfo = metricElement();
+  var rowingMachineCard = metricElement();
+  rowingMachineCard.getAttribute = function (name) {
+    return name === 'data-dev-mode' && devMode ? 'true' : 'false';
+  };
+  var rowerCanvas = metricElement();
+  rowerCanvas.width = 320;
+  rowerCanvas.height = 180;
+  rowerCanvas.getContext = function () {
+    return {
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 0,
+      lineCap: '',
+      lineJoin: '',
+      fillRect: function () {},
+      beginPath: function () {},
+      moveTo: function () {},
+      lineTo: function () {},
+      closePath: function () {},
+      fill: function () {},
+      stroke: function () {},
+      arc: function () {}
+    };
+  };
+
+  var byID = {
+    'bt-connect-btn': connectBtn,
+    'rowing-machine-card': rowingMachineCard,
+    'bt-connection-info': connectionInfo,
+    'bt-metrics': metricsRegion,
+    'bt-rower-canvas': rowerCanvas
+  };
+  var timers = [];
+  runInNewContext(appJs, {
+    document: {
+      addEventListener: function () {},
+      body: { addEventListener: function () {} },
+      getElementById: function (id) { return byID[id] || null; },
+      querySelector: function () { return null; }
+    },
+    window: { isSecureContext: false, location: { href: '' } },
+    navigator: {},
+    htmx: { trigger: function () {} },
+    Math: Math,
+    Number: Number,
+    Object: Object,
+    String: String,
+    setInterval: function (fn) { timers.push(fn); return timers.length; },
+    clearInterval: function () {}
+  });
+
+  return { metricEls: metricEls, connectionInfo: connectionInfo, timers: timers };
+}
 
 test('spmToIntervalMs maps endpoints and clamps out-of-range SPM', function () {
   assert.equal(spmToIntervalMs(16), 1000, '16 SPM maps to 1000ms');
@@ -52,4 +136,49 @@ test('disconnect hides the canvas and clears the timer', function () {
   assert.match(appJs, /device\.addEventListener\('gattserverdisconnected', function \(\) \{\n        stopRowerAnimation\(\);\n        hideRowerCanvas\(\);\n        showConnectionInfo/);
   assert.match(appJs, /function hideRowerCanvas\(\) \{[\s\S]*rowerCanvas\.classList\.add\('hidden'\);[\s\S]*\}/);
   assert.match(appJs, /function stopRowerAnimation\(\) \{\n    if \(rowerTimer\) clearInterval\(rowerTimer\);\n    rowerTimer = null;\n    rowerTimerIntervalMs = null;\n  \}/);
+});
+
+test('dev-mode mock PM5 renders synthetic metrics with no Bluetooth present', function () {
+  var result = runDashboardApp(true);
+
+  assert.equal(result.metricEls.strokeRate.textContent, '26 spm');
+  assert.equal(result.metricEls.pace.textContent, '2:12 /500m');
+  assert.equal(result.metricEls.distance.textContent, '42 m');
+  assert.equal(result.connectionInfo.textContent, 'Development mock PM5 — streaming synthetic rowing metrics.');
+});
+
+test('production dashboard does not auto-start the mock PM5', function () {
+  var result = runDashboardApp(false);
+
+  assert.equal(result.metricEls.strokeRate.textContent, '');
+  assert.equal(result.metricEls.pace.textContent, '');
+  assert.equal(result.connectionInfo.textContent, '');
+});
+
+test('dashboard exposes server-derived development mode to app.js', function () {
+  assert.match(dashboardHtml, /id="rowing-machine-card"[^>]*data-dev-mode="{{if \.DevMode}}true{{else}}false{{end}}"/);
+  assert.match(appJs, /var rowingMachineCard = document\.getElementById\('rowing-machine-card'\);\n  var devMode = rowingMachineCard && rowingMachineCard\.getAttribute\('data-dev-mode'\) === 'true';/);
+});
+
+test('mock PM5 activation is gated on the development-mode flag', function () {
+  assert.match(appJs, /function startMockPm5\(\) \{\n    if \(!devMode\) return;/);
+  assert.match(appJs, /if \(devMode\) startMockPm5\(\);/);
+  assert.doesNotMatch(appJs, /(^|[^\w])startMockPm5\(\);(?![\s\S]*DEV_MOCK_PM5_END)/);
+});
+
+test('mock PM5 emits through the existing metrics and animation render loop', function () {
+  var mockRegion = appJs.match(/\/\/ DEV_MOCK_PM5_START([\s\S]*?)\/\/ DEV_MOCK_PM5_END/)[1];
+  assert.match(mockRegion, /function emitMockPm5Metrics\(tick\) \{[\s\S]*var metrics = mockPm5Metrics\(tick\);[\s\S]*renderMetrics\(metrics\);[\s\S]*syncRowerAnimation\(metrics\.strokeRate\);/);
+  assert.match(appJs, /function onNotify\(event\) \{[\s\S]*renderMetrics\(metrics\);\n    if \(typeof metrics\.strokeRate === 'number'\) syncRowerAnimation\(metrics\.strokeRate\);/);
+});
+
+test('mock PM5 synthetic stroke rate and pace come from the static config', function () {
+  assert.match(appJs, /var mockPm5Config = \{[\s\S]*pace: 132,[\s\S]*strokeRate: 26,[\s\S]*\};/);
+  assert.match(appJs, /function mockPm5Metrics\(tick\) \{[\s\S]*pace: mockPm5Config\.pace,[\s\S]*strokeRate: mockPm5Config\.strokeRate,[\s\S]*\};/);
+  assert.doesNotMatch(appJs, /mockPm5Config\.(pace|strokeRate)\s*=|addEventListener\('(?:input|change)'[\s\S]*mockPm5Config|type="range"|data-mock-pm5-control/);
+});
+
+test('mock PM5 region never invokes Web Bluetooth', function () {
+  var mockRegion = appJs.match(/\/\/ DEV_MOCK_PM5_START([\s\S]*?)\/\/ DEV_MOCK_PM5_END/)[1];
+  assert.doesNotMatch(mockRegion, /navigator\.bluetooth|requestDevice|gatt\.connect|getPrimaryService|startNotifications|subscribeToPm5Metrics/);
 });

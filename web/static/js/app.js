@@ -37,6 +37,8 @@ document.body.addEventListener('token-expired', async function () {
   var connectBtn = document.getElementById('bt-connect-btn');
   if (!connectBtn) return;
 
+  var rowingMachineCard = document.getElementById('rowing-machine-card');
+  var devMode = rowingMachineCard && rowingMachineCard.getAttribute('data-dev-mode') === 'true';
   var connectionInfo = document.getElementById('bt-connection-info');
   var metricsRegion = document.getElementById('bt-metrics');
   var rowerCanvas = document.getElementById('bt-rower-canvas');
@@ -124,6 +126,17 @@ document.body.addEventListener('token-expired', async function () {
     calories: 0,
     heartRate: 0
   };
+  var mockPm5Config = {
+    elapsedTime: 12,
+    distance: 42,
+    pace: 132,
+    strokeRate: 26,
+    power: 180,
+    strokeCount: 6,
+    calories: 4,
+    heartRate: 142
+  };
+  var mockPm5Timer = null;
 
   function showConnectionInfo(message) {
     if (!connectionInfo) return;
@@ -321,6 +334,44 @@ document.body.addEventListener('token-expired', async function () {
     if (metricsRegion) metricsRegion.classList.remove('hidden');
     renderMetrics(zeroMetrics);
   }
+
+  // DEV_MOCK_PM5_START
+  function mockPm5Metrics(tick) {
+    return {
+      elapsedTime: mockPm5Config.elapsedTime + tick,
+      distance: mockPm5Config.distance + (tick * (mockPm5Config.strokeRate / 3)),
+      pace: mockPm5Config.pace,
+      strokeRate: mockPm5Config.strokeRate,
+      power: mockPm5Config.power,
+      strokeCount: mockPm5Config.strokeCount + Math.floor(tick * mockPm5Config.strokeRate / 60),
+      calories: mockPm5Config.calories + Math.floor(tick / 15),
+      heartRate: mockPm5Config.heartRate
+    };
+  }
+
+  function emitMockPm5Metrics(tick) {
+    var metrics = mockPm5Metrics(tick);
+    renderMetrics(metrics);
+    syncRowerAnimation(metrics.strokeRate);
+  }
+
+  function startMockPm5() {
+    if (!devMode) return;
+    revealRowerCanvas();
+    showZeroMetrics();
+    showConnectionInfo('Development mock PM5 — streaming synthetic rowing metrics.');
+
+    var tick = 0;
+    emitMockPm5Metrics(tick);
+    if (mockPm5Timer) clearInterval(mockPm5Timer);
+    mockPm5Timer = setInterval(function () {
+      tick += 1;
+      emitMockPm5Metrics(tick);
+    }, 1000);
+  }
+
+  if (devMode) startMockPm5();
+  // DEV_MOCK_PM5_END
 
   function decodePm5Notification(uuid, dv) {
     var def = pm5CharacteristicsByUuid[uuid];

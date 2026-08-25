@@ -104,6 +104,7 @@ func main() {
 		Renderer:          renderer,
 		JWTSecret:         cfg.JWTSecret,
 		Secure:            cfg.AppEnv == "production",
+		DevMode:           devModeForAppEnv(cfg.AppEnv),
 		TrustedProxyCount: cfg.TrustedProxyCount,
 	})
 
@@ -247,6 +248,10 @@ func getEnvOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func devModeForAppEnv(appEnv string) bool {
+	return appEnv != "production"
 }
 
 func setupLogger(env string) {

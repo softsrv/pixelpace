@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Tool state
+.local/
+
 # Build output
 bin/
 tmp/

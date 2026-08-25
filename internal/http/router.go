@@ -16,19 +16,27 @@ import (
 
 // RouterConfig holds all dependencies required to build the router.
 type RouterConfig struct {
-	Queries           *db.Queries
+	Queries           middleware.UserFetcher
 	Pool              handlers.DBPinger
 	AuthSvc           *app.AuthService
 	UserSvc           *app.UserService
 	Renderer          *handlers.TemplateRenderer
 	JWTSecret         string
 	Secure            bool // true in production
+	DevMode           bool // true outside production
 	TrustedProxyCount int
 }
 
 // NewRouter builds and returns the main http.Handler with all routes and middleware.
 // ctx controls the lifetime of background goroutines (rate-limiter sweepers); it
 // should be cancelled during application shutdown after the HTTP server drains.
+func dashboardTemplateData(user db.User, devMode bool) map[string]any {
+	return map[string]any{
+		"User":    user,
+		"DevMode": devMode,
+	}
+}
+
 func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	mux := http.NewServeMux()
 
@@ -96,9 +104,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 
 	mux.Handle("GET /dashboard", verifiedMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, _ := middleware.UserFromContext(r.Context())
-		cfg.Renderer.Page(w, http.StatusOK, "dashboard.html", map[string]any{
-			"User": user,
-		})
+		cfg.Renderer.Page(w, http.StatusOK, "dashboard.html", dashboardTemplateData(user, cfg.DevMode))
 	})))
 
 	// ── Global middleware chain ───────────────────────────────────────────────

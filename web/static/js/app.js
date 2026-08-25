@@ -39,6 +39,12 @@ document.body.addEventListener('token-expired', async function () {
 
   var connectionInfo = document.getElementById('bt-connection-info');
   var metricsRegion = document.getElementById('bt-metrics');
+  var rowerCanvas = document.getElementById('bt-rower-canvas');
+  var rowerCtx = rowerCanvas && rowerCanvas.getContext ? rowerCanvas.getContext('2d') : null;
+  var currentStrokeRate = 0;
+  var rowerTimer = null;
+  var rowerTimerIntervalMs = null;
+  var currentRowerFrame = 0;
   var concept2ServiceUuid = 'ce060000-43e5-11e4-916c-0800200c9a66';
   var PM5_GENERAL_STATUS_ELAPSED_TIME_OFFSET = 0;
   var PM5_GENERAL_STATUS_ELAPSED_TIME_SCALE_SECONDS = 0.01;
@@ -59,6 +65,10 @@ document.body.addEventListener('token-expired', async function () {
   var PM5_STROKE_DATA_STROKE_COUNT_OFFSET = 16;
   var PM5_ADDITIONAL_STROKE_DATA_STROKE_POWER_OFFSET = 3;
   var PM5_ADDITIONAL_STROKE_DATA_STROKE_COUNT_OFFSET = 7;
+  var SPM_INTERVAL_LOW = 16;
+  var SPM_INTERVAL_HIGH = 40;
+  var SPM_INTERVAL_SLOW_MS = 1000;
+  var SPM_INTERVAL_FAST_MS = 200;
   var pm5Characteristics = {
     // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing General Status.
     generalStatus: {
@@ -119,6 +129,146 @@ document.body.addEventListener('token-expired', async function () {
     if (!connectionInfo) return;
     connectionInfo.textContent = message;
     connectionInfo.classList.remove('hidden');
+  }
+
+  // Keep this logic byte-identical to web/static/js/spm-interval.mjs, where it is unit-tested.
+  function spmToIntervalMs(strokeRate) {
+    var spm = Number(strokeRate) || 0;
+    if (spm <= SPM_INTERVAL_LOW) return SPM_INTERVAL_SLOW_MS;
+    if (spm >= SPM_INTERVAL_HIGH) return SPM_INTERVAL_FAST_MS;
+
+    return Math.round(SPM_INTERVAL_SLOW_MS - ((spm - SPM_INTERVAL_LOW) / (SPM_INTERVAL_HIGH - SPM_INTERVAL_LOW)) * (SPM_INTERVAL_SLOW_MS - SPM_INTERVAL_FAST_MS));
+  }
+
+  function drawBoat() {
+    if (!rowerCtx || !rowerCanvas) return;
+
+    rowerCtx.fillStyle = '#4b2f1f';
+    rowerCtx.beginPath();
+    rowerCtx.moveTo(45, 124);
+    rowerCtx.lineTo(260, 124);
+    rowerCtx.lineTo(232, 148);
+    rowerCtx.lineTo(78, 148);
+    rowerCtx.closePath();
+    rowerCtx.fill();
+
+    rowerCtx.strokeStyle = '#f9fafb';
+    rowerCtx.lineWidth = 3;
+    rowerCtx.beginPath();
+    rowerCtx.moveTo(95, 120);
+    rowerCtx.lineTo(214, 120);
+    rowerCtx.stroke();
+  }
+
+  function drawRowerFrame(frame) {
+    if (!rowerCtx || !rowerCanvas) return;
+
+    rowerCtx.fillStyle = '#1e63c9';
+    rowerCtx.fillRect(0, 0, rowerCanvas.width, rowerCanvas.height);
+    drawBoat();
+
+    rowerCtx.strokeStyle = '#facc15';
+    rowerCtx.fillStyle = '#facc15';
+    rowerCtx.lineWidth = 5;
+    rowerCtx.lineCap = 'round';
+    rowerCtx.lineJoin = 'round';
+
+    if (frame === 1) {
+      rowerCtx.beginPath();
+      rowerCtx.arc(150, 76, 10, 0, Math.PI * 2);
+      rowerCtx.fill();
+      rowerCtx.beginPath();
+      rowerCtx.moveTo(150, 88);
+      rowerCtx.lineTo(132, 112);
+      rowerCtx.lineTo(116, 128);
+      rowerCtx.moveTo(132, 112);
+      rowerCtx.lineTo(158, 128);
+      rowerCtx.moveTo(140, 96);
+      rowerCtx.lineTo(102, 92);
+      rowerCtx.moveTo(140, 96);
+      rowerCtx.lineTo(112, 104);
+      rowerCtx.stroke();
+
+      rowerCtx.strokeStyle = '#e5e7eb';
+      rowerCtx.lineWidth = 4;
+      rowerCtx.beginPath();
+      rowerCtx.moveTo(102, 92);
+      rowerCtx.lineTo(54, 78);
+      rowerCtx.moveTo(112, 104);
+      rowerCtx.lineTo(65, 126);
+      rowerCtx.stroke();
+      return;
+    }
+
+    rowerCtx.beginPath();
+    rowerCtx.arc(174, 76, 10, 0, Math.PI * 2);
+    rowerCtx.fill();
+    rowerCtx.beginPath();
+    rowerCtx.moveTo(170, 88);
+    rowerCtx.lineTo(184, 112);
+    rowerCtx.lineTo(208, 128);
+    rowerCtx.moveTo(184, 112);
+    rowerCtx.lineTo(156, 128);
+    rowerCtx.moveTo(176, 96);
+    rowerCtx.lineTo(218, 90);
+    rowerCtx.moveTo(176, 96);
+    rowerCtx.lineTo(208, 106);
+    rowerCtx.stroke();
+
+    rowerCtx.strokeStyle = '#e5e7eb';
+    rowerCtx.lineWidth = 4;
+    rowerCtx.beginPath();
+    rowerCtx.moveTo(218, 90);
+    rowerCtx.lineTo(270, 72);
+    rowerCtx.moveTo(208, 106);
+    rowerCtx.lineTo(252, 132);
+    rowerCtx.stroke();
+  }
+
+  function drawRestingRower() {
+    currentRowerFrame = 0;
+    drawRowerFrame(currentRowerFrame);
+  }
+
+  function revealRowerCanvas() {
+    if (!rowerCanvas) return;
+    rowerCanvas.classList.remove('hidden');
+    drawRestingRower();
+  }
+
+  function hideRowerCanvas() {
+    if (!rowerCanvas) return;
+    rowerCanvas.classList.add('hidden');
+  }
+
+  function stopRowerAnimation() {
+    if (rowerTimer) clearInterval(rowerTimer);
+    rowerTimer = null;
+    rowerTimerIntervalMs = null;
+  }
+
+  function startRowerAnimation(intervalMs) {
+    stopRowerAnimation();
+    rowerTimerIntervalMs = intervalMs;
+    rowerTimer = setInterval(function () {
+      currentRowerFrame = currentRowerFrame === 0 ? 1 : 0;
+      drawRowerFrame(currentRowerFrame);
+    }, rowerTimerIntervalMs);
+  }
+
+  function syncRowerAnimation(strokeRate) {
+    currentStrokeRate = Math.max(0, Number(strokeRate) || 0);
+    if (!rowerCtx || !rowerCanvas) return;
+
+    if (currentStrokeRate <= 0) {
+      stopRowerAnimation();
+      drawRestingRower();
+      return;
+    }
+
+    var intervalMs = spmToIntervalMs(currentStrokeRate);
+    if (rowerTimer && rowerTimerIntervalMs === intervalMs) return;
+    startRowerAnimation(intervalMs);
   }
 
   function u24le(dv, offset) {
@@ -214,7 +364,9 @@ document.body.addEventListener('token-expired', async function () {
   }
 
   function onNotify(event) {
-    renderMetrics(decodePm5Notification(event.target.uuid, event.target.value));
+    var metrics = decodePm5Notification(event.target.uuid, event.target.value);
+    renderMetrics(metrics);
+    if (typeof metrics.strokeRate === 'number') syncRowerAnimation(metrics.strokeRate);
   }
 
   async function getOptionalCharacteristic(service, def) {
@@ -253,12 +405,15 @@ document.body.addEventListener('token-expired', async function () {
       });
 
       device.addEventListener('gattserverdisconnected', function () {
+        stopRowerAnimation();
+        hideRowerCanvas();
         showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — Disconnected');
       });
 
       var server = await device.gatt.connect();
       var status = server.connected ? 'Connected' : 'Connection status unknown';
       showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — ' + status);
+      revealRowerCanvas();
       showZeroMetrics();
 
       try {

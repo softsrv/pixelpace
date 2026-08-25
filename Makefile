@@ -67,7 +67,9 @@ lint:
 ## ── CSS ──────────────────────────────────────────────────────────────────────
 
 # Download DaisyUI .mjs bundles next to app.css so the @plugin directive
-# can resolve them. Re-run this whenever you upgrade DaisyUI.
+# can resolve them. These bundles are vendored (checked into git) so a
+# fresh clone builds without a network fetch; re-run this whenever you
+# want to upgrade DaisyUI and commit the resulting files.
 daisyui-install:
 	curl -sLo web/static/css/daisyui.mjs \
 	  https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.mjs

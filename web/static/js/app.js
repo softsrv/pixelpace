@@ -47,7 +47,11 @@ document.body.addEventListener('token-expired', async function () {
   var rowerTimer = null;
   var rowerTimerIntervalMs = null;
   var currentRowerFrame = 0;
-  var concept2ServiceUuid = 'ce060000-43e5-11e4-916c-0800200c9a66';
+  // The PM5 advertises the Discovery service in its BLE advertisement packet, so
+  // requestDevice must filter on that. The Rowing service (real-time data) is only
+  // reachable via GATT after connecting, so it must be listed in optionalServices.
+  var concept2DiscoveryServiceUuid = 'ce060000-43e5-11e4-916c-0800200c9a66';
+  var concept2RowingServiceUuid = 'ce060030-43e5-11e4-916c-0800200c9a66';
   var PM5_GENERAL_STATUS_ELAPSED_TIME_OFFSET = 0;
   var PM5_GENERAL_STATUS_ELAPSED_TIME_SCALE_SECONDS = 0.01;
   var PM5_GENERAL_STATUS_DISTANCE_OFFSET = 3;
@@ -457,7 +461,7 @@ document.body.addEventListener('token-expired', async function () {
   }
 
   async function subscribeToPm5Metrics(server) {
-    var svc = await server.getPrimaryService(concept2ServiceUuid);
+    var svc = await server.getPrimaryService(concept2RowingServiceUuid);
     var keys = Object.keys(pm5Characteristics);
 
     for (var i = 0; i < keys.length; i++) {
@@ -479,8 +483,8 @@ document.body.addEventListener('token-expired', async function () {
 
     try {
       var device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [concept2ServiceUuid] }],
-        optionalServices: [concept2ServiceUuid]
+        filters: [{ services: [concept2DiscoveryServiceUuid] }],
+        optionalServices: [concept2RowingServiceUuid]
       });
 
       device.addEventListener('gattserverdisconnected', function () {
@@ -497,7 +501,8 @@ document.body.addEventListener('token-expired', async function () {
 
       try {
         await subscribeToPm5Metrics(server);
-      } catch (_) {
+      } catch (err) {
+        console.error('[PM5] failed to start live rowing data:', err);
         showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — ' + status + '. Connected, but live rowing data could not be started.');
       }
     } catch (err) {
@@ -506,6 +511,7 @@ document.body.addEventListener('token-expired', async function () {
         return;
       }
 
+      console.error('[PM5] failed to connect to rowing machine:', err);
       showConnectionInfo('Could not connect to the rowing machine. Please try again.');
     }
   });

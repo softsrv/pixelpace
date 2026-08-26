@@ -69,10 +69,14 @@ function runDashboardApp(devMode) {
     'bt-metrics': metricsRegion,
     'bt-rower-canvas': rowerCanvas
   };
+  var documentListeners = {};
   var timers = [];
   runInNewContext(appJs, {
     document: {
-      addEventListener: function () {},
+      addEventListener: function (type, fn) {
+        if (!documentListeners[type]) documentListeners[type] = [];
+        documentListeners[type].push(fn);
+      },
       body: { addEventListener: function () {} },
       getElementById: function (id) { return byID[id] || null; },
       querySelector: function () { return null; }
@@ -88,7 +92,19 @@ function runDashboardApp(devMode) {
     clearInterval: function () {}
   });
 
-  return { metricEls: metricEls, connectionInfo: connectionInfo, timers: timers };
+  function keydown(key) {
+    var prevented = false;
+    var listeners = documentListeners.keydown || [];
+    listeners.forEach(function (fn) {
+      fn({
+        key: key,
+        preventDefault: function () { prevented = true; }
+      });
+    });
+    return prevented;
+  }
+
+  return { metricEls: metricEls, connectionInfo: connectionInfo, timers: timers, documentListeners: documentListeners, keydown: keydown };
 }
 
 test('spmToIntervalMs maps endpoints and clamps out-of-range SPM', function () {
@@ -147,6 +163,46 @@ test('dev-mode mock PM5 renders synthetic metrics with no Bluetooth present', fu
   assert.equal(result.connectionInfo.textContent, 'Development mock PM5 — streaming synthetic rowing metrics.');
 });
 
+test('mock PM5 keyboard controls register globally in dev mode only', function () {
+  var devResult = runDashboardApp(true);
+  var prodResult = runDashboardApp(false);
+
+  assert.equal(devResult.documentListeners.keydown.length, 1);
+  assert.equal(prodResult.documentListeners.keydown, undefined);
+});
+
+test('mock PM5 arrow keys adjust stroke rate and pace by one and prevent page scroll', function () {
+  var result = runDashboardApp(true);
+
+  assert.equal(result.keydown('ArrowUp'), true);
+  assert.equal(result.metricEls.strokeRate.textContent, '27 spm');
+  assert.equal(result.keydown('ArrowDown'), true);
+  assert.equal(result.metricEls.strokeRate.textContent, '26 spm');
+  assert.equal(result.keydown('ArrowLeft'), true);
+  assert.equal(result.metricEls.pace.textContent, '2:11 /500m');
+  assert.equal(result.keydown('ArrowRight'), true);
+  assert.equal(result.metricEls.pace.textContent, '2:12 /500m');
+});
+
+test('mock PM5 arrow key adjustments persist across timer ticks', function () {
+  var result = runDashboardApp(true);
+
+  result.keydown('ArrowUp');
+  result.keydown('ArrowLeft');
+  result.timers[1]();
+
+  assert.equal(result.metricEls.strokeRate.textContent, '27 spm');
+  assert.equal(result.metricEls.pace.textContent, '2:11 /500m');
+});
+
+test('mock PM5 keyboard ignores non-arrow keys without preventDefault', function () {
+  var result = runDashboardApp(true);
+
+  assert.equal(result.keydown('KeyA'), false);
+  assert.equal(result.metricEls.strokeRate.textContent, '26 spm');
+  assert.equal(result.metricEls.pace.textContent, '2:12 /500m');
+});
+
 test('production dashboard does not auto-start the mock PM5', function () {
   var result = runDashboardApp(false);
 
@@ -175,10 +231,10 @@ test('mock PM5 emits through the existing metrics and animation render loop', fu
 test('mock PM5 synthetic stroke rate and pace come from the static config', function () {
   assert.match(appJs, /var mockPm5Config = \{[\s\S]*pace: 132,[\s\S]*strokeRate: 26,[\s\S]*\};/);
   assert.match(appJs, /function mockPm5Metrics\(tick\) \{[\s\S]*pace: mockPm5Config\.pace,[\s\S]*strokeRate: mockPm5Config\.strokeRate,[\s\S]*\};/);
-  assert.doesNotMatch(appJs, /mockPm5Config\.(pace|strokeRate)\s*=|addEventListener\('(?:input|change)'[\s\S]*mockPm5Config|type="range"|data-mock-pm5-control/);
+  assert.doesNotMatch(appJs, /addEventListener\('(?:input|change)'[\s\S]*mockPm5Config|type="range"|data-mock-pm5-control/);
 });
 
-test('mock PM5 region never invokes Web Bluetooth', function () {
+test('mock PM5 keyboard controls are confined away from Web Bluetooth', function () {
   var mockRegion = appJs.match(/\/\/ DEV_MOCK_PM5_START([\s\S]*?)\/\/ DEV_MOCK_PM5_END/)[1];
-  assert.doesNotMatch(mockRegion, /navigator\.bluetooth|requestDevice|gatt\.connect|getPrimaryService|startNotifications|subscribeToPm5Metrics/);
+  assert.doesNotMatch(mockRegion, /navigator\.bluetooth|requestDevice|gatt\.connect|getPrimaryService|startNotifications|subscribeToPm5Metrics|onNotify/);
 });

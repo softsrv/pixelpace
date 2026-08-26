@@ -336,6 +336,9 @@ document.body.addEventListener('token-expired', async function () {
   }
 
   // DEV_MOCK_PM5_START
+  var mockPm5Tick = 0;
+  var mockPm5KeyboardControlsStarted = false;
+
   function mockPm5Metrics(tick) {
     return {
       elapsedTime: mockPm5Config.elapsedTime + tick,
@@ -355,18 +358,43 @@ document.body.addEventListener('token-expired', async function () {
     syncRowerAnimation(metrics.strokeRate);
   }
 
+  function handleMockPm5Keydown(evt) {
+    if (!devMode) return;
+    if (evt.key === 'ArrowUp') {
+      mockPm5Config.strokeRate = Math.max(0, mockPm5Config.strokeRate + 1);
+    } else if (evt.key === 'ArrowDown') {
+      mockPm5Config.strokeRate = Math.max(0, mockPm5Config.strokeRate - 1);
+    } else if (evt.key === 'ArrowLeft') {
+      mockPm5Config.pace = Math.max(0, mockPm5Config.pace - 1);
+    } else if (evt.key === 'ArrowRight') {
+      mockPm5Config.pace = Math.max(0, mockPm5Config.pace + 1);
+    } else {
+      return;
+    }
+
+    evt.preventDefault();
+    emitMockPm5Metrics(mockPm5Tick);
+  }
+
+  function startMockPm5KeyboardControls() {
+    if (mockPm5KeyboardControlsStarted) return;
+    document.addEventListener('keydown', handleMockPm5Keydown);
+    mockPm5KeyboardControlsStarted = true;
+  }
+
   function startMockPm5() {
     if (!devMode) return;
     revealRowerCanvas();
     showZeroMetrics();
     showConnectionInfo('Development mock PM5 — streaming synthetic rowing metrics.');
+    startMockPm5KeyboardControls();
 
-    var tick = 0;
-    emitMockPm5Metrics(tick);
+    mockPm5Tick = 0;
+    emitMockPm5Metrics(mockPm5Tick);
     if (mockPm5Timer) clearInterval(mockPm5Timer);
     mockPm5Timer = setInterval(function () {
-      tick += 1;
-      emitMockPm5Metrics(tick);
+      mockPm5Tick += 1;
+      emitMockPm5Metrics(mockPm5Tick);
     }, 1000);
   }
 

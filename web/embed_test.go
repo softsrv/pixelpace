@@ -69,12 +69,11 @@ func TestDashboardStatValuesContainOverflowGuardClasses(t *testing.T) {
 	}
 }
 
-// TestMainLayoutUsesWidenedContentColumn renders the REAL embedded base.html
-// (via web.FS, not a mock) and asserts the shared <main> content wrapper now
-// caps at max-w-4xl instead of the old max-w-md, and that no per-page override
-// is present in the dashboard content that would re-narrow it. Reverting the
-// base.html max-w-4xl change turns this test red.
-func TestMainLayoutUsesWidenedContentColumn(t *testing.T) {
+// TestMainLayoutUsesNarrowContentColumn renders the REAL embedded base.html
+// (via web.FS, not a mock) and asserts the shared <main> content wrapper caps
+// at max-w-md, and that no per-page override re-widens it to max-w-4xl.
+// Re-introducing the base.html max-w-4xl cap turns this test red.
+func TestMainLayoutUsesNarrowContentColumn(t *testing.T) {
 	base, err := template.ParseFS(FS, "templates/base.html")
 	if err != nil {
 		t.Fatalf("parse base.html: %v", err)
@@ -94,10 +93,10 @@ func TestMainLayoutUsesWidenedContentColumn(t *testing.T) {
 	}
 	out := buf.String()
 
-	if !strings.Contains(out, `<main class="container mx-auto px-4 py-8 max-w-4xl">`) {
-		t.Errorf("<main> wrapper does not carry max-w-4xl; rendered: %q", out)
+	if !strings.Contains(out, `<main class="container mx-auto px-4 py-8 max-w-md">`) {
+		t.Errorf("<main> wrapper does not carry max-w-md; rendered: %q", out)
 	}
-	if strings.Contains(out, "max-w-md") {
-		t.Errorf("rendered output still contains the old max-w-md cap somewhere")
+	if strings.Contains(out, "max-w-4xl") {
+		t.Errorf("rendered output still contains the widened max-w-4xl cap")
 	}
 }

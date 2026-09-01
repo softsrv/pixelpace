@@ -1,0 +1,5 @@
+# Build the distributed race broadcast layer from day one, on Valkey
+
+Race telemetry broadcast could have shipped as simple in-process pub/sub, matching the rest of the app's current single-instance, in-memory patterns (e.g. the rate limiter's `sync.Map`), and only gone distributed once real scaling pressure arrived. We chose instead to build it distributed from the start, on Valkey pub/sub, accepting a new infrastructure dependency now in exchange for never needing a broadcast-layer rewrite later — a Race's real-time updates must reach every participant's Connection correctly regardless of which Server Instance holds it, under horizontal scaling or a rolling deploy.
+
+Valkey was chosen over Redis specifically: Valkey is BSD-3-Clause and wire-compatible with Redis (same clients, e.g. `go-redis`), avoiding any AGPLv3 copyleft question that Redis's current tri-license (AGPLv3/SSPLv1/RSALv2, since Redis 8.0) still carries. It's also the default Redis fork for both AWS ElastiCache and Google Memorystore.

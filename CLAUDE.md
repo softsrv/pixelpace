@@ -110,3 +110,13 @@ For local development, `make dev` starts smtp4dev automatically — SMTP is avai
 - Parameterized SQL only (sqlc enforces this).
 - bcrypt cost factor 12; passwords capped at 72 bytes (bcrypt's input limit) in `users.ValidatePassword`.
 - UUIDv7 via `github.com/google/uuid`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in `softsrv/pixelpace` (via `gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.

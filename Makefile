@@ -4,6 +4,8 @@ MODULE           := github.com/softsrv/starter
 SMTP4DEV_NAME    := $(APP_NAME)-smtp4dev
 SMTP4DEV_SMTP    := 2525
 SMTP4DEV_WEB     := 5000
+VALKEY_NAME      := $(APP_NAME)-valkey
+VALKEY_PORT      := 6379
 
 # Load .env if present (for local dev convenience)
 -include .env
@@ -11,7 +13,7 @@ export
 
 .PHONY: dev run build test fmt lint \
         daisyui-install tailwind tailwind-watch \
-        smtp4dev smtp4dev-stop \
+        smtp4dev smtp4dev-stop valkey valkey-stop \
         migrate-up migrate-down migrate-create migrate-status \
         sqlc-generate \
         docker-build docker-run prod clean
@@ -19,7 +21,7 @@ export
 ## ── Development ─────────────────────────────────────────────────────────────
 
 # Full hot-reload: smtp4dev container + Go (air) + Tailwind watch in parallel
-dev: smtp4dev migrate-up
+dev: smtp4dev valkey migrate-up
 	$(MAKE) -j2 air tailwind-watch
 
 smtp4dev:
@@ -36,6 +38,20 @@ smtp4dev:
 
 smtp4dev-stop:
 	docker rm -f $(SMTP4DEV_NAME) 2>/dev/null || true
+
+valkey:
+	@if [ -z "$$(docker ps -q -f name=^$(VALKEY_NAME)$$)" ]; then \
+	  docker rm -f $(VALKEY_NAME) 2>/dev/null || true; \
+	  docker run -d --name $(VALKEY_NAME) \
+	    -p $(VALKEY_PORT):6379 \
+	    valkey/valkey; \
+	  echo "valkey started — localhost:$(VALKEY_PORT)"; \
+	else \
+	  echo "valkey already running"; \
+	fi
+
+valkey-stop:
+	docker rm -f $(VALKEY_NAME) 2>/dev/null || true
 
 air:
 	air

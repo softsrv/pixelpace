@@ -30,7 +30,7 @@ func (f routerUserFetcher) GetUserByID(context.Context, uuid.UUID) (db.User, err
 func newDashboardTestRenderer(t *testing.T) *handlers.TemplateRenderer {
 	t.Helper()
 	fsys := fstest.MapFS{
-		"templates/base.html": &fstest.MapFile{Data: []byte(`{{define "base.html"}}<!doctype html><html><body>{{block "content" .}}{{end}}</body></html>{{end}}`)},
+		"templates/base.html":      &fstest.MapFile{Data: []byte(`{{define "base.html"}}<!doctype html><html><body>{{block "content" .}}{{end}}</body></html>{{end}}`)},
 		"templates/dashboard.html": &fstest.MapFile{Data: []byte(`{{define "content"}}<section id="rowing-machine-card" data-dev-mode="{{if .DevMode}}true{{else}}false{{end}}">{{.User.Email}}</section>{{end}}`)},
 	}
 	base, err := template.ParseFS(fsys, "templates/base.html")

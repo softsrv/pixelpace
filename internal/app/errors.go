@@ -17,6 +17,11 @@ var (
 	ErrTokenUsed            = errors.New("token has already been used")
 	ErrEmailAlreadyVerified = errors.New("email is already verified")
 	ErrForbidden            = errors.New("access denied")
+	ErrAlreadyFriends       = errors.New("users are already friends")
+	ErrRequestPending       = errors.New("friend request is already pending")
+	ErrCooldownActive       = errors.New("friend request cooldown is active")
+	ErrNoSuchRequest        = errors.New("pending friend request not found")
+	ErrNotRecipient         = errors.New("only the recipient may decide a friend request")
 )
 
 // RateLimitedError is returned when an operation is attempted too frequently.

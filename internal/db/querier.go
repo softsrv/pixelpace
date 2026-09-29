@@ -13,14 +13,20 @@ import (
 
 type Querier interface {
 	CountRecentPasswordResetsByEmail(ctx context.Context, email string) (int64, error)
-	DeleteUserByID(ctx context.Context, id uuid.UUID) error
 	CountRecentVerificationCodesByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
+	CreateFriendRequest(ctx context.Context, arg CreateFriendRequestParams) (FriendRequest, error)
+	CreateFriendship(ctx context.Context, arg CreateFriendshipParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DecideFriendRequest(ctx context.Context, arg DecideFriendRequestParams) (FriendRequest, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 	DeleteStalePasswordResetTokens(ctx context.Context) (int64, error)
 	DeleteStaleVerificationCodes(ctx context.Context) (int64, error)
+	DeleteUserByID(ctx context.Context, id uuid.UUID) error
+	FriendshipExists(ctx context.Context, arg FriendshipExistsParams) (bool, error)
+	GetFriendRequest(ctx context.Context, id uuid.UUID) (FriendRequest, error)
 	GetOldestRecentVerificationCode(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (PasswordResetToken, error)
+	GetPendingFriendRequest(ctx context.Context, arg GetPendingFriendRequestParams) (FriendRequest, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (RefreshToken, error)
 	GetRefreshTokenByID(ctx context.Context, id uuid.UUID) (RefreshToken, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
@@ -30,7 +36,9 @@ type Querier interface {
 	InsertEmailVerificationCode(ctx context.Context, arg InsertEmailVerificationCodeParams) (EmailVerificationCode, error)
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (RefreshToken, error)
+	LatestFriendRequestRejection(ctx context.Context, arg LatestFriendRequestRejectionParams) (pgtype.Timestamptz, error)
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
+	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) error
 	MarkVerificationCodeUsed(ctx context.Context, id uuid.UUID) error

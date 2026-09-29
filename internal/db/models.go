@@ -20,6 +20,22 @@ type EmailVerificationCode struct {
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 }
 
+type FriendRequest struct {
+	ID          uuid.UUID          `json:"id"`
+	SenderID    uuid.UUID          `json:"sender_id"`
+	RecipientID uuid.UUID          `json:"recipient_id"`
+	Status      string             `json:"status"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	DecidedAt   pgtype.Timestamptz `json:"decided_at"`
+}
+
+type Friendship struct {
+	ID        uuid.UUID          `json:"id"`
+	UserIDA   uuid.UUID          `json:"user_id_a"`
+	UserIDB   uuid.UUID          `json:"user_id_b"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type PasswordResetToken struct {
 	ID        uuid.UUID          `json:"id"`
 	UserID    uuid.UUID          `json:"user_id"`
@@ -27,6 +43,37 @@ type PasswordResetToken struct {
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
+}
+
+type Race struct {
+	ID         uuid.UUID          `json:"id"`
+	RoomID     uuid.UUID          `json:"room_id"`
+	RaceTypeID uuid.UUID          `json:"race_type_id"`
+	StartedAt  pgtype.Timestamptz `json:"started_at"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
+type RaceParticipant struct {
+	ID                  uuid.UUID          `json:"id"`
+	RaceID              uuid.UUID          `json:"race_id"`
+	UserID              uuid.UUID          `json:"user_id"`
+	Status              string             `json:"status"`
+	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
+	ElapsedMilliseconds pgtype.Int4        `json:"elapsed_milliseconds"`
+}
+
+type RaceType struct {
+	ID          uuid.UUID `json:"id"`
+	Kind        string    `json:"kind"`
+	TargetValue int64     `json:"target_value"`
+	Label       string    `json:"label"`
+}
+
+type RaceTypeSegment struct {
+	ID          uuid.UUID `json:"id"`
+	RaceTypeID  uuid.UUID `json:"race_type_id"`
+	Position    int32     `json:"position"`
+	TargetValue int64     `json:"target_value"`
 }
 
 type RefreshToken struct {
@@ -40,6 +87,34 @@ type RefreshToken struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
 	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type Room struct {
+	ID         uuid.UUID          `json:"id"`
+	RaceTypeID uuid.UUID          `json:"race_type_id"`
+	HostUserID uuid.UUID          `json:"host_user_id"`
+	Status     string             `json:"status"`
+	JoinCode   string             `json:"join_code"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type RoomParticipant struct {
+	ID       uuid.UUID          `json:"id"`
+	RoomID   uuid.UUID          `json:"room_id"`
+	UserID   uuid.UUID          `json:"user_id"`
+	Ready    bool               `json:"ready"`
+	JoinedAt pgtype.Timestamptz `json:"joined_at"`
+}
+
+type TelemetrySample struct {
+	ID                  uuid.UUID          `json:"id"`
+	RaceID              uuid.UUID          `json:"race_id"`
+	UserID              uuid.UUID          `json:"user_id"`
+	ElapsedMilliseconds pgtype.Int8        `json:"elapsed_milliseconds"`
+	DistanceMillimeters pgtype.Int8        `json:"distance_millimeters"`
+	StrokeRate          pgtype.Int4        `json:"stroke_rate"`
+	Power               pgtype.Int4        `json:"power"`
+	SampledAt           pgtype.Timestamptz `json:"sampled_at"`
 }
 
 type User struct {

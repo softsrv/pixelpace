@@ -12,17 +12,26 @@ import (
 )
 
 type Querier interface {
+	BeginRoomRace(ctx context.Context, id uuid.UUID) error
 	CountRecentPasswordResetsByEmail(ctx context.Context, email string) (int64, error)
-	DeleteUserByID(ctx context.Context, id uuid.UUID) error
 	CountRecentVerificationCodesByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
+	CountRoomParticipants(ctx context.Context, roomID uuid.UUID) (int64, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
+	DeleteRoomParticipant(ctx context.Context, arg DeleteRoomParticipantParams) error
 	DeleteStalePasswordResetTokens(ctx context.Context) (int64, error)
 	DeleteStaleVerificationCodes(ctx context.Context) (int64, error)
+	DeleteUserByID(ctx context.Context, id uuid.UUID) error
+	DissolveRoom(ctx context.Context, id uuid.UUID) error
+	GetActiveRoomByJoinCode(ctx context.Context, joinCode string) (Room, error)
 	GetOldestRecentVerificationCode(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (PasswordResetToken, error)
+	GetRaceType(ctx context.Context, id uuid.UUID) (RaceType, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (RefreshToken, error)
 	GetRefreshTokenByID(ctx context.Context, id uuid.UUID) (RefreshToken, error)
+	GetRemainingRoomParticipant(ctx context.Context, roomID uuid.UUID) (uuid.UUID, error)
+	GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, error)
+	GetRoomParticipant(ctx context.Context, arg GetRoomParticipantParams) (RoomParticipant, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetVerificationCodeByTokenHash(ctx context.Context, tokenHash string) (EmailVerificationCode, error)
@@ -30,14 +39,21 @@ type Querier interface {
 	InsertEmailVerificationCode(ctx context.Context, arg InsertEmailVerificationCodeParams) (EmailVerificationCode, error)
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (RefreshToken, error)
+	InsertRoom(ctx context.Context, arg InsertRoomParams) error
+	InsertRoomParticipant(ctx context.Context, arg InsertRoomParticipantParams) error
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) error
+	MarkRoomParticipantReady(ctx context.Context, arg MarkRoomParticipantReadyParams) error
 	MarkVerificationCodeUsed(ctx context.Context, id uuid.UUID) error
+	ReassignRoomHost(ctx context.Context, arg ReassignRoomHostParams) error
 	ResetLoginAttempts(ctx context.Context, id uuid.UUID) error
 	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error
 	RevokeRefreshToken(ctx context.Context, id uuid.UUID) error
+	RoomHasUnreadyParticipants(ctx context.Context, roomID uuid.UUID) (bool, error)
+	RoomParticipantExists(ctx context.Context, arg RoomParticipantExistsParams) (bool, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
+	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
 	UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error
 }

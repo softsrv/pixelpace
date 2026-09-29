@@ -20,6 +20,7 @@ type RouterConfig struct {
 	Pool              handlers.DBPinger
 	AuthSvc           *app.AuthService
 	UserSvc           *app.UserService
+	FriendSvc         *app.FriendService
 	Renderer          *handlers.TemplateRenderer
 	JWTSecret         string
 	Secure            bool // true in production
@@ -43,6 +44,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	// ── Handlers ──────────────────────────────────────────────────────────────
 	authH := handlers.NewAuthHandler(cfg.AuthSvc, cfg.Renderer, cfg.Secure, cfg.TrustedProxyCount)
 	sessH := handlers.NewSessionHandler(cfg.UserSvc, cfg.Renderer, cfg.Secure)
+	friendH := handlers.NewFriendHandler(cfg.FriendSvc)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
 
 	// ── Rate limiters ─────────────────────────────────────────────────────────
@@ -90,6 +92,11 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	mux.Handle("POST /auth/reset-password", resetRL.Middleware(http.HandlerFunc(authH.ResetPassword)))
 
 	// ── Protected routes ──────────────────────────────────────────────────────
+	mux.Handle("POST /friends/requests", authMW(http.HandlerFunc(friendH.Send)))
+	mux.Handle("POST /friends/requests/{id}/accept", authMW(http.HandlerFunc(friendH.Accept)))
+	mux.Handle("POST /friends/requests/{id}/reject", authMW(http.HandlerFunc(friendH.Reject)))
+	mux.Handle("GET /friends", authMW(http.HandlerFunc(friendH.ListFriends)))
+
 	mux.Handle("POST /auth/logout", authMW(http.HandlerFunc(authH.Logout)))
 	mux.Handle("POST /auth/resend-verification", authMW(http.HandlerFunc(authH.ResendVerification)))
 

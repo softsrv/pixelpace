@@ -73,6 +73,7 @@ func main() {
 		AppName:        cfg.SMTPFromName,
 	})
 	userSvc := app.NewUserService(queries)
+	friendSvc := app.NewFriendService(queries, pool, app.FriendServiceConfig{Cooldown: 10 * 24 * time.Hour})
 
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
@@ -101,6 +102,7 @@ func main() {
 		Pool:              pool,
 		AuthSvc:           authSvc,
 		UserSvc:           userSvc,
+		FriendSvc:         friendSvc,
 		Renderer:          renderer,
 		JWTSecret:         cfg.JWTSecret,
 		Secure:            cfg.AppEnv == "production",

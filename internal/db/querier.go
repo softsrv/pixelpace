@@ -12,16 +12,21 @@ import (
 )
 
 type Querier interface {
+	BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error)
 	CountRecentPasswordResetsByEmail(ctx context.Context, email string) (int64, error)
 	CountRecentVerificationCodesByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
 	CreateFriendRequest(ctx context.Context, arg CreateFriendRequestParams) (FriendRequest, error)
 	CreateFriendship(ctx context.Context, arg CreateFriendshipParams) error
+	CreateRace(ctx context.Context, arg CreateRaceParams) (Race, error)
+	CreateRaceParticipant(ctx context.Context, arg CreateRaceParticipantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecideFriendRequest(ctx context.Context, arg DecideFriendRequestParams) (FriendRequest, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 	DeleteStalePasswordResetTokens(ctx context.Context) (int64, error)
 	DeleteStaleVerificationCodes(ctx context.Context) (int64, error)
 	DeleteUserByID(ctx context.Context, id uuid.UUID) error
+	FinishRace(ctx context.Context, arg FinishRaceParams) error
+	FinishRaceParticipant(ctx context.Context, arg FinishRaceParticipantParams) error
 	FriendshipExists(ctx context.Context, arg FriendshipExistsParams) (bool, error)
 	GetFriendRequest(ctx context.Context, id uuid.UUID) (FriendRequest, error)
 	GetOldestRecentVerificationCode(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
@@ -35,12 +40,17 @@ type Querier interface {
 	IncrementFailedLoginAttempts(ctx context.Context, id uuid.UUID) error
 	InsertEmailVerificationCode(ctx context.Context, arg InsertEmailVerificationCodeParams) (EmailVerificationCode, error)
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
+	InsertRaceTelemetry(ctx context.Context, arg InsertRaceTelemetryParams) error
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (RefreshToken, error)
 	LatestFriendRequestRejection(ctx context.Context, arg LatestFriendRequestRejectionParams) (pgtype.Timestamptz, error)
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
 	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
+	ListRaceRoomParticipants(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
+	ListRaceStandings(ctx context.Context, arg ListRaceStandingsParams) ([]ListRaceStandingsRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
+	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)
 	MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) error
+	MarkRaceParticipantDNF(ctx context.Context, id uuid.UUID) error
 	MarkVerificationCodeUsed(ctx context.Context, id uuid.UUID) error
 	ResetLoginAttempts(ctx context.Context, id uuid.UUID) error
 	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error

@@ -74,6 +74,7 @@ func main() {
 	})
 	userSvc := app.NewUserService(queries)
 	friendSvc := app.NewFriendService(queries, pool, app.FriendServiceConfig{Cooldown: 10 * 24 * time.Hour})
+	roomSvc := app.NewRoomService(queries, pool)
 
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
@@ -102,6 +103,7 @@ func main() {
 		Pool:              pool,
 		AuthSvc:           authSvc,
 		UserSvc:           userSvc,
+		RoomSvc:           roomSvc,
 		FriendSvc:         friendSvc,
 		Renderer:          renderer,
 		JWTSecret:         cfg.JWTSecret,

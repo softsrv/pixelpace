@@ -20,6 +20,7 @@ type RouterConfig struct {
 	Pool              handlers.DBPinger
 	AuthSvc           *app.AuthService
 	UserSvc           *app.UserService
+	RoomSvc           *app.RoomService
 	FriendSvc         *app.FriendService
 	Renderer          *handlers.TemplateRenderer
 	JWTSecret         string
@@ -46,6 +47,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	sessH := handlers.NewSessionHandler(cfg.UserSvc, cfg.Renderer, cfg.Secure)
 	friendH := handlers.NewFriendHandler(cfg.FriendSvc)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
+	roomH := handlers.NewRoomHandler(cfg.RoomSvc, cfg.Renderer, cfg.Secure)
 
 	// ── Rate limiters ─────────────────────────────────────────────────────────
 	// Each limiter spawns a sweep goroutine that exits when ctx is cancelled.
@@ -108,6 +110,13 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	mux.Handle("GET /profile", verifiedMW(http.HandlerFunc(profileH.ProfilePage)))
 	mux.Handle("POST /profile/change-password", verifiedMW(http.HandlerFunc(profileH.ChangePassword)))
 	mux.Handle("POST /profile/delete", verifiedMW(http.HandlerFunc(profileH.DeleteAccount)))
+
+	mux.Handle("POST /rooms", verifiedMW(http.HandlerFunc(roomH.Create)))
+	mux.Handle("POST /rooms/join", verifiedMW(http.HandlerFunc(roomH.Join)))
+	mux.Handle("POST /rooms/{id}/leave", verifiedMW(http.HandlerFunc(roomH.Leave)))
+	mux.Handle("POST /rooms/{id}/kick", verifiedMW(http.HandlerFunc(roomH.Kick)))
+	mux.Handle("POST /rooms/{id}/ready", verifiedMW(http.HandlerFunc(roomH.MarkReady)))
+	mux.Handle("POST /rooms/{id}/start", verifiedMW(http.HandlerFunc(roomH.Start)))
 
 	mux.Handle("GET /dashboard", verifiedMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, _ := middleware.UserFromContext(r.Context())

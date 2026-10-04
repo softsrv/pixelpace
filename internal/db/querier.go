@@ -54,6 +54,7 @@ type Querier interface {
 	InsertRoom(ctx context.Context, arg InsertRoomParams) error
 	InsertRoomParticipant(ctx context.Context, arg InsertRoomParticipantParams) error
 	LatestFriendRequestRejection(ctx context.Context, arg LatestFriendRequestRejectionParams) (pgtype.Timestamptz, error)
+	LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPersonalBestParams) ([]LeaderboardPersonalBestRow, error)
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
 	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
 	ListRaceRoomParticipants(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)

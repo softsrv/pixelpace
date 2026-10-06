@@ -74,6 +74,7 @@ func main() {
 	})
 	userSvc := app.NewUserService(queries)
 	friendSvc := app.NewFriendService(queries, pool, app.FriendServiceConfig{Cooldown: 10 * 24 * time.Hour})
+	leaderboardSvc := app.NewLeaderboardService(queries, friendSvc, app.LeaderboardServiceConfig{})
 	roomSvc := app.NewRoomService(queries, pool)
 
 	// ── Templates ─────────────────────────────────────────────────────────────
@@ -105,6 +106,7 @@ func main() {
 		UserSvc:           userSvc,
 		RoomSvc:           roomSvc,
 		FriendSvc:         friendSvc,
+		LeaderboardSvc:    leaderboardSvc,
 		Renderer:          renderer,
 		JWTSecret:         cfg.JWTSecret,
 		Secure:            cfg.AppEnv == "production",

@@ -21,6 +21,7 @@ type RouterConfig struct {
 	AuthSvc           *app.AuthService
 	UserSvc           *app.UserService
 	RoomSvc           *app.RoomService
+	QuickMatchSvc     *app.QuickMatchService
 	FriendSvc         *app.FriendService
 	LeaderboardSvc    *app.LeaderboardService
 	Renderer          *handlers.TemplateRenderer
@@ -50,6 +51,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	leaderboardH := handlers.NewLeaderboardHandler(cfg.LeaderboardSvc)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
 	roomH := handlers.NewRoomHandler(cfg.RoomSvc, cfg.Renderer, cfg.Secure)
+	quickMatchH := handlers.NewQuickMatchHandler(cfg.QuickMatchSvc)
 
 	// ── Rate limiters ─────────────────────────────────────────────────────────
 	// Each limiter spawns a sweep goroutine that exits when ctx is cancelled.
@@ -113,6 +115,10 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	mux.Handle("GET /profile", verifiedMW(http.HandlerFunc(profileH.ProfilePage)))
 	mux.Handle("POST /profile/change-password", verifiedMW(http.HandlerFunc(profileH.ChangePassword)))
 	mux.Handle("POST /profile/delete", verifiedMW(http.HandlerFunc(profileH.DeleteAccount)))
+
+	mux.Handle("POST /quick-match", verifiedMW(http.HandlerFunc(quickMatchH.Enqueue)))
+	mux.Handle("POST /quick-match/leave", verifiedMW(http.HandlerFunc(quickMatchH.Leave)))
+	mux.Handle("POST /quick-match/match", verifiedMW(http.HandlerFunc(quickMatchH.Match)))
 
 	mux.Handle("POST /rooms", verifiedMW(http.HandlerFunc(roomH.Create)))
 	mux.Handle("POST /rooms/join", verifiedMW(http.HandlerFunc(roomH.Join)))

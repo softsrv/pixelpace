@@ -29,6 +29,7 @@ type Querier interface {
 	DeleteStaleVerificationCodes(ctx context.Context) (int64, error)
 	DeleteUserByID(ctx context.Context, id uuid.UUID) error
 	DissolveRoom(ctx context.Context, id uuid.UUID) error
+	EnqueueQuickMatch(ctx context.Context, arg EnqueueQuickMatchParams) error
 	FinishRace(ctx context.Context, arg FinishRaceParams) error
 	FinishRaceParticipant(ctx context.Context, arg FinishRaceParticipantParams) error
 	FriendshipExists(ctx context.Context, arg FriendshipExistsParams) (bool, error)
@@ -55,10 +56,12 @@ type Querier interface {
 	InsertRoomParticipant(ctx context.Context, arg InsertRoomParticipantParams) error
 	LatestFriendRequestRejection(ctx context.Context, arg LatestFriendRequestRejectionParams) (pgtype.Timestamptz, error)
 	LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPersonalBestParams) ([]LeaderboardPersonalBestRow, error)
+	LeaveQuickMatch(ctx context.Context, arg LeaveQuickMatchParams) error
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
 	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
 	ListRaceRoomParticipants(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
 	ListRaceStandings(ctx context.Context, arg ListRaceStandingsParams) ([]ListRaceStandingsRow, error)
+	ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)
 	MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) error
@@ -66,6 +69,7 @@ type Querier interface {
 	MarkRoomParticipantReady(ctx context.Context, arg MarkRoomParticipantReadyParams) error
 	MarkVerificationCodeUsed(ctx context.Context, id uuid.UUID) error
 	ReassignRoomHost(ctx context.Context, arg ReassignRoomHostParams) error
+	RecentFinishesByRaceType(ctx context.Context, arg RecentFinishesByRaceTypeParams) ([]RecentFinishesByRaceTypeRow, error)
 	ResetLoginAttempts(ctx context.Context, id uuid.UUID) error
 	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error
 	RevokeRefreshToken(ctx context.Context, id uuid.UUID) error

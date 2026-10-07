@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/email"
 	internalhttp "github.com/softsrv/starter/internal/http"
 	"github.com/softsrv/starter/internal/http/handlers"
+	"github.com/softsrv/starter/internal/realtime"
 	"github.com/softsrv/starter/web"
 )
 
@@ -76,6 +78,13 @@ func main() {
 	friendSvc := app.NewFriendService(queries, pool, app.FriendServiceConfig{Cooldown: 10 * 24 * time.Hour})
 	leaderboardSvc := app.NewLeaderboardService(queries, friendSvc, app.LeaderboardServiceConfig{})
 	roomSvc := app.NewRoomService(queries, pool)
+	var broadcaster realtime.Broadcaster = realtime.NewFake()
+	if cfg.ValkeyAddr != "" {
+		client := redis.NewClient(&redis.Options{Addr: cfg.ValkeyAddr})
+		defer func() { _ = client.Close() }()
+		broadcaster = realtime.NewValkeyBroadcaster(client)
+	}
+	raceSvc := app.NewRaceService(queries, pool, broadcaster, app.RaceServiceConfig{})
 
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
@@ -105,6 +114,8 @@ func main() {
 		AuthSvc:           authSvc,
 		UserSvc:           userSvc,
 		RoomSvc:           roomSvc,
+		RaceSvc:           raceSvc,
+		Broadcaster:       broadcaster,
 		FriendSvc:         friendSvc,
 		LeaderboardSvc:    leaderboardSvc,
 		Renderer:          renderer,
@@ -165,6 +176,7 @@ type config struct {
 	Port               string
 	AppBaseURL         string
 	DatabaseURL        string
+	ValkeyAddr         string
 	DBMaxConns         int
 	DBMinConns         int
 	TrustedProxyCount  int
@@ -187,6 +199,7 @@ func mustLoadConfig() config {
 		Port:          getEnvOrDefault("PORT", "8080"),
 		AppBaseURL:    mustGetEnv("APP_BASE_URL"),
 		DatabaseURL:   mustGetEnv("DATABASE_URL"),
+		ValkeyAddr:    os.Getenv("VALKEY_ADDR"),
 		JWTSecret:     mustGetEnv("JWT_SECRET"),
 		SMTPHost:      mustGetEnv("SMTP_HOST"),
 		SMTPPort:      mustGetEnv("SMTP_PORT"),

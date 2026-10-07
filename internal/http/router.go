@@ -11,6 +11,7 @@ import (
 	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/http/handlers"
 	"github.com/softsrv/starter/internal/http/middleware"
+	"github.com/softsrv/starter/internal/realtime"
 	"github.com/softsrv/starter/web"
 )
 
@@ -21,6 +22,8 @@ type RouterConfig struct {
 	AuthSvc           *app.AuthService
 	UserSvc           *app.UserService
 	RoomSvc           *app.RoomService
+	RaceSvc           *app.RaceService
+	Broadcaster       realtime.Broadcaster
 	FriendSvc         *app.FriendService
 	LeaderboardSvc    *app.LeaderboardService
 	Renderer          *handlers.TemplateRenderer
@@ -50,6 +53,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	leaderboardH := handlers.NewLeaderboardHandler(cfg.LeaderboardSvc)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
 	roomH := handlers.NewRoomHandler(cfg.RoomSvc, cfg.Renderer, cfg.Secure)
+	raceWSH := handlers.NewRaceWSHandler(cfg.RaceSvc, cfg.Broadcaster)
 
 	// ── Rate limiters ─────────────────────────────────────────────────────────
 	// Each limiter spawns a sweep goroutine that exits when ctx is cancelled.
@@ -101,6 +105,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	mux.Handle("POST /friends/requests/{id}/reject", authMW(http.HandlerFunc(friendH.Reject)))
 	mux.Handle("GET /friends", authMW(http.HandlerFunc(friendH.ListFriends)))
 	mux.Handle("GET /leaderboard", authMW(http.HandlerFunc(leaderboardH.Leaderboard)))
+	mux.Handle("GET /races/{id}/ws", authMW(http.HandlerFunc(raceWSH.Serve)))
 
 	mux.Handle("POST /auth/logout", authMW(http.HandlerFunc(authH.Logout)))
 	mux.Handle("POST /auth/resend-verification", authMW(http.HandlerFunc(authH.ResendVerification)))

@@ -45,6 +45,13 @@ type PasswordResetToken struct {
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 }
 
+type QuickMatchQueue struct {
+	ID         uuid.UUID          `json:"id"`
+	UserID     uuid.UUID          `json:"user_id"`
+	RaceTypeID uuid.UUID          `json:"race_type_id"`
+	JoinedAt   pgtype.Timestamptz `json:"joined_at"`
+}
+
 type Race struct {
 	ID         uuid.UUID          `json:"id"`
 	RoomID     uuid.UUID          `json:"room_id"`

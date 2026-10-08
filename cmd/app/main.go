@@ -76,6 +76,7 @@ func main() {
 	friendSvc := app.NewFriendService(queries, pool, app.FriendServiceConfig{Cooldown: 10 * 24 * time.Hour})
 	leaderboardSvc := app.NewLeaderboardService(queries, friendSvc, app.LeaderboardServiceConfig{})
 	roomSvc := app.NewRoomService(queries, pool)
+	quickMatchSvc := app.NewQuickMatchService(queries, pool, roomSvc, app.QuickMatchServiceConfig{})
 
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
@@ -105,6 +106,7 @@ func main() {
 		AuthSvc:           authSvc,
 		UserSvc:           userSvc,
 		RoomSvc:           roomSvc,
+		QuickMatchSvc:     quickMatchSvc,
 		FriendSvc:         friendSvc,
 		LeaderboardSvc:    leaderboardSvc,
 		Renderer:          renderer,

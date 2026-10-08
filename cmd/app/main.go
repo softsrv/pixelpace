@@ -78,6 +78,7 @@ func main() {
 	friendSvc := app.NewFriendService(queries, pool, app.FriendServiceConfig{Cooldown: 10 * 24 * time.Hour})
 	leaderboardSvc := app.NewLeaderboardService(queries, friendSvc, app.LeaderboardServiceConfig{})
 	roomSvc := app.NewRoomService(queries, pool)
+	quickMatchSvc := app.NewQuickMatchService(queries, pool, roomSvc, app.QuickMatchServiceConfig{})
 	var broadcaster realtime.Broadcaster = realtime.NewFake()
 	if cfg.ValkeyAddr != "" {
 		client := redis.NewClient(&redis.Options{Addr: cfg.ValkeyAddr})
@@ -116,6 +117,7 @@ func main() {
 		RoomSvc:           roomSvc,
 		RaceSvc:           raceSvc,
 		Broadcaster:       broadcaster,
+		QuickMatchSvc:     quickMatchSvc,
 		FriendSvc:         friendSvc,
 		LeaderboardSvc:    leaderboardSvc,
 		Renderer:          renderer,

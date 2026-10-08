@@ -12,6 +12,11 @@ type responseWriter struct {
 	status int
 }
 
+// Unwrap lets http.ResponseController reach optional interfaces such as Hijacker.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)

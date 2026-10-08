@@ -141,6 +141,102 @@ document.body.addEventListener('token-expired', async function () {
     heartRate: 142
   };
   var mockPm5Timer = null;
+  var activeRaceStream = null;
+  // PM5 characteristics report partial updates; retain the latest known readings.
+  var streamMetrics = { elapsedTime: 0, distance: 0, strokeRate: 0, power: 0 };
+
+  function startRaceStream(raceId) {
+    if (!raceId) throw new Error('A race id is required');
+    raceId = String(raceId);
+    if (activeRaceStream && activeRaceStream.raceId === raceId) return activeRaceStream;
+    if (activeRaceStream) activeRaceStream.stop();
+
+    var stream = { raceId: raceId, buffer: [], socket: null, stop: stop };
+    var retryTimer = null;
+    var retryDelay = 1000;
+    var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var url = protocol + '//' + window.location.host + '/races/' + encodeURIComponent(raceId) + '/ws';
+    activeRaceStream = stream;
+
+    function stop() {
+      if (activeRaceStream !== stream) return;
+      activeRaceStream = null;
+      if (retryTimer !== null) clearTimeout(retryTimer);
+      if (stream.socket) stream.socket.close();
+    }
+
+    function retry() {
+      if (activeRaceStream !== stream || retryTimer !== null) return;
+      retryTimer = setTimeout(function () {
+        retryTimer = null;
+        connect();
+      }, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
+    }
+
+    function connect() {
+      if (activeRaceStream !== stream) return;
+      var socket;
+      try {
+        socket = new WebSocket(url);
+      } catch (_) {
+        retry();
+        return;
+      }
+      stream.socket = socket;
+      socket.onopen = function () {
+        if (activeRaceStream !== stream || stream.socket !== socket) return;
+        retryDelay = 1000;
+        flushRaceStream(stream);
+      };
+      socket.onclose = function () {
+        if (stream.socket === socket) retry();
+      };
+      socket.onerror = function () {
+        // Closing leads to onclose and a client-owned reconnect attempt.
+        socket.close();
+      };
+    }
+
+    connect();
+    return stream;
+  }
+
+  function flushRaceStream(stream) {
+    var socket = stream.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    var sent = 0;
+    try {
+      // One synchronous replay action, one sample per frame as required by the server.
+      for (; sent < stream.buffer.length; sent++) {
+        if (socket.readyState !== WebSocket.OPEN) break;
+        socket.send(JSON.stringify(stream.buffer[sent]));
+      }
+    } catch (_) {
+      // Keep the unsent suffix (and its timestamps) for the next connection.
+      socket.close();
+    } finally {
+      stream.buffer.splice(0, sent);
+    }
+  }
+
+  function streamRaceMetrics(metrics) {
+    Object.keys(streamMetrics).forEach(function (key) {
+      if (typeof metrics[key] === 'number') streamMetrics[key] = metrics[key];
+    });
+    if (!activeRaceStream || Object.keys(metrics).length === 0) return;
+    activeRaceStream.buffer.push({
+      elapsed_milliseconds: Math.round(streamMetrics.elapsedTime * 1000),
+      distance_millimeters: Math.round(streamMetrics.distance * 1000),
+      stroke_rate: Math.round(streamMetrics.strokeRate),
+      power: Math.round(streamMetrics.power),
+      sampled_at: new Date().toISOString()
+    });
+    flushRaceStream(activeRaceStream);
+  }
+
+  // The race owner supplies the id; the returned handle exposes the replay buffer.
+  window.startRaceStream = startRaceStream;
 
   function showConnectionInfo(message) {
     if (!connectionInfo) return;
@@ -360,6 +456,7 @@ document.body.addEventListener('token-expired', async function () {
     var metrics = mockPm5Metrics(tick);
     renderMetrics(metrics);
     syncRowerAnimation(metrics.strokeRate);
+    streamRaceMetrics(metrics);
   }
 
   function handleMockPm5Keydown(evt) {
@@ -450,6 +547,7 @@ document.body.addEventListener('token-expired', async function () {
     var metrics = decodePm5Notification(event.target.uuid, event.target.value);
     renderMetrics(metrics);
     if (typeof metrics.strokeRate === 'number') syncRowerAnimation(metrics.strokeRate);
+    streamRaceMetrics(metrics);
   }
 
   async function getOptionalCharacteristic(service, def) {

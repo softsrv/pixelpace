@@ -82,6 +82,7 @@ func main() {
 	defer func() { _ = valkeyClient.Close() }()
 	broadcaster := realtime.NewValkeyBroadcaster(valkeyClient)
 	raceSvc := app.NewRaceService(queries, pool, broadcaster, app.RaceServiceConfig{})
+	quickMatchSvc := app.NewQuickMatchService(queries, pool, roomSvc, app.QuickMatchServiceConfig{})
 
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
@@ -113,6 +114,7 @@ func main() {
 		RoomSvc:           roomSvc,
 		RaceSvc:           raceSvc,
 		Broadcaster:       broadcaster,
+		QuickMatchSvc:     quickMatchSvc,
 		FriendSvc:         friendSvc,
 		LeaderboardSvc:    leaderboardSvc,
 		Renderer:          renderer,

@@ -33,7 +33,7 @@ func (b *ValkeyBroadcaster) Subscribe(ctx context.Context, raceID string) (<-cha
 
 	go func() {
 		defer close(out)
-		defer pubsub.Close()
+		defer func() { _ = pubsub.Close() }()
 
 		messages := pubsub.Channel()
 		for {

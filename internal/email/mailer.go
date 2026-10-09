@@ -47,26 +47,26 @@ func (m *SMTPMailer) Send(to, subject, htmlBody, textBody string) error {
 
 	boundary := "==boundary=="
 	var msg strings.Builder
-	msg.WriteString(fmt.Sprintf("From: %s\r\n", from))
-	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
-	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	fmt.Fprintf(&msg, "From: %s\r\n", from)
+	fmt.Fprintf(&msg, "To: %s\r\n", to)
+	fmt.Fprintf(&msg, "Subject: %s\r\n", subject)
 	msg.WriteString("MIME-Version: 1.0\r\n")
-	msg.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q\r\n", boundary))
+	fmt.Fprintf(&msg, "Content-Type: multipart/alternative; boundary=%q\r\n", boundary)
 	msg.WriteString("\r\n")
 
 	// Plain-text part
-	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	fmt.Fprintf(&msg, "--%s\r\n", boundary)
 	msg.WriteString("Content-Type: text/plain; charset=utf-8\r\n\r\n")
 	msg.WriteString(textBody)
 	msg.WriteString("\r\n")
 
 	// HTML part
-	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	fmt.Fprintf(&msg, "--%s\r\n", boundary)
 	msg.WriteString("Content-Type: text/html; charset=utf-8\r\n\r\n")
 	msg.WriteString(htmlBody)
 	msg.WriteString("\r\n")
 
-	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+	fmt.Fprintf(&msg, "--%s--\r\n", boundary)
 
 	if err := smtp.SendMail(addr, auth, m.fromEmail, []string{to}, []byte(msg.String())); err != nil {
 		return fmt.Errorf("smtp send: %w", err)

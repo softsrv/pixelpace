@@ -209,7 +209,7 @@ func TestEveryPageHasFooter(t *testing.T) {
 				t.Errorf("%s: rendered output missing </body>", tc.name)
 			}
 			if mainEnd != -1 && footerStart != -1 && bodyEnd != -1 {
-				if !(mainEnd < footerStart && footerStart < bodyEnd) {
+				if mainEnd >= footerStart || footerStart >= bodyEnd {
 					t.Errorf("%s: expected </main> < <footer < </body>, got mainEnd=%d, footerStart=%d, bodyEnd=%d", tc.name, mainEnd, footerStart, bodyEnd)
 				}
 			}

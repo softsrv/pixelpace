@@ -14,7 +14,7 @@
   <script src="/static/js/htmx.min.js"></script>
   <script src="/static/js/app.js" defer></script>
 </head>
-<body class="min-h-screen bg-base-200">
+<body class="flex min-h-screen flex-col bg-base-200">
   <nav class="navbar bg-base-100 shadow-sm px-4">
     <div class="flex-1">
       <a href="/" class="text-xl font-bold">App</a>
@@ -43,8 +43,14 @@
     </div>
   </nav>
 
-  <main class="container mx-auto px-4 py-8 max-w-md">
+  <main class="flex-1 container mx-auto px-4 py-8 max-w-md">
     {{block "content" .}}{{end}}
   </main>
+
+  <footer class="footer footer-center p-4 text-base-content/60">
+    <aside>
+      <p>&copy; 2026 softsrv</p>
+    </aside>
+  </footer>
 </body>
 </html>

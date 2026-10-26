@@ -49,3 +49,15 @@ UPDATE rooms SET status = 'counting_down' WHERE id = $1;
 
 -- name: BeginRoomRace :exec
 UPDATE rooms SET status = 'in_progress' WHERE id = $1;
+
+-- name: ResetRoomCountdown :exec
+UPDATE rooms SET status = 'waiting' WHERE id = $1 AND status = 'counting_down';
+
+-- name: ListRoomRoster :many
+SELECT u.id, u.display_name, rp.ready
+FROM room_participants rp JOIN users u ON u.id = rp.user_id
+WHERE rp.room_id = $1
+ORDER BY rp.joined_at, rp.id;
+
+-- name: GetRoomRaceID :one
+SELECT id FROM races WHERE room_id = $1 LIMIT 1;

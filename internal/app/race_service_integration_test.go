@@ -204,6 +204,26 @@ func TestRaceServiceIngestStoresAndBroadcastsEverySample(t *testing.T) {
 			if got.UserID != f.users[0] || !reflect.DeepEqual(got.TelemetrySample, sample) {
 				t.Fatalf("broadcast=%+v, want %+v", got, sample)
 			}
+			var frame map[string]any
+			if err := json.Unmarshal(payload, &frame); err != nil {
+				t.Fatal(err)
+			}
+			expectedKeys := map[string]bool{
+				"user_id":              true,
+				"elapsed_milliseconds": true,
+				"distance_millimeters": true,
+				"stroke_rate":          true,
+				"power":                true,
+				"sampled_at":           true,
+			}
+			if len(frame) != len(expectedKeys) {
+				t.Fatalf("broadcast frame has %d keys (%v), want exactly %d keys %v", len(frame), frame, len(expectedKeys), expectedKeys)
+			}
+			for k := range expectedKeys {
+				if _, ok := frame[k]; !ok {
+					t.Fatalf("broadcast frame missing expected key %q: %v", k, frame)
+				}
+			}
 		case <-time.After(time.Second):
 			t.Fatal("sample not broadcast")
 		}

@@ -17,7 +17,7 @@ import (
 type quickMatchServicer interface {
 	Enqueue(context.Context, uuid.UUID, uuid.UUID) error
 	Leave(context.Context, uuid.UUID, uuid.UUID) error
-	Match(context.Context, uuid.UUID, uuid.UUID) (string, error)
+	Match(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, string, error)
 }
 
 var _ quickMatchServicer = (*app.QuickMatchService)(nil)
@@ -54,13 +54,13 @@ func (h *QuickMatchHandler) Leave(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Match is a client-driven retry: 202 while waiting, 201 with a room join code.
+// Match is a client-driven retry: 202 while waiting, 201 with the room id and join code.
 func (h *QuickMatchHandler) Match(w http.ResponseWriter, r *http.Request) {
 	userID, raceTypeID, ok := quickMatchIdentity(w, r)
 	if !ok {
 		return
 	}
-	code, err := h.quickMatch.Match(r.Context(), userID, raceTypeID)
+	roomID, code, err := h.quickMatch.Match(r.Context(), userID, raceTypeID)
 	if err != nil {
 		writeQuickMatchError(w, r, err)
 		return
@@ -71,7 +71,7 @@ func (h *QuickMatchHandler) Match(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{"join_code": code})
+	_ = json.NewEncoder(w).Encode(map[string]string{"room_id": roomID.String(), "join_code": code})
 }
 
 func quickMatchIdentity(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid.UUID, bool) {

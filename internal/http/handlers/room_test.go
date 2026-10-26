@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/auth"
@@ -23,20 +26,61 @@ import (
 
 // Each function field lets a test control the corresponding service operation.
 type stubRoomService struct {
-	createFn func(context.Context, uuid.UUID, uuid.UUID) (string, error)
-	joinFn   func(context.Context, uuid.UUID, string) error
+	createFn func(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, string, error)
+	joinFn   func(context.Context, uuid.UUID, string) (uuid.UUID, error)
 	leaveFn  func(context.Context, uuid.UUID, uuid.UUID) error
 	kickFn   func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 	readyFn  func(context.Context, uuid.UUID, uuid.UUID) error
 	startFn  func(context.Context, uuid.UUID, uuid.UUID) error
+	rosterFn func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRoster, error)
+	resetFn  func(context.Context, uuid.UUID) error
 }
 
-func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID) (string, error) {
+func (s *stubRoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) error {
+	return s.resetFn(ctx, roomID)
+}
+
+// fakeBeginner records each race begin and returns err.
+type fakeBeginner struct {
+	mu      sync.Mutex
+	rooms   []uuid.UUID
+	ctxs    []context.Context
+	err     error
+	block   bool
+	started chan struct{}
+}
+
+func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, error) {
+	b.mu.Lock()
+	b.rooms = append(b.rooms, roomID)
+	b.ctxs = append(b.ctxs, ctx)
+	block := b.block
+	started := b.started
+	err := b.err
+	b.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if block {
+		<-ctx.Done()
+		return db.Race{}, ctx.Err()
+	}
+	if err != nil {
+		return db.Race{}, err
+	}
+	return db.Race{ID: uuid.New(), RoomID: roomID}, nil
+}
+
+func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
 	return s.createFn(ctx, userID, raceTypeID)
 }
 
-func (s *stubRoomService) JoinRoom(ctx context.Context, userID uuid.UUID, code string) error {
+func (s *stubRoomService) JoinRoom(ctx context.Context, userID uuid.UUID, code string) (uuid.UUID, error) {
 	return s.joinFn(ctx, userID, code)
+}
+
+func (s *stubRoomService) Roster(ctx context.Context, userID, roomID uuid.UUID) (app.RoomRoster, error) {
+	return s.rosterFn(ctx, userID, roomID)
 }
 
 func (s *stubRoomService) LeaveRoom(ctx context.Context, userID, roomID uuid.UUID) error {
@@ -55,6 +99,9 @@ func (s *stubRoomService) StartRace(ctx context.Context, userID, roomID uuid.UUI
 	return s.startFn(ctx, userID, roomID)
 }
 
+// stubRoomID is the room id the stub reports for create and join.
+var stubRoomID = uuid.MustParse("01950000-0000-7000-8000-0000000000aa")
+
 type roomCall struct {
 	operation string
 	userID    uuid.UUID
@@ -66,11 +113,11 @@ type roomCall struct {
 
 func recordingRoomService(record func(roomCall) error) *stubRoomService {
 	return &stubRoomService{
-		createFn: func(_ context.Context, userID, raceID uuid.UUID) (string, error) {
-			return "ABC234", record(roomCall{operation: "create", userID: userID, raceID: raceID})
+		createFn: func(_ context.Context, userID, raceID uuid.UUID) (uuid.UUID, string, error) {
+			return stubRoomID, "ABC234", record(roomCall{operation: "create", userID: userID, raceID: raceID})
 		},
-		joinFn: func(_ context.Context, userID uuid.UUID, code string) error {
-			return record(roomCall{operation: "join", userID: userID, code: code})
+		joinFn: func(_ context.Context, userID uuid.UUID, code string) (uuid.UUID, error) {
+			return stubRoomID, record(roomCall{operation: "join", userID: userID, code: code})
 		},
 		leaveFn: func(_ context.Context, userID, roomID uuid.UUID) error {
 			return record(roomCall{operation: "leave", userID: userID, roomID: roomID})
@@ -100,7 +147,7 @@ func roomOperations() []roomOperation {
 	roomID, raceID, targetID := uuid.New(), uuid.New(), uuid.New()
 	return []roomOperation{
 		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}}, roomCall{operation: "create", raceID: raceID}, http.StatusCreated},
-		{"join", (*handlers.RoomHandler).Join, "/rooms/join", url.Values{"join_code": {" ABC234 "}}, roomCall{operation: "join", code: "ABC234"}, http.StatusNoContent},
+		{"join", (*handlers.RoomHandler).Join, "/rooms/join", url.Values{"join_code": {" ABC234 "}}, roomCall{operation: "join", code: "ABC234"}, http.StatusOK},
 		{"leave", (*handlers.RoomHandler).Leave, "/rooms/" + roomID.String() + "/leave", url.Values{}, roomCall{operation: "leave", roomID: roomID}, http.StatusNoContent},
 		{"kick", (*handlers.RoomHandler).Kick, "/rooms/" + roomID.String() + "/kick", url.Values{"target_user_id": {targetID.String()}}, roomCall{operation: "kick", roomID: roomID, targetID: targetID}, http.StatusNoContent},
 		{"ready", (*handlers.RoomHandler).MarkReady, "/rooms/" + roomID.String() + "/ready", url.Values{}, roomCall{operation: "ready", roomID: roomID}, http.StatusNoContent},
@@ -110,7 +157,13 @@ func roomOperations() []roomOperation {
 
 func serveRoomRequest(t *testing.T, op roomOperation, svc *stubRoomService, userID uuid.UUID, body, pathID string, authenticated bool) *httptest.ResponseRecorder {
 	t.Helper()
-	h := handlers.NewRoomHandler(svc, nil, false)
+	h := handlers.NewRoomHandler(context.Background(), svc, &fakeBeginner{}, nil, false)
+	defer h.Wait()
+	return serveRoomRequestWith(t, h, op, userID, body, pathID, authenticated)
+}
+
+func serveRoomRequestWith(t *testing.T, h *handlers.RoomHandler, op roomOperation, userID uuid.UUID, body, pathID string, authenticated bool) *httptest.ResponseRecorder {
+	t.Helper()
 	var endpoint http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { op.handler(h, w, r) })
 	req := httptest.NewRequest(http.MethodPost, op.path+"?user_id="+uuid.NewString(), strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -154,18 +207,19 @@ func TestRoomHandlersSuccessAndAuthenticatedIdentity(t *testing.T) {
 			if rr.Code != op.status {
 				t.Fatalf("status = %d, want %d; body=%q", rr.Code, op.status, rr.Body.String())
 			}
-			if op.name == "create" {
+			if op.name == "create" || op.name == "join" {
 				if got := rr.Header().Get("Content-Type"); got != "application/json" {
 					t.Errorf("Content-Type = %q, want application/json", got)
 				}
 				var body struct {
+					RoomID   string `json:"room_id"`
 					JoinCode string `json:"join_code"`
 				}
 				if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
-					t.Fatalf("decode create response: %v", err)
+					t.Fatalf("decode %s response: %v", op.name, err)
 				}
-				if body.JoinCode != "ABC234" {
-					t.Errorf("join code = %q, want ABC234", body.JoinCode)
+				if body.JoinCode != "ABC234" || body.RoomID != stubRoomID.String() {
+					t.Errorf("%s response = %+v, want room %s and join code ABC234", op.name, body, stubRoomID)
 				}
 			} else if rr.Body.Len() != 0 {
 				t.Errorf("204 response body = %q, want empty", rr.Body.String())
@@ -246,5 +300,265 @@ func TestRoomHandlersRejectInvalidRequests(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func serveRosterRequest(t *testing.T, svc *stubRoomService, userID uuid.UUID, pathID string) *httptest.ResponseRecorder {
+	t.Helper()
+	h := handlers.NewRoomHandler(context.Background(), svc, &fakeBeginner{}, nil, false)
+	req := httptest.NewRequest(http.MethodGet, "/rooms/"+pathID, nil)
+	req.SetPathValue("id", pathID)
+	user := db.User{ID: userID, Email: "room@example.com", EmailVerified: true}
+	token, err := auth.IssueAccessToken(userID, user.Email, testJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
+	rr := httptest.NewRecorder()
+	middleware.Authenticate(&handlerUserFetcher{user: user}, testJWTSecret)(http.HandlerFunc(h.Roster)).ServeHTTP(rr, req)
+	return rr
+}
+
+func TestRoomRosterMemberGetsParticipantsAndRace(t *testing.T) {
+	member, other, roomID, raceID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name   string
+		raceID *uuid.UUID
+		want   string
+	}{
+		{"before race", nil, "null"},
+		{"race begun", &raceID, `"` + raceID.String() + `"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &stubRoomService{rosterFn: func(_ context.Context, caller, room uuid.UUID) (app.RoomRoster, error) {
+				if caller != member || room != roomID {
+					t.Errorf("roster call = %s/%s, want %s/%s", caller, room, member, roomID)
+				}
+				return app.RoomRoster{Participants: []app.RoomRosterEntry{
+					{PublicPlayer: app.PublicPlayer{UserID: member, Name: "Rower"}, Ready: true, Host: true},
+					{PublicPlayer: app.NewPublicPlayer(other, pgtype.Text{}), Ready: false, Host: false},
+				}, RaceID: tc.raceID}, nil
+			}}
+			rr := serveRosterRequest(t, svc, member, roomID.String())
+			if rr.Code != http.StatusOK || rr.Header().Get("Content-Type") != "application/json" {
+				t.Fatalf("status = %d, type %q; body=%q", rr.Code, rr.Header().Get("Content-Type"), rr.Body.String())
+			}
+			var body struct {
+				Participants []map[string]any `json:"participants"`
+				RaceID       json.RawMessage  `json:"race_id"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if string(body.RaceID) != tc.want {
+				t.Errorf("race_id = %s, want %s", body.RaceID, tc.want)
+			}
+			if len(body.Participants) != 2 {
+				t.Fatalf("participants = %v", body.Participants)
+			}
+			for i, want := range []map[string]any{
+				{"user_id": member.String(), "name": "Rower", "ready": true, "host": true},
+				{"user_id": other.String(), "name": app.NewPublicPlayer(other, pgtype.Text{}).Name, "ready": false, "host": false},
+			} {
+				got := body.Participants[i]
+				if len(got) != len(want) {
+					t.Errorf("participant %d keys = %v, want exactly %v", i, got, want)
+				}
+				for k, v := range want {
+					if got[k] != v {
+						t.Errorf("participant %d %s = %v, want %v", i, k, got[k], v)
+					}
+				}
+			}
+			// Each roster user_id is the id the kick route accepts as target_user_id.
+			kicked := uuid.Nil
+			kickSvc := recordingRoomService(func(c roomCall) error { kicked = c.targetID; return nil })
+			kick := roomOperations()[3]
+			kick.form = url.Values{"target_user_id": {body.Participants[1]["user_id"].(string)}}
+			if rr := serveRoomRequest(t, kick, kickSvc, member, kick.form.Encode(), roomID.String(), true); rr.Code != http.StatusNoContent || kicked != other {
+				t.Fatalf("kick by roster id: status %d, target %s, want %s", rr.Code, kicked, other)
+			}
+		})
+	}
+}
+
+func TestRoomRosterNonMemberRefused(t *testing.T) {
+	for _, err := range []error{app.ErrParticipantNotFound, app.ErrRoomNotFound} {
+		t.Run(err.Error(), func(t *testing.T) {
+			svc := &stubRoomService{rosterFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRoster, error) {
+				return app.RoomRoster{}, fmt.Errorf("wrapped: %w", err)
+			}}
+			rr := serveRosterRequest(t, svc, uuid.New(), uuid.New().String())
+			if rr.Code != http.StatusNotFound || strings.Contains(rr.Body.String(), "participants") {
+				t.Fatalf("non-member: status %d, body %q", rr.Code, rr.Body.String())
+			}
+		})
+	}
+	rr := serveRosterRequest(t, &stubRoomService{}, uuid.New(), "not-a-uuid")
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid room id status = %d", rr.Code)
+	}
+}
+
+// startOperation is the POST /rooms/{id}/start operation for roomID.
+func startOperation(roomID uuid.UUID) roomOperation {
+	op := roomOperations()[5]
+	op.path = "/rooms/" + roomID.String() + "/start"
+	op.want.roomID = roomID
+	return op
+}
+
+// A successful start begins the room's race once, outside the request, on a
+// context the finished request does not cancel.
+func TestRoomStartBeginsRaceInBackground(t *testing.T) {
+	roomID := uuid.New()
+	beginner := &fakeBeginner{}
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Error("reset after a successful begin")
+		return nil
+	}
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	h.Wait()
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+	if len(beginner.rooms) != 1 || beginner.rooms[0] != roomID {
+		t.Fatalf("begins = %v, want one for %s", beginner.rooms, roomID)
+	}
+	// httptest's request context ends with the handler; the begin context must not.
+	if err := beginner.ctxs[0].Err(); err != nil {
+		t.Fatalf("begin context done after the request: %v", err)
+	}
+}
+
+// A refused start (not host, wrong state, not ready) begins no race.
+func TestRoomStartRefusedBeginsNoRace(t *testing.T) {
+	for _, refusal := range []error{app.ErrNotHost, app.ErrInvalidStatusTransition, app.ErrNotAllReady, errors.New("db down")} {
+		t.Run(refusal.Error(), func(t *testing.T) {
+			roomID := uuid.New()
+			beginner := &fakeBeginner{}
+			svc := recordingRoomService(func(roomCall) error { return refusal })
+			h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+			rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+			h.Wait()
+			if rr.Code == http.StatusNoContent {
+				t.Fatalf("refused start answered 204")
+			}
+			if len(beginner.rooms) != 0 {
+				t.Fatalf("refused start began races: %v", beginner.rooms)
+			}
+		})
+	}
+}
+
+type capturedLog struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (c *capturedLog) Enabled(context.Context, slog.Level) bool { return true }
+func (c *capturedLog) Handle(_ context.Context, r slog.Record) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.records = append(c.records, r.Clone())
+	return nil
+}
+func (c *capturedLog) WithAttrs([]slog.Attr) slog.Handler { return c }
+func (c *capturedLog) WithGroup(string) slog.Handler      { return c }
+
+// A failed begin is logged and the room is returned to waiting.
+func TestRoomStartFailedBeginLogsAndResets(t *testing.T) {
+	logs := &capturedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	roomID := uuid.New()
+	beginErr := errors.New("countdown cancelled")
+	beginner := &fakeBeginner{err: beginErr}
+	var resets []uuid.UUID
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(ctx context.Context, id uuid.UUID) error {
+		if ctx.Err() != nil {
+			t.Errorf("reset context already done: %v", ctx.Err())
+		}
+		resets = append(resets, id)
+		return nil
+	}
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	h.Wait()
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+	if len(resets) != 1 || resets[0] != roomID {
+		t.Fatalf("resets = %v, want one for %s", resets, roomID)
+	}
+	logged := false
+	for _, r := range logs.records {
+		r.Attrs(func(a slog.Attr) bool {
+			if r.Level == slog.LevelError && a.Key == "error" && strings.Contains(fmt.Sprint(a.Value.Any()), beginErr.Error()) {
+				logged = true
+			}
+			return true
+		})
+	}
+	if !logged {
+		t.Fatalf("begin error not logged at error level: %+v", logs.records)
+	}
+}
+
+// A lifetime cancellation mid-countdown cancels Begin and resets the room with
+// a context that is not cancelled.
+func TestRoomStartLifetimeCancelResetsRoom(t *testing.T) {
+	roomID := uuid.New()
+	beginStarted := make(chan struct{})
+	beginner := &fakeBeginner{
+		block:   true,
+		started: beginStarted,
+	}
+	var resetCtxErr error
+	var resets []uuid.UUID
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(ctx context.Context, id uuid.UUID) error {
+		resetCtxErr = ctx.Err()
+		resets = append(resets, id)
+		return nil
+	}
+
+	lifetimeCtx, cancelLifetime := context.WithCancel(context.Background())
+	h := handlers.NewRoomHandler(lifetimeCtx, svc, beginner, nil, false)
+
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+
+	// Wait until Begin is actively running in background.
+	<-beginStarted
+
+	// Cancel the handler's lifetime context mid-countdown.
+	cancelLifetime()
+
+	// Wait must return once the begin is aborted and the room is reset.
+	waitDone := make(chan struct{})
+	go func() {
+		h.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("h.Wait() timed out after lifetime cancel")
+	}
+
+	if len(resets) != 1 || resets[0] != roomID {
+		t.Fatalf("resets = %v, want one for %s", resets, roomID)
+	}
+	if resetCtxErr != nil {
+		t.Fatalf("resetCtx was already cancelled when ResetCountdown was called: %v", resetCtxErr)
 	}
 }

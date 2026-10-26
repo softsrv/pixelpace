@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -18,7 +19,24 @@ type telemetryIngester interface {
 	Ingest(ctx context.Context, raceID, userID uuid.UUID, sample app.TelemetrySample) error
 }
 
-var _ telemetryIngester = (*app.RaceService)(nil)
+// raceParticipation decides who may open a race's live channel and names the
+// race's participants in the roster frame each connection receives first.
+type raceParticipation interface {
+	IsParticipant(ctx context.Context, raceID, userID uuid.UUID) (bool, error)
+	Roster(ctx context.Context, raceID uuid.UUID) ([]app.PublicPlayer, error)
+}
+
+// rosterFrame is the first frame on every race connection, so clients can put
+// names beside each other's telemetry and standings.
+type rosterFrame struct {
+	Type    string             `json:"type"`
+	Players []app.PublicPlayer `json:"players"`
+}
+
+var (
+	_ telemetryIngester = (*app.RaceService)(nil)
+	_ raceParticipation = (*app.RaceService)(nil)
+)
 
 type connKey struct {
 	raceID  uuid.UUID
@@ -27,20 +45,23 @@ type connKey struct {
 
 // RaceWSHandler transports telemetry without owning race business logic.
 type RaceWSHandler struct {
-	ingester    telemetryIngester
-	broadcaster realtime.Broadcaster
-	mu          sync.Mutex
-	connections map[connKey]struct{}
+	ingester     telemetryIngester
+	participants raceParticipation
+	broadcaster  realtime.Broadcaster
+	mu           sync.Mutex
+	connections  map[connKey]struct{}
 }
 
-func NewRaceWSHandler(ingester telemetryIngester, broadcaster realtime.Broadcaster) *RaceWSHandler {
+func NewRaceWSHandler(ingester telemetryIngester, participants raceParticipation, broadcaster realtime.Broadcaster) *RaceWSHandler {
 	return &RaceWSHandler{
-		ingester: ingester, broadcaster: broadcaster,
+		ingester: ingester, participants: participants, broadcaster: broadcaster,
 		connections: make(map[connKey]struct{}),
 	}
 }
 
-// Serve accepts one connection per authenticated racer and race.
+// Serve accepts one connection per authenticated racer and race. Only the race's
+// participants are upgraded; anyone else is refused before the connection slot,
+// the subscription or any telemetry exists.
 func (h *RaceWSHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.UserFromContext(r.Context())
 	if !ok {
@@ -50,6 +71,16 @@ func (h *RaceWSHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	raceID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "Invalid race ID", http.StatusBadRequest)
+		return
+	}
+	member, err := h.participants.IsParticipant(r.Context(), raceID, user.ID)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "race participation check failed", "error", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if !member {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}
 	key := connKey{raceID: raceID, racerID: user.ID}
@@ -79,6 +110,22 @@ func (h *RaceWSHandler) Serve(w http.ResponseWriter, r *http.Request) {
 	sub, err := h.broadcaster.Subscribe(ctx, raceID.String())
 	if err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "Subscription unavailable")
+		return
+	}
+	// The roster is written before either pump starts, so it precedes any
+	// telemetry published once the subscription exists.
+	players, err := h.participants.Roster(ctx, raceID)
+	if err != nil {
+		slog.ErrorContext(ctx, "race roster failed", "error", err)
+		_ = conn.Close(websocket.StatusInternalError, "Roster unavailable")
+		return
+	}
+	frame, err := json.Marshal(rosterFrame{Type: "roster", Players: players})
+	if err != nil {
+		_ = conn.Close(websocket.StatusInternalError, "Roster unavailable")
+		return
+	}
+	if err := conn.Write(ctx, websocket.MessageText, frame); err != nil {
 		return
 	}
 

@@ -28,6 +28,7 @@ type roomDBStep struct {
 type roomTestDB struct {
 	pgx.Tx
 	t                          *testing.T
+	seen                       map[string][]any
 	steps                      []roomDBStep
 	begins, commits, rollbacks int
 }
@@ -39,6 +40,10 @@ func (d *roomTestDB) next(sql string, args []any) roomDBStep {
 	}
 	s := d.steps[0]
 	d.steps = d.steps[1:]
+	if d.seen == nil {
+		d.seen = map[string][]any{}
+	}
+	d.seen[s.name] = args
 	if !strings.HasPrefix(sql, "-- name: "+s.name+" ") {
 		d.t.Fatalf("query = %q, want %s", sql, s.name)
 	}
@@ -159,9 +164,12 @@ func TestRoomJoinGuards(t *testing.T) {
 				steps = append(steps, roomDBStep{name: "InsertRoomParticipant", args: []any{nil, roomTestID, roomTestGuest}})
 			}
 			s, d := newRoomTestService(t, steps...)
-			err := s.JoinRoom(context.Background(), roomTestGuest, "ABCDEF")
+			roomID, err := s.JoinRoom(context.Background(), roomTestGuest, "ABCDEF")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("JoinRoom = %v, want %v", err, tc.want)
+			}
+			if wantID := map[bool]uuid.UUID{true: roomTestID, false: uuid.Nil}[tc.want == nil]; roomID != wantID {
+				t.Fatalf("JoinRoom room id = %s, want %s", roomID, wantID)
 			}
 			wantCommits := 0
 			if tc.want == nil {
@@ -343,7 +351,8 @@ func TestRoomCreate(t *testing.T) {
 			}
 			s, d := newRoomTestService(t, steps...)
 			s.newJoinCode = func() (string, error) { return "ABCDEF", nil }
-			code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+			var insertedRoomID uuid.UUID
+			roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
 			switch {
 			case tc.raceErr != nil:
 				if !errors.Is(err, ErrInvalidRaceType) || d.begins != 0 {
@@ -357,6 +366,10 @@ func TestRoomCreate(t *testing.T) {
 				if err != nil || code != "ABCDEF" || d.begins != 1 || d.commits != 1 {
 					t.Fatalf("create: code %q, err %v, tx = %+v", code, err, d)
 				}
+				insertedRoomID = d.seen["InsertRoom"][0].(uuid.UUID)
+				if roomID != insertedRoomID {
+					t.Fatalf("create room id = %s, want the inserted id %s", roomID, insertedRoomID)
+				}
 			}
 		})
 	}
@@ -369,7 +382,7 @@ func TestRoomCreateDoesNotRetryOtherFailures(t *testing.T) {
 			s, d := newRoomTestService(t,
 				roomDBStep{name: "GetRaceType", values: []any{roomTestID, "distance", int64(500000), "500m"}},
 				roomDBStep{name: "InsertRoom", err: cause})
-			_, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
 			if !errors.Is(err, cause) || d.begins != 1 || d.rollbacks != 1 || d.commits != 0 {
 				t.Fatalf("unexpected retry: %v, tx %+v", err, d)
 			}
@@ -389,7 +402,7 @@ func TestRoomMissingRows(t *testing.T) {
 			var err error
 			switch method {
 			case "join":
-				err = s.JoinRoom(ctx, roomTestGuest, "ABCDEF")
+				_, err = s.JoinRoom(ctx, roomTestGuest, "ABCDEF")
 			case "leave":
 				err = s.LeaveRoom(ctx, roomTestGuest, roomTestID)
 			case "kick":
@@ -437,9 +450,9 @@ func TestRoomCreateRetryBound(t *testing.T) {
 	s, d := newRoomTestService(t, steps...)
 	calls := 0
 	s.newJoinCode = func() (string, error) { calls++; return "ABCDEF", nil }
-	code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+	roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
 	var pgErr *pgconn.PgError
-	if code != "" || !errors.As(err, &pgErr) || calls != 10 || d.begins != 10 || d.rollbacks != 10 || d.commits != 0 {
+	if code != "" || roomID != uuid.Nil || !errors.As(err, &pgErr) || calls != 10 || d.begins != 10 || d.rollbacks != 10 || d.commits != 0 {
 		t.Fatalf("retry bound: code %q err %v calls %d tx %+v", code, err, calls, d)
 	}
 }

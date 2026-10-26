@@ -8,6 +8,12 @@
       {{if .User.DisplayName.Valid}}
       <p class="text-base-content/90 font-medium">{{.User.DisplayName.String}}</p>
       {{end}}
+      {{if not .User.DisplayName.Valid}}
+      <p class="text-base-content/70 text-sm">
+        Set a display name so other racers can see who you are.
+        <a href="/profile" class="link">Set a display name</a>
+      </p>
+      {{end}}
       <p class="text-base-content/70">{{.User.Email}}</p>
       {{if not .User.EmailVerified}}
       <div class="alert alert-warning mt-2">

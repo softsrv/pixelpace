@@ -93,3 +93,81 @@ func TestDisplayName_OmittedWhenNull(t *testing.T) {
 		}
 	})
 }
+
+func renderContent(t *testing.T, page string, data any) string {
+	t.Helper()
+	base, err := template.ParseFS(FS, "templates/base.html")
+	if err != nil {
+		t.Fatalf("parse base.html: %v", err)
+	}
+	tmpl, err := base.ParseFS(FS, "templates/"+page)
+	if err != nil {
+		t.Fatalf("parse %s: %v", page, err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buf, "content", data); err != nil {
+		t.Fatalf("execute content for %s: %v", page, err)
+	}
+	return buf.String()
+}
+
+func TestDisplayName_DashboardPrompt(t *testing.T) {
+	promptText := "Set a display name so other racers can see who you are."
+
+	t.Run("nameless user renders prompt linking to profile", func(t *testing.T) {
+		user := db.User{
+			ID:            uuid.New(),
+			Email:         "rower@example.com",
+			EmailVerified: true,
+			CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+			DisplayName:   pgtype.Text{Valid: false},
+		}
+		data := map[string]any{
+			"User":    user,
+			"DevMode": false,
+		}
+
+		out := renderTemplate(t, "dashboard.html", data)
+		if !strings.Contains(out, promptText) {
+			t.Fatalf("dashboard output does not contain prompt %q", promptText)
+		}
+		if !strings.Contains(out, `href="/profile"`) {
+			t.Fatalf("dashboard output does not contain link to /profile")
+		}
+
+		content := renderContent(t, "dashboard.html", data)
+		if !strings.Contains(content, promptText) {
+			t.Fatalf("dashboard content does not contain prompt %q", promptText)
+		}
+		if !strings.Contains(content, `href="/profile"`) {
+			t.Fatalf("dashboard content does not contain link to /profile")
+		}
+	})
+
+	t.Run("named user renders without prompt", func(t *testing.T) {
+		user := db.User{
+			ID:            uuid.New(),
+			Email:         "rower@example.com",
+			EmailVerified: true,
+			CreatedAt:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+			DisplayName:   pgtype.Text{String: "RowerOne", Valid: true},
+		}
+		data := map[string]any{
+			"User":    user,
+			"DevMode": false,
+		}
+
+		out := renderTemplate(t, "dashboard.html", data)
+		if strings.Contains(out, promptText) {
+			t.Fatalf("dashboard output unexpectedly contains prompt %q", promptText)
+		}
+
+		content := renderContent(t, "dashboard.html", data)
+		if strings.Contains(content, promptText) {
+			t.Fatalf("dashboard content unexpectedly contains prompt %q", promptText)
+		}
+		if strings.Contains(content, `href="/profile"`) {
+			t.Fatalf("dashboard content unexpectedly contains link to /profile")
+		}
+	})
+}

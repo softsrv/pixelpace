@@ -34,8 +34,23 @@ type RouterConfig struct {
 	TrustedProxyCount int
 }
 
+// Router wraps the HTTP handler and provides lifecycle coordination for background tasks.
+type Router struct {
+	http.Handler
+	roomH *handlers.RoomHandler
+}
+
+var _ http.Handler = (*Router)(nil)
+
+// Wait blocks until every race begin launched by Start has finished.
+func (r *Router) Wait() {
+	if r.roomH != nil {
+		r.roomH.Wait()
+	}
+}
+
 // NewRouter builds and returns the main http.Handler with all routes and middleware.
-// ctx controls the lifetime of background goroutines (rate-limiter sweepers); it
+// ctx controls the lifetime of background goroutines (rate-limiter sweepers and race begins); it
 // should be cancelled during application shutdown after the HTTP server drains.
 func dashboardTemplateData(user db.User, devMode bool) map[string]any {
 	return map[string]any{
@@ -44,7 +59,7 @@ func dashboardTemplateData(user db.User, devMode bool) map[string]any {
 	}
 }
 
-func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
+func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux := http.NewServeMux()
 
 	// ── Handlers ──────────────────────────────────────────────────────────────
@@ -53,8 +68,8 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 	friendH := handlers.NewFriendHandler(cfg.FriendSvc)
 	leaderboardH := handlers.NewLeaderboardHandler(cfg.LeaderboardSvc)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
-	roomH := handlers.NewRoomHandler(cfg.RoomSvc, cfg.Renderer, cfg.Secure)
-	raceWSH := handlers.NewRaceWSHandler(cfg.RaceSvc, cfg.Broadcaster)
+	roomH := handlers.NewRoomHandler(ctx, cfg.RoomSvc, cfg.RaceSvc, cfg.Renderer, cfg.Secure)
+	raceWSH := handlers.NewRaceWSHandler(cfg.RaceSvc, cfg.RaceSvc, cfg.Broadcaster)
 	quickMatchH := handlers.NewQuickMatchHandler(cfg.QuickMatchSvc)
 
 	// ── Rate limiters ─────────────────────────────────────────────────────────
@@ -128,6 +143,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 
 	mux.Handle("POST /rooms", verifiedMW(http.HandlerFunc(roomH.Create)))
 	mux.Handle("POST /rooms/join", verifiedMW(http.HandlerFunc(roomH.Join)))
+	mux.Handle("GET /rooms/{id}", verifiedMW(http.HandlerFunc(roomH.Roster)))
 	mux.Handle("POST /rooms/{id}/leave", verifiedMW(http.HandlerFunc(roomH.Leave)))
 	mux.Handle("POST /rooms/{id}/kick", verifiedMW(http.HandlerFunc(roomH.Kick)))
 	mux.Handle("POST /rooms/{id}/ready", verifiedMW(http.HandlerFunc(roomH.MarkReady)))
@@ -140,11 +156,12 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 
 	// ── Global middleware chain ───────────────────────────────────────────────
 	// BodyLimit is innermost so it wraps r.Body before any handler reads it.
-	return middleware.RequestID(
+	handler := middleware.RequestID(
 		middleware.Logging(
 			middleware.SecurityHeaders(cfg.Secure,
 				middleware.BodyLimit(middleware.DefaultMaxBodyBytes)(mux),
 			),
 		),
 	)
+	return &Router{Handler: handler, roomH: roomH}
 }

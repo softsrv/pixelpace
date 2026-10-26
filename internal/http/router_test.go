@@ -99,15 +99,20 @@ func TestRoomRoutesRequireVerifiedUser(t *testing.T) {
 	paths := []string{
 		"/rooms", "/rooms/join", "/rooms/" + id + "/leave",
 		"/rooms/" + id + "/kick", "/rooms/" + id + "/ready", "/rooms/" + id + "/start",
+		"GET /rooms/" + id,
 	}
-	for _, path := range paths {
+	for _, route := range paths {
+		method, path := http.MethodPost, route
+		if rest, ok := strings.CutPrefix(route, "GET "); ok {
+			method, path = http.MethodGet, rest
+		}
 		for _, authenticated := range []bool{false, true} {
 			for _, htmx := range []bool{false, true} {
-				name := path + "/anonymous"
+				name := route + "/anonymous"
 				wantLocation := "/login"
 				wantStatus := http.StatusUnauthorized
 				if authenticated {
-					name = path + "/unverified"
+					name = route + "/unverified"
 					wantLocation = "/verify-email"
 					wantStatus = http.StatusForbidden
 				}
@@ -115,7 +120,7 @@ func TestRoomRoutesRequireVerifiedUser(t *testing.T) {
 					name += "/htmx"
 				}
 				t.Run(name, func(t *testing.T) {
-					req := httptest.NewRequest(http.MethodPost, path, nil)
+					req := httptest.NewRequest(method, path, nil)
 					if authenticated {
 						req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
 					}
@@ -202,4 +207,12 @@ func TestProfileDisplayNameRouteRequiresVerifiedUser(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestRouterWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := NewRouter(ctx, RouterConfig{})
+	// Wait should return cleanly when no in-flight begins exist.
+	r.Wait()
 }

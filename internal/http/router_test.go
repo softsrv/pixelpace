@@ -150,3 +150,56 @@ func TestDashboardTemplateDataCarriesDevMode(t *testing.T) {
 		t.Fatalf("DevMode = %v, want false", got)
 	}
 }
+
+func TestProfileDisplayNameRouteRequiresVerifiedUser(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	user := db.User{ID: uuid.New(), Email: "unverified@example.com", EmailVerified: false}
+	token, err := auth.IssueAccessToken(user.ID, user.Email, routerTestJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue access token: %v", err)
+	}
+	h := NewRouter(ctx, RouterConfig{
+		Queries:   routerUserFetcher{user: user},
+		Renderer:  newDashboardTestRenderer(t),
+		JWTSecret: routerTestJWTSecret,
+	})
+
+	path := "/profile/display-name"
+	for _, authenticated := range []bool{false, true} {
+		for _, htmx := range []bool{false, true} {
+			name := path + "/anonymous"
+			wantLocation := "/login"
+			wantStatus := http.StatusUnauthorized
+			if authenticated {
+				name = path + "/unverified"
+				wantLocation = "/verify-email"
+				wantStatus = http.StatusForbidden
+			}
+			if htmx {
+				name += "/htmx"
+			} else {
+				wantStatus = http.StatusSeeOther
+			}
+			t.Run(name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, path, nil)
+				if authenticated {
+					req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
+				}
+				locationHeader := "Location"
+				if htmx {
+					req.Header.Set("HX-Request", "true")
+					locationHeader = "HX-Redirect"
+				}
+				rr := httptest.NewRecorder()
+				h.ServeHTTP(rr, req)
+				if rr.Code != wantStatus {
+					t.Errorf("status = %d, want %d", rr.Code, wantStatus)
+				}
+				if got := rr.Header().Get(locationHeader); got != wantLocation {
+					t.Errorf("%s = %q, want %q", locationHeader, got, wantLocation)
+				}
+			})
+		}
+	}
+}

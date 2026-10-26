@@ -133,4 +133,5 @@ type User struct {
 	LockedUntil         pgtype.Timestamptz `json:"locked_until"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	DisplayName         pgtype.Text        `json:"display_name"`
 }

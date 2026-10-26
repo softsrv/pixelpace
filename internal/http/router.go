@@ -119,6 +119,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) http.Handler {
 
 	mux.Handle("GET /profile", verifiedMW(http.HandlerFunc(profileH.ProfilePage)))
 	mux.Handle("POST /profile/change-password", verifiedMW(http.HandlerFunc(profileH.ChangePassword)))
+	mux.Handle("POST /profile/display-name", verifiedMW(http.HandlerFunc(profileH.SetDisplayName)))
 	mux.Handle("POST /profile/delete", verifiedMW(http.HandlerFunc(profileH.DeleteAccount)))
 
 	mux.Handle("POST /quick-match", verifiedMW(http.HandlerFunc(quickMatchH.Enqueue)))

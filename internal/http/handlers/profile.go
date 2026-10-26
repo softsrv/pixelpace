@@ -5,11 +5,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/http/middleware"
+	"github.com/softsrv/starter/internal/users"
 )
 
 type profileAuthServicer interface {
@@ -18,6 +20,7 @@ type profileAuthServicer interface {
 
 type profileUserServicer interface {
 	DeleteAccount(ctx context.Context, userID uuid.UUID) error
+	SetDisplayName(ctx context.Context, userID uuid.UUID, name string) error
 }
 
 // ProfileHandler groups profile management HTTP handlers.
@@ -79,6 +82,43 @@ func (h *ProfileHandler) ChangePassword(w http.ResponseWriter, r *http.Request) 
 
 	h.renderer.Partial(w, http.StatusOK, "partials/flash.html", map[string]any{
 		"Message": "Password changed successfully.",
+	})
+}
+
+// SetDisplayName handles display name update form submission.
+func (h *ProfileHandler) SetDisplayName(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		h.renderError(w, r, http.StatusBadRequest, "Invalid form data")
+		return
+	}
+
+	displayName := strings.TrimSpace(r.FormValue("display_name"))
+
+	if err := h.users.SetDisplayName(r.Context(), user.ID, displayName); err != nil {
+		switch {
+		case errors.Is(err, app.ErrDisplayNameTaken):
+			h.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+		case errors.Is(err, users.ErrDisplayNameEmpty),
+			errors.Is(err, users.ErrDisplayNameTooShort),
+			errors.Is(err, users.ErrDisplayNameTooLong),
+			errors.Is(err, users.ErrDisplayNameLooksLikeEmail),
+			errors.Is(err, users.ErrDisplayNameInvalidChars):
+			h.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+		default:
+			slog.ErrorContext(r.Context(), "set display name", "user_id", user.ID, "error", err)
+			h.renderError(w, r, http.StatusInternalServerError, "Failed to update display name. Please try again.")
+		}
+		return
+	}
+
+	h.renderer.Partial(w, http.StatusOK, "partials/flash.html", map[string]any{
+		"Message": "Display name updated successfully.",
 	})
 }
 

@@ -34,6 +34,7 @@ func IssueAccessToken(userID uuid.UUID, email, secret string, expiry time.Durati
 	claims := Claims{
 		Email: email,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
 			Subject:   userID.String(),
 			Issuer:    "starter",
 			Audience:  jwt.ClaimStrings{"starter"},

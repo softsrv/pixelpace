@@ -24,5 +24,8 @@ UPDATE users SET failed_login_attempts = 0, locked_until = NULL, updated_at = NO
 -- name: UpdatePasswordHash :exec
 UPDATE users SET password_hash = $2, failed_login_attempts = 0, locked_until = NULL, updated_at = NOW() WHERE id = $1;
 
+-- name: SetUserDisplayName :exec
+UPDATE users SET display_name = $2, updated_at = NOW() WHERE id = $1;
+
 -- name: DeleteUserByID :exec
 DELETE FROM users WHERE id = $1;

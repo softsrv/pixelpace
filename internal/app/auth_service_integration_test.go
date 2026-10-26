@@ -80,6 +80,51 @@ func TestIntegration_LoginFlow(t *testing.T) {
 	}
 }
 
+// CLM-7: against the migrated schema (display_name column present), a player
+// who never sets a name registers, verifies and signs in exactly as before and
+// has a NULL display_name.
+func TestIntegration_RegisterWithoutDisplayName(t *testing.T) {
+	pool := testDB(t)
+	svc := testAuthService(t, pool)
+	ctx := context.Background()
+
+	const testEmail = "noname@example.com"
+	const testPassword = "correct-password-123"
+
+	user, err := svc.Register(ctx, testEmail, testPassword)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+	if user.DisplayName.Valid {
+		t.Fatalf("Register returned display_name %q, want NULL", user.DisplayName.String)
+	}
+	if err := db.New(pool).SetEmailVerified(ctx, user.ID); err != nil {
+		t.Fatalf("SetEmailVerified: %v", err)
+	}
+
+	result, err := svc.Login(ctx, testEmail, testPassword, app.DeviceMeta{})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if result.AccessToken == "" || result.RefreshToken == "" {
+		t.Fatal("expected non-empty tokens")
+	}
+
+	stored, err := app.NewUserService(db.New(pool)).GetByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if stored.DisplayName.Valid {
+		t.Fatalf("stored display_name = %q, want NULL", stored.DisplayName.String)
+	}
+	if !stored.EmailVerified {
+		t.Fatal("expected verified user")
+	}
+}
+
 func TestIntegration_Refresh(t *testing.T) {
 	pool := testDB(t)
 	svc := testAuthService(t, pool)

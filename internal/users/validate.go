@@ -5,12 +5,24 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
 	ErrEmailInvalid     = errors.New("email address is invalid")
 	ErrPasswordTooShort = errors.New("password is too short")
 	ErrPasswordTooLong  = errors.New("password is too long")
+
+	ErrDisplayNameEmpty          = errors.New("name must not be empty")
+	ErrDisplayNameTooShort       = errors.New("name must be at least 3 characters")
+	ErrDisplayNameTooLong        = errors.New("name must be at most 20 characters")
+	ErrDisplayNameLooksLikeEmail = errors.New("name must not look like an email address")
+	ErrDisplayNameInvalidChars   = errors.New("name may only contain letters A-Z, digits, underscore, hyphen and period")
+)
+
+const (
+	minDisplayNameLen = 3
+	maxDisplayNameLen = 20
 )
 
 // maxPasswordBytes is the effective ceiling imposed by bcrypt, which silently
@@ -44,4 +56,39 @@ func ValidatePassword(password string, minLength int) error {
 	// Passphrases are encouraged up to the bcrypt limit.
 	// No complexity requirements — length > complexity for user-chosen passwords.
 	return nil
+}
+
+// ValidateDisplayName checks a public display name after trimming surrounding
+// whitespace. It returns one ErrDisplayName* sentinel naming the broken rule.
+// The email check runs before the character-set check so an email-like input
+// reports why it is refused rather than just flagging the '@'.
+func ValidateDisplayName(name string) error {
+	name = strings.TrimSpace(name)
+	n := utf8.RuneCountInString(name)
+	switch {
+	case n == 0:
+		return ErrDisplayNameEmpty
+	case n < minDisplayNameLen:
+		return ErrDisplayNameTooShort
+	case n > maxDisplayNameLen:
+		return ErrDisplayNameTooLong
+	case strings.Contains(name, "@"):
+		return ErrDisplayNameLooksLikeEmail
+	}
+	for _, r := range name {
+		if !isDisplayNameRune(r) {
+			return ErrDisplayNameInvalidChars
+		}
+	}
+	return nil
+}
+
+func isDisplayNameRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	case r == '_', r == '-', r == '.':
+		return true
+	}
+	return false
 }

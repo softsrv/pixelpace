@@ -76,6 +76,7 @@ type Querier interface {
 	RoomHasUnreadyParticipants(ctx context.Context, roomID uuid.UUID) (bool, error)
 	RoomParticipantExists(ctx context.Context, arg RoomParticipantExistsParams) (bool, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
+	SetUserDisplayName(ctx context.Context, arg SetUserDisplayNameParams) error
 	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
 	UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error

@@ -1,6 +1,8 @@
 # Runs the published app image with a private Valkey for live race fan-out.
 # Postgres is external: DATABASE_URL and the other settings come from .env
-# (see .env.example). Migrations never run on startup; apply them first with
+# (see .env.example). To use the Valkey below, set VALKEY_ADDR=valkey:6379;
+# services reach each other by name on the project's network.
+# Migrations never run on startup; apply them first with
 #
 #   docker compose run --rm migrate
 #
@@ -11,8 +13,6 @@ services:
     build: .
     env_file: .env
     environment:
-      # Overrides any localhost address in .env: Valkey is the service below.
-      VALKEY_ADDR: valkey:6379
       PORT: "8080"
     ports:
       # Loopback only by default, for a reverse proxy on the same host (it

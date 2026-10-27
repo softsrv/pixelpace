@@ -35,7 +35,7 @@ Before running `make dev`, make sure you have:
 
 `docker-compose.yml` runs the published `trriplejay/pixelpace` image with a private Valkey for live race updates. Postgres stays external, as in development.
 
-1. Create `.env` from `.env.example`. Use your hosted `DATABASE_URL`, `APP_ENV=production` and the public HTTPS origin as `APP_BASE_URL`. Compose points `VALKEY_ADDR` at its own Valkey, whatever `.env` says.
+1. Create `.env` from `.env.example`. Use your hosted `DATABASE_URL`, `APP_ENV=production` and the public HTTPS origin as `APP_BASE_URL`. Set `VALKEY_ADDR=valkey:6379` to use the Valkey that compose starts.
 2. Apply migrations (they never run on startup):
 
    ```sh

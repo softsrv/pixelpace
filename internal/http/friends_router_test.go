@@ -51,6 +51,7 @@ func TestFriendRoutesAuthenticate(t *testing.T) {
 		authedStatus int
 	}{
 		{http.MethodPost, "/friends/requests", 400},
+		{http.MethodGet, "/friends/requests", 500},
 		{http.MethodPost, "/friends/requests/bad-id/accept", 400},
 		{http.MethodPost, "/friends/requests/bad-id/reject", 400},
 		{http.MethodGet, "/friends", 500},

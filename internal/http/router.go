@@ -118,6 +118,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 
 	// ── Protected routes ──────────────────────────────────────────────────────
 	mux.Handle("POST /friends/requests", authMW(http.HandlerFunc(friendH.Send)))
+	mux.Handle("GET /friends/requests", authMW(http.HandlerFunc(friendH.ListRequests)))
 	mux.Handle("POST /friends/requests/{id}/accept", authMW(http.HandlerFunc(friendH.Accept)))
 	mux.Handle("POST /friends/requests/{id}/reject", authMW(http.HandlerFunc(friendH.Reject)))
 	mux.Handle("GET /friends", authMW(http.HandlerFunc(friendH.ListFriends)))

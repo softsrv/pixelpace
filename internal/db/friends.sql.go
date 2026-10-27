@@ -178,3 +178,107 @@ func (q *Queries) ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UU
 	}
 	return items, nil
 }
+
+const listFriendEntries = `-- name: ListFriendEntries :many
+SELECT u.id, u.display_name
+FROM (
+    SELECT f.user_id_b AS friend_id FROM friendships AS f WHERE f.user_id_a = $1
+    UNION
+    SELECT f.user_id_a AS friend_id FROM friendships AS f WHERE f.user_id_b = $1
+) AS friends
+JOIN users AS u ON u.id = friends.friend_id
+ORDER BY u.id
+`
+
+type ListFriendEntriesRow struct {
+	ID          uuid.UUID   `json:"id"`
+	DisplayName pgtype.Text `json:"display_name"`
+}
+
+func (q *Queries) ListFriendEntries(ctx context.Context, userIDA uuid.UUID) ([]ListFriendEntriesRow, error) {
+	rows, err := q.db.Query(ctx, listFriendEntries, userIDA)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListFriendEntriesRow{}
+	for rows.Next() {
+		var i ListFriendEntriesRow
+		if err := rows.Scan(&i.ID, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIncomingFriendRequests = `-- name: ListIncomingFriendRequests :many
+SELECT fr.id AS request_id, u.id AS user_id, u.display_name
+FROM friend_requests AS fr
+JOIN users AS u ON u.id = fr.sender_id
+WHERE fr.recipient_id = $1 AND fr.status = 'pending'
+ORDER BY fr.created_at, fr.id
+`
+
+type ListIncomingFriendRequestsRow struct {
+	RequestID   uuid.UUID   `json:"request_id"`
+	UserID      uuid.UUID   `json:"user_id"`
+	DisplayName pgtype.Text `json:"display_name"`
+}
+
+func (q *Queries) ListIncomingFriendRequests(ctx context.Context, recipientID uuid.UUID) ([]ListIncomingFriendRequestsRow, error) {
+	rows, err := q.db.Query(ctx, listIncomingFriendRequests, recipientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListIncomingFriendRequestsRow{}
+	for rows.Next() {
+		var i ListIncomingFriendRequestsRow
+		if err := rows.Scan(&i.RequestID, &i.UserID, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOutgoingFriendRequests = `-- name: ListOutgoingFriendRequests :many
+SELECT fr.id AS request_id, u.id AS user_id, u.display_name
+FROM friend_requests AS fr
+JOIN users AS u ON u.id = fr.recipient_id
+WHERE fr.sender_id = $1 AND fr.status = 'pending'
+ORDER BY fr.created_at, fr.id
+`
+
+type ListOutgoingFriendRequestsRow struct {
+	RequestID   uuid.UUID   `json:"request_id"`
+	UserID      uuid.UUID   `json:"user_id"`
+	DisplayName pgtype.Text `json:"display_name"`
+}
+
+func (q *Queries) ListOutgoingFriendRequests(ctx context.Context, senderID uuid.UUID) ([]ListOutgoingFriendRequestsRow, error) {
+	rows, err := q.db.Query(ctx, listOutgoingFriendRequests, senderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOutgoingFriendRequestsRow{}
+	for rows.Next() {
+		var i ListOutgoingFriendRequestsRow
+		if err := rows.Scan(&i.RequestID, &i.UserID, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

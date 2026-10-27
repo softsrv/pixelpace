@@ -61,6 +61,9 @@ type Querier interface {
 	LeaveQuickMatch(ctx context.Context, arg LeaveQuickMatchParams) error
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
 	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
+	ListFriendEntries(ctx context.Context, userIDA uuid.UUID) ([]ListFriendEntriesRow, error)
+	ListIncomingFriendRequests(ctx context.Context, recipientID uuid.UUID) ([]ListIncomingFriendRequestsRow, error)
+	ListOutgoingFriendRequests(ctx context.Context, senderID uuid.UUID) ([]ListOutgoingFriendRequestsRow, error)
 	ListRaceRoomParticipants(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
 	ListRaceRoster(ctx context.Context, raceID uuid.UUID) ([]ListRaceRosterRow, error)
 	ListRaceStandings(ctx context.Context, arg ListRaceStandingsParams) ([]ListRaceStandingsRow, error)

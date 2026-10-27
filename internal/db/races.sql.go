@@ -15,7 +15,7 @@ import (
 const beginRaceRoom = `-- name: BeginRaceRoom :one
 UPDATE rooms SET status = 'in_progress'
 WHERE id = $1 AND status = 'counting_down'
-RETURNING id, race_type_id, host_user_id, status, join_code, created_at
+RETURNING id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at
 `
 
 func (q *Queries) BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error) {
@@ -28,8 +28,20 @@ func (q *Queries) BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error)
 		&i.Status,
 		&i.JoinCode,
 		&i.CreatedAt,
+		&i.RaceStartsAt,
 	)
 	return i, err
+}
+
+const countRoomEquipmentUnready = `-- name: CountRoomEquipmentUnready :one
+SELECT count(*) FROM room_participants WHERE room_id = $1 AND equipment_ready_at IS NULL
+`
+
+func (q *Queries) CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoomEquipmentUnready, roomID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const createRace = `-- name: CreateRace :one
@@ -79,6 +91,31 @@ func (q *Queries) CreateRaceParticipant(ctx context.Context, arg CreateRaceParti
 	return err
 }
 
+const deleteRoomEquipmentUnready = `-- name: DeleteRoomEquipmentUnready :many
+DELETE FROM room_participants WHERE room_id = $1 AND equipment_ready_at IS NULL
+RETURNING user_id
+`
+
+func (q *Queries) DeleteRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, deleteRoomEquipmentUnready, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const finishRace = `-- name: FinishRace :exec
 UPDATE races SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL
 `
@@ -108,6 +145,37 @@ type FinishRaceParticipantParams struct {
 func (q *Queries) FinishRaceParticipant(ctx context.Context, arg FinishRaceParticipantParams) error {
 	_, err := q.db.Exec(ctx, finishRaceParticipant, arg.ID, arg.ElapsedMilliseconds, arg.FinishedAt)
 	return err
+}
+
+const getRoomRace = `-- name: GetRoomRace :one
+SELECT r.status, r.race_starts_at, rt.kind, rt.target_value, rt.label, races.id AS race_id
+FROM rooms r
+JOIN race_types rt ON rt.id = r.race_type_id
+LEFT JOIN races ON races.room_id = r.id
+WHERE r.id = $1
+`
+
+type GetRoomRaceRow struct {
+	Status       string             `json:"status"`
+	RaceStartsAt pgtype.Timestamptz `json:"race_starts_at"`
+	Kind         string             `json:"kind"`
+	TargetValue  int64              `json:"target_value"`
+	Label        string             `json:"label"`
+	RaceID       pgtype.UUID        `json:"race_id"`
+}
+
+func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow, error) {
+	row := q.db.QueryRow(ctx, getRoomRace, id)
+	var i GetRoomRaceRow
+	err := row.Scan(
+		&i.Status,
+		&i.RaceStartsAt,
+		&i.Kind,
+		&i.TargetValue,
+		&i.Label,
+		&i.RaceID,
+	)
+	return i, err
 }
 
 const insertRaceTelemetry = `-- name: InsertRaceTelemetry :exec
@@ -278,6 +346,40 @@ func (q *Queries) ListRaceStandings(ctx context.Context, arg ListRaceStandingsPa
 	return items, nil
 }
 
+const listRoomLineup = `-- name: ListRoomLineup :many
+SELECT u.id, u.display_name, (rp.equipment_ready_at IS NOT NULL)::boolean AS equipment_ready
+FROM room_participants rp JOIN users u ON u.id = rp.user_id
+WHERE rp.room_id = $1
+ORDER BY rp.id
+`
+
+type ListRoomLineupRow struct {
+	ID             uuid.UUID   `json:"id"`
+	DisplayName    pgtype.Text `json:"display_name"`
+	EquipmentReady bool        `json:"equipment_ready"`
+}
+
+// Lanes follow the same order Begin seeds race participants in.
+func (q *Queries) ListRoomLineup(ctx context.Context, roomID uuid.UUID) ([]ListRoomLineupRow, error) {
+	rows, err := q.db.Query(ctx, listRoomLineup, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRoomLineupRow{}
+	for rows.Next() {
+		var i ListRoomLineupRow
+		if err := rows.Scan(&i.ID, &i.DisplayName, &i.EquipmentReady); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockRace = `-- name: LockRace :one
 SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, rt.kind, rt.target_value
 FROM races r JOIN race_types rt ON rt.id = r.race_type_id
@@ -315,5 +417,40 @@ UPDATE race_participants SET status = 'dnf' WHERE id = $1 AND status = 'racing'
 
 func (q *Queries) MarkRaceParticipantDNF(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markRaceParticipantDNF, id)
+	return err
+}
+
+const markRoomEquipmentReady = `-- name: MarkRoomEquipmentReady :execrows
+UPDATE room_participants rp
+SET equipment_ready_at = COALESCE(rp.equipment_ready_at, NOW())
+FROM rooms r
+WHERE r.id = rp.room_id AND rp.room_id = $1 AND rp.user_id = $2
+  AND r.status IN ('counting_down', 'in_progress')
+`
+
+type MarkRoomEquipmentReadyParams struct {
+	RoomID uuid.UUID `json:"room_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) MarkRoomEquipmentReady(ctx context.Context, arg MarkRoomEquipmentReadyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markRoomEquipmentReady, arg.RoomID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setRoomRaceStartsAt = `-- name: SetRoomRaceStartsAt :exec
+UPDATE rooms SET race_starts_at = $2 WHERE id = $1
+`
+
+type SetRoomRaceStartsAtParams struct {
+	ID           uuid.UUID          `json:"id"`
+	RaceStartsAt pgtype.Timestamptz `json:"race_starts_at"`
+}
+
+func (q *Queries) SetRoomRaceStartsAt(ctx context.Context, arg SetRoomRaceStartsAtParams) error {
+	_, err := q.db.Exec(ctx, setRoomRaceStartsAt, arg.ID, arg.RaceStartsAt)
 	return err
 }

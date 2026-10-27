@@ -12,7 +12,7 @@ VALKEY_PORT      := 6379
 export
 
 .PHONY: dev run build test fmt lint \
-        daisyui-install tailwind tailwind-watch \
+        daisyui-install pixi-install tailwind tailwind-watch \
         smtp4dev smtp4dev-stop valkey valkey-stop \
         migrate-up migrate-down migrate-create migrate-status \
         sqlc-generate \
@@ -92,6 +92,19 @@ daisyui-install:
 	curl -sLo web/static/css/daisyui-theme.mjs \
 	  https://github.com/saadeghi/daisyui/releases/latest/download/daisyui-theme.mjs
 	@echo "DaisyUI bundles downloaded to web/static/css/"
+
+# Download the PixiJS browser bundle used by the race page. Vendored like
+# DaisyUI; unsafe-eval.min.js patches PixiJS to run under our CSP, which has no
+# 'unsafe-eval'. Bump PIXI_VERSION, re-run, and commit the resulting files.
+PIXI_VERSION ?= 8.22.0
+pixi-install:
+	curl -sfLo web/static/js/vendor/pixi/pixi.min.js \
+	  https://cdn.jsdelivr.net/npm/pixi.js@$(PIXI_VERSION)/dist/pixi.min.js
+	curl -sfLo web/static/js/vendor/pixi/unsafe-eval.min.js \
+	  https://cdn.jsdelivr.net/npm/pixi.js@$(PIXI_VERSION)/dist/packages/unsafe-eval.min.js
+	curl -sfLo web/static/js/vendor/pixi/LICENSE \
+	  https://cdn.jsdelivr.net/npm/pixi.js@$(PIXI_VERSION)/LICENSE
+	@echo "PixiJS $(PIXI_VERSION) downloaded to web/static/js/vendor/pixi/"
 
 tailwind:
 	tailwindcss -i ./web/static/css/app.css -o ./web/static/css/dist/app.css --minify

@@ -97,20 +97,30 @@ type RefreshToken struct {
 }
 
 type Room struct {
-	ID         uuid.UUID          `json:"id"`
-	RaceTypeID uuid.UUID          `json:"race_type_id"`
-	HostUserID uuid.UUID          `json:"host_user_id"`
-	Status     string             `json:"status"`
-	JoinCode   string             `json:"join_code"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID           uuid.UUID          `json:"id"`
+	RaceTypeID   uuid.UUID          `json:"race_type_id"`
+	HostUserID   uuid.UUID          `json:"host_user_id"`
+	Status       string             `json:"status"`
+	JoinCode     string             `json:"join_code"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	RaceStartsAt pgtype.Timestamptz `json:"race_starts_at"`
+}
+
+type RoomInvite struct {
+	ID            uuid.UUID          `json:"id"`
+	RoomID        uuid.UUID          `json:"room_id"`
+	InviterUserID uuid.UUID          `json:"inviter_user_id"`
+	InviteeUserID uuid.UUID          `json:"invitee_user_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
 type RoomParticipant struct {
-	ID       uuid.UUID          `json:"id"`
-	RoomID   uuid.UUID          `json:"room_id"`
-	UserID   uuid.UUID          `json:"user_id"`
-	Ready    bool               `json:"ready"`
-	JoinedAt pgtype.Timestamptz `json:"joined_at"`
+	ID               uuid.UUID          `json:"id"`
+	RoomID           uuid.UUID          `json:"room_id"`
+	UserID           uuid.UUID          `json:"user_id"`
+	Ready            bool               `json:"ready"`
+	JoinedAt         pgtype.Timestamptz `json:"joined_at"`
+	EquipmentReadyAt pgtype.Timestamptz `json:"equipment_ready_at"`
 }
 
 type TelemetrySample struct {

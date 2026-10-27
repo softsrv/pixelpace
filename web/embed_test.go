@@ -3,9 +3,14 @@ package web
 import (
 	"html/template"
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/softsrv/starter/internal/app"
 )
 
 // TestDashboardStatValuesContainOverflowGuardClasses renders the REAL embedded
@@ -355,5 +360,177 @@ func TestPartialsHaveNoFooter(t *testing.T) {
 				t.Errorf("%s output contains \"2026 softsrv\"; output: %q", tc.name, out)
 			}
 		})
+	}
+}
+
+// TestRacePageRendersTrackDataAndScripts renders the REAL embedded base.html +
+// race.html and asserts the race view receives what race.mjs reads: the
+// viewer, target distance, status URL, race ID and lane roster, with the
+// vendored PixiJS scripts loading before the race module.
+func TestRacePageRendersTrackDataAndScripts(t *testing.T) {
+	render := func(data map[string]any) string {
+		t.Helper()
+		tmpl, err := template.ParseFS(FS, "templates/base.html", "templates/race.html")
+		if err != nil {
+			t.Fatalf("parse race page: %v", err)
+		}
+		var buf strings.Builder
+		if err := tmpl.ExecuteTemplate(&buf, "base.html", data); err != nil {
+			t.Fatalf("execute race page: %v", err)
+		}
+		return buf.String()
+	}
+	raceID := uuid.MustParse("01950000-0000-7000-8000-0000000000aa")
+	selfID := uuid.MustParse("01950000-0000-7000-8000-0000000000bb")
+	rivalID := uuid.MustParse("01950000-0000-7000-8000-0000000000cc")
+	roomID := uuid.MustParse("01950000-0000-7000-8000-0000000000dd")
+	data := map[string]any{
+		"User":    map[string]any{"ID": selfID, "Email": "rower@example.com"},
+		"DevMode": true,
+		"Race":    map[string]any{"RoomID": roomID, "RaceID": &raceID, "Label": "2000m", "TargetMillimeters": int64(2000000)},
+		"Lanes": []map[string]any{
+			{"UserID": rivalID, "Label": "Ada", "IsSelf": false},
+			{"UserID": selfID, "Label": "Me", "IsSelf": true},
+		},
+	}
+
+	out := render(data)
+
+	for _, want := range []string{
+		`data-self-id="` + selfID.String() + `"`,
+		`data-target-mm="2000000"`,
+		`data-status-url="/rooms/` + roomID.String() + `/race/status"`,
+		`data-race-id="` + raceID.String() + `"`,
+		`data-ready-url="/rooms/` + roomID.String() + `/race/ready"`,
+		`data-lobby-url="/rooms/` + roomID.String() + `/lobby"`,
+		`<li data-user-id="` + rivalID.String() + `" data-self="false">Ada</li>`,
+		`<li data-user-id="` + selfID.String() + `" data-self="true">Me</li>`,
+		`id="rowing-machine-card" class="card bg-base-100 shadow-xl" data-dev-mode="true"`,
+		`id="bt-connect-btn"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered race page missing %q", want)
+		}
+	}
+	scripts := []string{"/static/js/app.js", "/static/js/vendor/pixi/pixi.min.js", "/static/js/vendor/pixi/unsafe-eval.min.js", "/static/js/race.mjs"}
+	last := -1
+	for _, src := range scripts {
+		idx := strings.Index(out, `src="`+src+`"`)
+		if idx <= last {
+			t.Fatalf("script %s missing or out of order; want order %v", src, scripts)
+		}
+		last = idx
+	}
+
+	data["Race"].(map[string]any)["RaceID"] = (*uuid.UUID)(nil)
+	if !strings.Contains(render(data), `data-race-id=""`) {
+		t.Errorf("counting-down page should render an empty race ID")
+	}
+}
+
+// TestLobbyPageRendersHostControlsAndLivePanel renders the REAL lobby.html with
+// the handler's data types and checks the wiring HTMX and app.js rely on.
+func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
+	roomID := uuid.MustParse("01950000-0000-7000-8000-0000000000dd")
+	hostID := uuid.MustParse("01950000-0000-7000-8000-0000000000bb")
+	guestID := uuid.MustParse("01950000-0000-7000-8000-0000000000cc")
+	friendID := uuid.MustParse("01950000-0000-7000-8000-0000000000ee")
+	typeA := uuid.MustParse("01950000-0000-7000-8000-000000000001")
+	typeB := uuid.MustParse("01950000-0000-7000-8000-000000000003")
+	render := func(isHost, canStart, selfReady bool) string {
+		t.Helper()
+		tmpl, err := template.ParseFS(FS, "templates/base.html", "templates/lobby.html")
+		if err != nil {
+			t.Fatalf("parse lobby page: %v", err)
+		}
+		lobby := app.RoomLobby{
+			RoomID: roomID, Status: "waiting", JoinCode: "ABC234", RaceTypeID: typeB, RaceLabel: "2000m",
+			IsHost: isHost, CanStart: canStart, SelfReady: selfReady,
+			Participants: []app.RoomRosterEntry{
+				{PublicPlayer: app.PublicPlayer{UserID: hostID, Name: "Hosty"}, Host: true},
+				{PublicPlayer: app.PublicPlayer{UserID: guestID, Name: "Guesty"}, Ready: true},
+			},
+		}
+		var buf strings.Builder
+		err = tmpl.ExecuteTemplate(&buf, "base.html", map[string]any{
+			"User":      map[string]any{"Email": "host@example.com"},
+			"Lobby":     lobby,
+			"RaceTypes": []app.RaceTypeOption{{ID: typeA, Label: "500m"}, {ID: typeB, Label: "2000m"}},
+			"Friends":   []map[string]any{{"UserID": friendID, "Name": "Friendly", "Invited": false, "Joined": false}},
+			"JoinURL":   "https://pixelpace.test/join/ABC234",
+		})
+		if err != nil {
+			t.Fatalf("execute lobby page: %v", err)
+		}
+		return buf.String()
+	}
+
+	host := render(true, true, false)
+	for _, want := range []string{
+		`hx-post="/rooms/` + roomID.String() + `/race-type"`,
+		`<option value="` + typeB.String() + `" selected>2000m</option>`,
+		`value="https://pixelpace.test/join/ABC234"`,
+		`data-copy-target="#join-url"`,
+		`>ABC234</span>`,
+		`data-dialog-open="#invite-dialog"`,
+		`hx-post="/rooms/` + roomID.String() + `/invites"`,
+		`name="user_id" value="` + friendID.String() + `"`,
+		`hx-get="/rooms/` + roomID.String() + `/lobby/panel" hx-trigger="every 2s, room-updated from:body"`,
+		`hx-post="/rooms/` + roomID.String() + `/start"`,
+		`hx-post="/rooms/` + roomID.String() + `/leave"`,
+		`Guesty`,
+	} {
+		if !strings.Contains(host, want) {
+			t.Errorf("host lobby missing %q", want)
+		}
+	}
+	if regexpDisabledStart.MatchString(host) {
+		t.Errorf("host lobby start button is disabled though the race can start")
+	}
+	if !regexpDisabledStart.MatchString(render(true, false, false)) {
+		t.Errorf("host lobby start button should be disabled until guests are ready")
+	}
+
+	guest := render(false, false, false)
+	if strings.Contains(guest, "/race-type") || strings.Contains(guest, "/start") {
+		t.Errorf("guest lobby shows host controls")
+	}
+	if !strings.Contains(guest, `hx-post="/rooms/`+roomID.String()+`/ready"`) {
+		t.Errorf("guest lobby missing the ready button")
+	}
+	if !strings.Contains(render(false, false, true), `hx-post="/rooms/`+roomID.String()+`/unready"`) {
+		t.Errorf("ready guest lobby missing the not-ready button")
+	}
+}
+
+var regexpDisabledStart = regexp.MustCompile(`id="lobby-start"[^>]*\sdisabled`)
+
+// TestDashboardRaceFragmentsRender executes the REAL dashboard fragments the
+// race card loads, with the handler's data types.
+func TestDashboardRaceFragmentsRender(t *testing.T) {
+	tmpl, err := template.ParseFS(FS, "templates/base.html", "templates/dashboard.html")
+	if err != nil {
+		t.Fatalf("parse dashboard: %v", err)
+	}
+	typeID := uuid.MustParse("01950000-0000-7000-8000-000000000003")
+	inviteID := uuid.MustParse("01950000-0000-7000-8000-0000000000ff")
+	var card, invites strings.Builder
+	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{"RaceTypes": []app.RaceTypeOption{{ID: typeID, Label: "2000m"}}}); err != nil {
+		t.Fatalf("execute race-card: %v", err)
+	}
+	for _, want := range []string{`hx-post="/rooms"`, `<option value="` + typeID.String() + `">2000m</option>`, `hx-post="/rooms/join"`, `name="join_code"`, `hx-get="/invites"`} {
+		if !strings.Contains(card.String(), want) {
+			t.Errorf("race card missing %q", want)
+		}
+	}
+	if err := tmpl.ExecuteTemplate(&invites, "room-invites", map[string]any{"Invites": []app.RoomInvite{
+		{ID: inviteID, RaceLabel: "500m", Inviter: app.PublicPlayer{Name: "Ada"}},
+	}}); err != nil {
+		t.Fatalf("execute room-invites: %v", err)
+	}
+	for _, want := range []string{"<strong>Ada</strong> invited you to a 500m race.", `hx-post="/invites/` + inviteID.String() + `/accept"`, `hx-post="/invites/` + inviteID.String() + `/decline"`} {
+		if !strings.Contains(invites.String(), want) {
+			t.Errorf("invites missing %q in %q", want, invites.String())
+		}
 	}
 }

@@ -79,8 +79,10 @@ function runDashboardApp(devMode) {
       },
       body: { addEventListener: function () {} },
       getElementById: function (id) { return byID[id] || null; },
-      querySelector: function () { return null; }
+      querySelector: function () { return null; },
+      dispatchEvent: function () {}
     },
+    CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; },
     window: { isSecureContext: false, location: { href: '' } },
     navigator: {},
     htmx: { trigger: function () {} },

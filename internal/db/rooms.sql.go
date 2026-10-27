@@ -32,6 +32,23 @@ func (q *Queries) CountRoomParticipants(ctx context.Context, roomID uuid.UUID) (
 	return count, err
 }
 
+const deleteRoomInvite = `-- name: DeleteRoomInvite :execrows
+DELETE FROM room_invites WHERE id = $1 AND invitee_user_id = $2
+`
+
+type DeleteRoomInviteParams struct {
+	ID            uuid.UUID `json:"id"`
+	InviteeUserID uuid.UUID `json:"invitee_user_id"`
+}
+
+func (q *Queries) DeleteRoomInvite(ctx context.Context, arg DeleteRoomInviteParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRoomInvite, arg.ID, arg.InviteeUserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteRoomParticipant = `-- name: DeleteRoomParticipant :exec
 DELETE FROM room_participants WHERE room_id = $1 AND user_id = $2
 `
@@ -56,7 +73,7 @@ func (q *Queries) DissolveRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getActiveRoomByJoinCode = `-- name: GetActiveRoomByJoinCode :one
-SELECT id, race_type_id, host_user_id, status, join_code, created_at FROM rooms
+SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at FROM rooms
 WHERE join_code = $1 AND status NOT IN ('finished', 'dissolved')
 FOR UPDATE
 `
@@ -71,6 +88,7 @@ func (q *Queries) GetActiveRoomByJoinCode(ctx context.Context, joinCode string) 
 		&i.Status,
 		&i.JoinCode,
 		&i.CreatedAt,
+		&i.RaceStartsAt,
 	)
 	return i, err
 }
@@ -103,7 +121,7 @@ func (q *Queries) GetRemainingRoomParticipant(ctx context.Context, roomID uuid.U
 }
 
 const getRoomForUpdate = `-- name: GetRoomForUpdate :one
-SELECT id, race_type_id, host_user_id, status, join_code, created_at FROM rooms WHERE id = $1 FOR UPDATE
+SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at FROM rooms WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, error) {
@@ -116,12 +134,65 @@ func (q *Queries) GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, err
 		&i.Status,
 		&i.JoinCode,
 		&i.CreatedAt,
+		&i.RaceStartsAt,
+	)
+	return i, err
+}
+
+const getRoomInviteForInvitee = `-- name: GetRoomInviteForInvitee :one
+SELECT ri.room_id, r.join_code
+FROM room_invites ri JOIN rooms r ON r.id = ri.room_id
+WHERE ri.id = $1 AND ri.invitee_user_id = $2
+`
+
+type GetRoomInviteForInviteeParams struct {
+	ID            uuid.UUID `json:"id"`
+	InviteeUserID uuid.UUID `json:"invitee_user_id"`
+}
+
+type GetRoomInviteForInviteeRow struct {
+	RoomID   uuid.UUID `json:"room_id"`
+	JoinCode string    `json:"join_code"`
+}
+
+func (q *Queries) GetRoomInviteForInvitee(ctx context.Context, arg GetRoomInviteForInviteeParams) (GetRoomInviteForInviteeRow, error) {
+	row := q.db.QueryRow(ctx, getRoomInviteForInvitee, arg.ID, arg.InviteeUserID)
+	var i GetRoomInviteForInviteeRow
+	err := row.Scan(&i.RoomID, &i.JoinCode)
+	return i, err
+}
+
+const getRoomLobby = `-- name: GetRoomLobby :one
+SELECT r.id, r.status, r.join_code, r.host_user_id, r.race_type_id, rt.label AS race_label
+FROM rooms r JOIN race_types rt ON rt.id = r.race_type_id
+WHERE r.id = $1
+`
+
+type GetRoomLobbyRow struct {
+	ID         uuid.UUID `json:"id"`
+	Status     string    `json:"status"`
+	JoinCode   string    `json:"join_code"`
+	HostUserID uuid.UUID `json:"host_user_id"`
+	RaceTypeID uuid.UUID `json:"race_type_id"`
+	RaceLabel  string    `json:"race_label"`
+}
+
+func (q *Queries) GetRoomLobby(ctx context.Context, id uuid.UUID) (GetRoomLobbyRow, error) {
+	row := q.db.QueryRow(ctx, getRoomLobby, id)
+	var i GetRoomLobbyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Status,
+		&i.JoinCode,
+		&i.HostUserID,
+		&i.RaceTypeID,
+		&i.RaceLabel,
 	)
 	return i, err
 }
 
 const getRoomParticipant = `-- name: GetRoomParticipant :one
-SELECT id, room_id, user_id, ready, joined_at FROM room_participants WHERE room_id = $1 AND user_id = $2 LIMIT 1
+SELECT id, room_id, user_id, ready, joined_at, equipment_ready_at FROM room_participants WHERE room_id = $1 AND user_id = $2 LIMIT 1
 `
 
 type GetRoomParticipantParams struct {
@@ -138,6 +209,7 @@ func (q *Queries) GetRoomParticipant(ctx context.Context, arg GetRoomParticipant
 		&i.UserID,
 		&i.Ready,
 		&i.JoinedAt,
+		&i.EquipmentReadyAt,
 	)
 	return i, err
 }
@@ -175,6 +247,29 @@ func (q *Queries) InsertRoom(ctx context.Context, arg InsertRoomParams) error {
 	return err
 }
 
+const insertRoomInvite = `-- name: InsertRoomInvite :exec
+INSERT INTO room_invites (id, room_id, inviter_user_id, invitee_user_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (room_id, invitee_user_id) DO NOTHING
+`
+
+type InsertRoomInviteParams struct {
+	ID            uuid.UUID `json:"id"`
+	RoomID        uuid.UUID `json:"room_id"`
+	InviterUserID uuid.UUID `json:"inviter_user_id"`
+	InviteeUserID uuid.UUID `json:"invitee_user_id"`
+}
+
+func (q *Queries) InsertRoomInvite(ctx context.Context, arg InsertRoomInviteParams) error {
+	_, err := q.db.Exec(ctx, insertRoomInvite,
+		arg.ID,
+		arg.RoomID,
+		arg.InviterUserID,
+		arg.InviteeUserID,
+	)
+	return err
+}
+
 const insertRoomParticipant = `-- name: InsertRoomParticipant :exec
 INSERT INTO room_participants (id, room_id, user_id, ready)
 VALUES ($1, $2, $3, false)
@@ -189,6 +284,110 @@ type InsertRoomParticipantParams struct {
 func (q *Queries) InsertRoomParticipant(ctx context.Context, arg InsertRoomParticipantParams) error {
 	_, err := q.db.Exec(ctx, insertRoomParticipant, arg.ID, arg.RoomID, arg.UserID)
 	return err
+}
+
+const listDistanceRaceTypes = `-- name: ListDistanceRaceTypes :many
+SELECT id, kind, target_value, label FROM race_types WHERE kind = 'distance' ORDER BY target_value
+`
+
+func (q *Queries) ListDistanceRaceTypes(ctx context.Context) ([]RaceType, error) {
+	rows, err := q.db.Query(ctx, listDistanceRaceTypes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RaceType{}
+	for rows.Next() {
+		var i RaceType
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.TargetValue,
+			&i.Label,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingRoomInvites = `-- name: ListPendingRoomInvites :many
+SELECT ri.id, ri.room_id, rt.label AS race_label, u.id AS inviter_id, u.display_name AS inviter_display_name
+FROM room_invites ri
+JOIN rooms r ON r.id = ri.room_id
+JOIN race_types rt ON rt.id = r.race_type_id
+JOIN users u ON u.id = ri.inviter_user_id
+WHERE ri.invitee_user_id = $1
+  AND r.status = 'waiting'
+  AND NOT EXISTS (
+      SELECT 1 FROM room_participants rp
+      WHERE rp.room_id = ri.room_id AND rp.user_id = ri.invitee_user_id
+  )
+ORDER BY ri.created_at DESC, ri.id
+`
+
+type ListPendingRoomInvitesRow struct {
+	ID                 uuid.UUID   `json:"id"`
+	RoomID             uuid.UUID   `json:"room_id"`
+	RaceLabel          string      `json:"race_label"`
+	InviterID          uuid.UUID   `json:"inviter_id"`
+	InviterDisplayName pgtype.Text `json:"inviter_display_name"`
+}
+
+// Invites stay listed only while their room is an open lobby the invitee has
+// not already joined.
+func (q *Queries) ListPendingRoomInvites(ctx context.Context, inviteeUserID uuid.UUID) ([]ListPendingRoomInvitesRow, error) {
+	rows, err := q.db.Query(ctx, listPendingRoomInvites, inviteeUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingRoomInvitesRow{}
+	for rows.Next() {
+		var i ListPendingRoomInvitesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RoomID,
+			&i.RaceLabel,
+			&i.InviterID,
+			&i.InviterDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoomInviteeIDs = `-- name: ListRoomInviteeIDs :many
+SELECT invitee_user_id FROM room_invites WHERE room_id = $1
+`
+
+func (q *Queries) ListRoomInviteeIDs(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listRoomInviteeIDs, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var invitee_user_id uuid.UUID
+		if err := rows.Scan(&invitee_user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, invitee_user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRoomRoster = `-- name: ListRoomRoster :many
@@ -238,6 +437,20 @@ func (q *Queries) MarkRoomParticipantReady(ctx context.Context, arg MarkRoomPart
 	return err
 }
 
+const markRoomParticipantUnready = `-- name: MarkRoomParticipantUnready :exec
+UPDATE room_participants SET ready = false WHERE room_id = $1 AND user_id = $2
+`
+
+type MarkRoomParticipantUnreadyParams struct {
+	RoomID uuid.UUID `json:"room_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) MarkRoomParticipantUnready(ctx context.Context, arg MarkRoomParticipantUnreadyParams) error {
+	_, err := q.db.Exec(ctx, markRoomParticipantUnready, arg.RoomID, arg.UserID)
+	return err
+}
+
 const reassignRoomHost = `-- name: ReassignRoomHost :exec
 UPDATE rooms SET host_user_id = $2 WHERE id = $1
 `
@@ -253,7 +466,7 @@ func (q *Queries) ReassignRoomHost(ctx context.Context, arg ReassignRoomHostPara
 }
 
 const resetRoomCountdown = `-- name: ResetRoomCountdown :exec
-UPDATE rooms SET status = 'waiting' WHERE id = $1 AND status = 'counting_down'
+UPDATE rooms SET status = 'waiting', race_starts_at = NULL WHERE id = $1 AND status = 'counting_down'
 `
 
 func (q *Queries) ResetRoomCountdown(ctx context.Context, id uuid.UUID) error {
@@ -261,12 +474,39 @@ func (q *Queries) ResetRoomCountdown(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const roomHasUnreadyParticipants = `-- name: RoomHasUnreadyParticipants :one
-SELECT EXISTS (SELECT 1 FROM room_participants WHERE room_id = $1 AND NOT ready)
+const resetRoomEquipmentReadiness = `-- name: ResetRoomEquipmentReadiness :exec
+UPDATE room_participants SET equipment_ready_at = NULL WHERE room_id = $1
 `
 
-func (q *Queries) RoomHasUnreadyParticipants(ctx context.Context, roomID uuid.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, roomHasUnreadyParticipants, roomID)
+func (q *Queries) ResetRoomEquipmentReadiness(ctx context.Context, roomID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, resetRoomEquipmentReadiness, roomID)
+	return err
+}
+
+const resetRoomReadiness = `-- name: ResetRoomReadiness :exec
+UPDATE room_participants SET ready = false WHERE room_id = $1
+`
+
+func (q *Queries) ResetRoomReadiness(ctx context.Context, roomID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, resetRoomReadiness, roomID)
+	return err
+}
+
+const roomHasUnreadyGuests = `-- name: RoomHasUnreadyGuests :one
+SELECT EXISTS (
+    SELECT 1 FROM room_participants
+    WHERE room_id = $1 AND user_id <> $2 AND NOT ready
+)
+`
+
+type RoomHasUnreadyGuestsParams struct {
+	RoomID uuid.UUID `json:"room_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// The host starts the race, so only the other participants must be ready.
+func (q *Queries) RoomHasUnreadyGuests(ctx context.Context, arg RoomHasUnreadyGuestsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, roomHasUnreadyGuests, arg.RoomID, arg.UserID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
@@ -294,5 +534,19 @@ UPDATE rooms SET status = 'counting_down' WHERE id = $1
 
 func (q *Queries) StartRoomCountdown(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, startRoomCountdown, id)
+	return err
+}
+
+const updateRoomRaceType = `-- name: UpdateRoomRaceType :exec
+UPDATE rooms SET race_type_id = $2 WHERE id = $1
+`
+
+type UpdateRoomRaceTypeParams struct {
+	ID         uuid.UUID `json:"id"`
+	RaceTypeID uuid.UUID `json:"race_type_id"`
+}
+
+func (q *Queries) UpdateRoomRaceType(ctx context.Context, arg UpdateRoomRaceTypeParams) error {
+	_, err := q.db.Exec(ctx, updateRoomRaceType, arg.ID, arg.RaceTypeID)
 	return err
 }

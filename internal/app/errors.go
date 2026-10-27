@@ -30,6 +30,8 @@ var (
 	ErrAlreadyQueued           = errors.New("user is already queued")
 	ErrNotQueued               = errors.New("user is not queued")
 	ErrInvalidStatusTransition = errors.New("invalid room status transition")
+	ErrRaceNotStarted          = errors.New("room race has not been started")
+	ErrNoRacersReady           = errors.New("no racer's equipment was ready")
 	ErrAlreadyFriends          = errors.New("users are already friends")
 	ErrRequestPending          = errors.New("friend request is already pending")
 	ErrCooldownActive          = errors.New("friend request cooldown is active")

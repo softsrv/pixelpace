@@ -89,6 +89,11 @@ func TestRaceWSIntegrationRosterIsFirstFrame(t *testing.T) {
 	}
 	b := realtime.NewFake()
 	races := app.NewRaceService(queries, pool, b, app.RaceServiceConfig{CountdownDuration: 10 * time.Millisecond})
+	for _, u := range []uuid.UUID{named.ID, unnamed.ID} {
+		if err := races.MarkEquipmentReady(ctx, roomID, u); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := races.Begin(ctx, roomID); err != nil {
 		t.Fatal(err)
 	}

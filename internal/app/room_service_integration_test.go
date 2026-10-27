@@ -431,7 +431,22 @@ func roomIntegrationReadyRoom(t *testing.T, pool *pgxpool.Pool) (uuid.UUID, uuid
 }
 
 func roomIntegrationRaceService(q *db.Queries, pool pgxBeginner) *RaceService {
-	return NewRaceService(q, pool, realtime.NewFake(), RaceServiceConfig{CountdownDuration: 10 * time.Millisecond})
+	return NewRaceService(q, pool, realtime.NewFake(), RaceServiceConfig{
+		EquipmentTimeout: 50 * time.Millisecond, EquipmentPollInterval: 5 * time.Millisecond,
+		CountdownDuration: 10 * time.Millisecond,
+	})
+}
+
+// roomIntegrationEquipmentReady reports each user's equipment ready on the
+// race page of a started room.
+func roomIntegrationEquipmentReady(t *testing.T, pool *pgxpool.Pool, roomID uuid.UUID, users ...uuid.UUID) {
+	t.Helper()
+	races := roomIntegrationRaceService(db.New(pool), pool)
+	for _, user := range users {
+		if err := races.MarkEquipmentReady(context.Background(), roomID, user); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // A started room's countdown begins its race: one race row for the room, every
@@ -445,6 +460,7 @@ func TestRoomIntegrationStartBeginsRace(t *testing.T) {
 	if err := s.StartRace(ctx, host, roomID); err != nil {
 		t.Fatal(err)
 	}
+	roomIntegrationEquipmentReady(t, pool, roomID, host, guest)
 	race, err := roomIntegrationRaceService(q, pool).Begin(ctx, roomID)
 	if err != nil {
 		t.Fatal(err)
@@ -496,12 +512,13 @@ func TestRoomIntegrationFailedBeginResetsRoom(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pool := roomIntegrationDB(t)
 			ctx := context.Background()
-			roomID, host, _ := roomIntegrationReadyRoom(t, pool)
+			roomID, host, guest := roomIntegrationReadyRoom(t, pool)
 			q := db.New(pool)
 			s := NewRoomService(q, pool)
 			if err := s.StartRace(ctx, host, roomID); err != nil {
 				t.Fatal(err)
 			}
+			roomIntegrationEquipmentReady(t, pool, roomID, host, guest)
 			if err := tc.begin(t, pool, roomID); err == nil {
 				t.Fatal("expected begin failure")
 			}
@@ -509,8 +526,11 @@ func TestRoomIntegrationFailedBeginResetsRoom(t *testing.T) {
 				t.Fatal(err)
 			}
 			room, err := q.GetRoomForUpdate(ctx, roomID)
-			if err != nil || room.Status != "waiting" {
-				t.Fatalf("status after reset = %s, %v; want waiting", room.Status, err)
+			if err != nil || room.Status != "waiting" || room.RaceStartsAt.Valid {
+				t.Fatalf("room after reset = %+v, %v; want waiting with no start time", room, err)
+			}
+			if unready, err := q.CountRoomEquipmentUnready(ctx, roomID); err != nil || unready != 2 {
+				t.Fatalf("equipment unready after reset = %d, %v; want every racer to reconnect", unready, err)
 			}
 			var races int
 			if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {

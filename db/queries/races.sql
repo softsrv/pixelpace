@@ -15,10 +15,18 @@ SELECT user_id FROM room_participants WHERE room_id = $1 ORDER BY id;
 INSERT INTO race_participants (id, race_id, user_id, status)
 VALUES ($1, $2, $3, 'racing');
 
+-- name: ListRaceRoster :many
+SELECT u.id, u.display_name
+FROM race_participants p JOIN users u ON u.id = p.user_id
+WHERE p.race_id = $1 ORDER BY p.id;
+
 -- name: LockRace :one
 SELECT r.*, rt.kind, rt.target_value
 FROM races r JOIN race_types rt ON rt.id = r.race_type_id
 WHERE r.id = $1 FOR UPDATE OF r;
+
+-- name: IsRaceParticipant :one
+SELECT EXISTS (SELECT 1 FROM race_participants WHERE race_id = $1 AND user_id = $2);
 
 -- name: InsertRaceTelemetry :exec
 INSERT INTO telemetry_samples

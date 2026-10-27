@@ -7,11 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/auth"
@@ -26,6 +30,70 @@ type telemetryIngestFunc func(context.Context, uuid.UUID, uuid.UUID, app.Telemet
 
 func (f telemetryIngestFunc) Ingest(ctx context.Context, race, user uuid.UUID, sample app.TelemetrySample) error {
 	return f(ctx, race, user, sample)
+}
+
+// participationFunc decides participation; its roster is empty, for tests
+// about the transport rather than who is in the race.
+type participationFunc func(context.Context, uuid.UUID, uuid.UUID) (bool, error)
+
+func (f participationFunc) IsParticipant(ctx context.Context, race, user uuid.UUID) (bool, error) {
+	return f(ctx, race, user)
+}
+
+func (f participationFunc) Roster(context.Context, uuid.UUID) ([]app.PublicPlayer, error) {
+	return []app.PublicPlayer{}, nil
+}
+
+// allowParticipants treats every caller as a participant, for tests about the
+// transport rather than the participation gate.
+var allowParticipants = participationFunc(func(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return true, nil })
+
+// rosterSource admits every caller and serves a fixed roster.
+type rosterSource struct {
+	players []app.PublicPlayer
+	err     error
+}
+
+func (rosterSource) IsParticipant(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return true, nil
+}
+
+func (s rosterSource) Roster(context.Context, uuid.UUID) ([]app.PublicPlayer, error) {
+	return s.players, s.err
+}
+
+// participantDB answers the real RaceService's IsRaceParticipant query, and
+// its ListRaceRoster query with no rows.
+type participantDB struct {
+	db.DBTX
+	member bool
+}
+
+func (d participantDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	return participantRow{ok: strings.HasPrefix(sql, "-- name: IsRaceParticipant "), member: d.member}
+}
+
+func (d participantDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	if !strings.HasPrefix(sql, "-- name: ListRaceRoster ") {
+		return nil, errors.New("unexpected query")
+	}
+	return emptyRows{}, nil
+}
+
+type emptyRows struct{ pgx.Rows }
+
+func (emptyRows) Next() bool { return false }
+func (emptyRows) Close()     {}
+func (emptyRows) Err() error { return nil }
+
+type participantRow struct{ ok, member bool }
+
+func (r participantRow) Scan(dest ...any) error {
+	if !r.ok || len(dest) != 1 {
+		return errors.New("unexpected query")
+	}
+	*dest[0].(*bool) = r.member
+	return nil
 }
 
 type wsSubscription struct {
@@ -114,13 +182,62 @@ func wsRead(t *testing.T, ctx context.Context, conn *websocket.Conn, want []byte
 	}
 }
 
+// rosterMessage is the first frame on every race connection.
+type rosterMessage struct {
+	Type    string             `json:"type"`
+	Players []app.PublicPlayer `json:"players"`
+}
+
+// wsReadRoster reads the connection's first frame, which must be the roster.
+func wsReadRoster(t *testing.T, ctx context.Context, conn *websocket.Conn) rosterMessage {
+	t.Helper()
+	_, payload, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got rosterMessage
+	if err := json.Unmarshal(payload, &got); err != nil || got.Type != "roster" {
+		t.Fatalf("first frame = %q, want a roster (%v)", payload, err)
+	}
+	return got
+}
+
+// CLM-5: the roster frame is the first frame, ahead of telemetry that is
+// already waiting the moment the subscription exists.
+func TestRaceWSRosterPrecedesTelemetry(t *testing.T) {
+	ctx := wsContext(t)
+	user, race := wsUser(), uuid.Must(uuid.NewV7())
+	players := []app.PublicPlayer{
+		{UserID: user.ID, Name: "RowerOne"},
+		app.NewPublicPlayer(uuid.Must(uuid.NewV7()), pgtype.Text{}),
+	}
+	telemetry := []byte(`{"user_id":"` + user.ID.String() + `","power":180}`)
+	b := &controlledBroadcaster{ch: make(chan []byte, 1)}
+	b.ch <- telemetry // Published before the handler could write anything.
+	srv := wsServer(t, user, handlers.NewRaceWSHandler(nil, rosterSource{players: players}, b))
+	conn := wsDial(t, ctx, srv.URL+"/races/"+race.String()+"/ws", wsHeaders(t, user))
+	if got := wsReadRoster(t, ctx, conn); !reflect.DeepEqual(got.Players, players) {
+		t.Fatalf("roster players = %+v, want %+v", got.Players, players)
+	}
+	wsRead(t, ctx, conn, telemetry)
+
+	// A roster that cannot be read closes the connection without telemetry.
+	b = &controlledBroadcaster{ch: make(chan []byte, 1)}
+	b.ch <- telemetry
+	srv = wsServer(t, user, handlers.NewRaceWSHandler(nil, rosterSource{err: errors.New("unavailable")}, b))
+	conn = wsDial(t, ctx, srv.URL+"/races/"+race.String()+"/ws", wsHeaders(t, user))
+	if _, payload, err := conn.Read(ctx); websocket.CloseStatus(err) != websocket.StatusInternalError {
+		t.Fatalf("roster failure: payload=%q error=%v, want internal-error close", payload, err)
+	}
+}
+
 func TestRaceWSRouterAuthentication(t *testing.T) {
 	ctx := wsContext(t)
 	user, race := wsUser(), uuid.Must(uuid.NewV7())
 	b := newObservedBroadcaster()
 	srv := httptest.NewServer(internalhttp.NewRouter(ctx, internalhttp.RouterConfig{
 		Queries: &handlerUserFetcher{user: user}, JWTSecret: testJWTSecret,
-		RaceSvc: app.NewRaceService(nil, nil, b, app.RaceServiceConfig{}), Broadcaster: b,
+		RaceSvc: app.NewRaceService(db.New(participantDB{member: true}), nil, b, app.RaceServiceConfig{}), Broadcaster: b,
 	}))
 	t.Cleanup(srv.Close)
 	url := srv.URL + "/races/" + race.String() + "/ws"
@@ -151,6 +268,7 @@ func TestRaceWSRouterAuthentication(t *testing.T) {
 		raceID := uuid.Must(uuid.NewV7())
 		conn := wsDial(t, ctx, srv.URL+"/races/"+raceID.String()+"/ws", headers)
 		wsWaitSubscription(t, ctx, b, raceID)
+		wsReadRoster(t, ctx, conn)
 		payload := []byte(`{"power":123}`)
 		if err := b.Publish(ctx, raceID.String(), payload); err != nil {
 			t.Fatal(err)
@@ -172,7 +290,7 @@ func TestRaceWSAuthenticatedIdentityAndDecode(t *testing.T) {
 		calls <- call{raceID, userID, resolved.ID, sample}
 		return nil
 	})
-	srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, realtime.NewFake()))
+	srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, allowParticipants, realtime.NewFake()))
 	conn := wsDial(t, ctx, srv.URL+"/races/"+race.String()+"/ws", wsHeaders(t, user))
 	if err := conn.Write(ctx, websocket.MessageText, []byte(`not json`)); err != nil {
 		t.Fatal(err)
@@ -206,10 +324,11 @@ func TestRaceWSDuplicateRejectedFirstRemainsLive(t *testing.T) {
 	user, race := wsUser(), uuid.Must(uuid.NewV7())
 	b := newObservedBroadcaster()
 	ingest := telemetryIngestFunc(func(context.Context, uuid.UUID, uuid.UUID, app.TelemetrySample) error { return nil })
-	srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, b))
+	srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, allowParticipants, b))
 	url, headers := srv.URL+"/races/"+race.String()+"/ws", wsHeaders(t, user)
 	first := wsDial(t, ctx, url, headers)
 	sub := wsWaitSubscription(t, ctx, b, race)
+	wsReadRoster(t, ctx, first)
 	second, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: headers})
 	if second != nil {
 		_ = second.CloseNow()
@@ -254,7 +373,7 @@ func TestRaceWSRelayBetweenRacersAndRaceIsolation(t *testing.T) {
 		}
 		return b.Publish(ctx, raceID.String(), payload)
 	})
-	h := handlers.NewRaceWSHandler(ingest, b)
+	h := handlers.NewRaceWSHandler(ingest, allowParticipants, b)
 	userA, userB := wsUser(), wsUser()
 	srvA, srvB := wsServer(t, userA, h), wsServer(t, userB, h)
 	race, otherRace := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
@@ -264,6 +383,9 @@ func TestRaceWSRelayBetweenRacersAndRaceIsolation(t *testing.T) {
 	wsWaitSubscription(t, ctx, b, race)
 	other := wsDial(t, ctx, srvA.URL+"/races/"+otherRace.String()+"/ws", wsHeaders(t, userA))
 	wsWaitSubscription(t, ctx, b, otherRace)
+	for _, conn := range []*websocket.Conn{a, peer, other} {
+		wsReadRoster(t, ctx, conn)
+	}
 	if err := a.Write(ctx, websocket.MessageText, []byte(`{"power":175}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +413,7 @@ func TestRaceWSRelayBetweenRacersAndRaceIsolation(t *testing.T) {
 }
 
 func TestRaceWSValidationAndFailedUpgradeRelease(t *testing.T) {
-	h := handlers.NewRaceWSHandler(nil, realtime.NewFake())
+	h := handlers.NewRaceWSHandler(nil, allowParticipants, realtime.NewFake())
 	rr := httptest.NewRecorder()
 	h.Serve(rr, httptest.NewRequest(http.MethodGet, "/races/invalid/ws", nil))
 	if rr.Code != http.StatusUnauthorized {
@@ -350,8 +472,11 @@ func TestRaceWSPumpFailuresCloseConnection(t *testing.T) {
 				return errors.New("unavailable")
 			})
 			user := wsUser()
-			srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, b))
+			srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, allowParticipants, b))
 			conn := wsDial(t, ctx, srv.URL+"/races/"+uuid.Must(uuid.NewV7()).String()+"/ws", wsHeaders(t, user))
+			if mode != "subscribe error" {
+				wsReadRoster(t, ctx, conn)
+			}
 			if mode == "ingest error" {
 				if err := conn.Write(ctx, websocket.MessageText, []byte(`{}`)); err != nil {
 					t.Fatal(err)
@@ -361,5 +486,91 @@ func TestRaceWSPumpFailuresCloseConnection(t *testing.T) {
 				t.Fatalf("connection not promptly closed: %v", err)
 			}
 		})
+	}
+}
+
+// CLM-6: only a race's participants may open its live channel. Everyone else is
+// refused before the upgrade, with no subscription (so no frames) and no Ingest.
+func TestRaceWSNonParticipantRefusedBeforeUpgrade(t *testing.T) {
+	ctx := wsContext(t)
+	user, race := wsUser(), uuid.Must(uuid.NewV7())
+	var ingested atomic.Int32
+	ingest := telemetryIngestFunc(func(context.Context, uuid.UUID, uuid.UUID, app.TelemetrySample) error {
+		ingested.Add(1)
+		return nil
+	})
+	for _, tc := range []struct {
+		name   string
+		member bool
+		err    error
+		status int
+	}{
+		{"non-participant", false, nil, http.StatusForbidden},
+		{"check failure", false, errors.New("database unavailable"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var checked atomic.Int32
+			check := participationFunc(func(_ context.Context, gotRace, gotUser uuid.UUID) (bool, error) {
+				checked.Add(1)
+				if gotRace != race || gotUser != user.ID {
+					t.Errorf("check(%s, %s), want (%s, %s)", gotRace, gotUser, race, user.ID)
+				}
+				return tc.member, tc.err
+			})
+			b := newObservedBroadcaster()
+			srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, check, b))
+			conn, resp, err := websocket.Dial(ctx, srv.URL+"/races/"+race.String()+"/ws", &websocket.DialOptions{HTTPHeader: wsHeaders(t, user)})
+			if conn != nil {
+				_ = conn.CloseNow()
+				t.Fatal("refused caller was upgraded")
+			}
+			if err == nil || resp == nil || resp.StatusCode != tc.status {
+				t.Fatalf("refused upgrade: response=%v error=%v, want %d", resp, err, tc.status)
+			}
+			if checked.Load() != 1 {
+				t.Fatalf("participation checks = %d, want 1", checked.Load())
+			}
+			select {
+			case sub := <-b.subscribed:
+				t.Fatalf("refused caller subscribed to %s", sub.race)
+			default:
+			}
+		})
+	}
+	if ingested.Load() != 0 {
+		t.Fatalf("refused callers ingested %d samples", ingested.Load())
+	}
+	// The same caller, once a participant, proceeds through the upgrade.
+	b := newObservedBroadcaster()
+	srv := wsServer(t, user, handlers.NewRaceWSHandler(ingest, allowParticipants, b))
+	conn := wsDial(t, ctx, srv.URL+"/races/"+race.String()+"/ws", wsHeaders(t, user))
+	wsWaitSubscription(t, ctx, b, race)
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"power":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	for ingested.Load() == 0 {
+		if ctx.Err() != nil {
+			t.Fatal("participant telemetry not ingested")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Through the router, the real RaceService decides participation.
+func TestRaceWSRouterRefusesNonParticipant(t *testing.T) {
+	ctx := wsContext(t)
+	user := wsUser()
+	b := newObservedBroadcaster()
+	srv := httptest.NewServer(internalhttp.NewRouter(ctx, internalhttp.RouterConfig{
+		Queries: &handlerUserFetcher{user: user}, JWTSecret: testJWTSecret,
+		RaceSvc: app.NewRaceService(db.New(participantDB{member: false}), nil, b, app.RaceServiceConfig{}), Broadcaster: b,
+	}))
+	t.Cleanup(srv.Close)
+	conn, resp, err := websocket.Dial(ctx, srv.URL+"/races/"+uuid.Must(uuid.NewV7()).String()+"/ws", &websocket.DialOptions{HTTPHeader: wsHeaders(t, user)})
+	if conn != nil {
+		_ = conn.CloseNow()
+	}
+	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("non-participant through router: response=%v error=%v", resp, err)
 	}
 }

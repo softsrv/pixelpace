@@ -45,47 +45,48 @@ func generateJoinCode() (string, error) {
 	return string(code), nil
 }
 
-// CreateRoom atomically creates a waiting room and its host participant.
-func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID) (string, error) {
+// CreateRoom atomically creates a waiting room and its host participant. It
+// returns the room id, which addresses the roster, alongside the join code.
+func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
 	if _, err := s.q.GetRaceType(ctx, raceTypeID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", ErrInvalidRaceType
+			return uuid.Nil, "", ErrInvalidRaceType
 		}
-		return "", fmt.Errorf("get race type: %w", err)
+		return uuid.Nil, "", fmt.Errorf("get race type: %w", err)
 	}
 
 	var lastErr error
 	for attempt := 0; attempt < maxJoinCodeAttempts; attempt++ {
 		code, err := s.newJoinCode()
 		if err != nil {
-			return "", fmt.Errorf("create room code: %w", err)
+			return uuid.Nil, "", fmt.Errorf("create room code: %w", err)
 		}
 		// A unique violation aborts a PostgreSQL transaction. Each attempt
 		// therefore owns a fresh transaction, rolled back before retrying.
-		retry, err := s.createRoomAttempt(ctx, hostUserID, raceTypeID, code)
+		roomID, retry, err := s.createRoomAttempt(ctx, hostUserID, raceTypeID, code)
 		if err == nil {
-			return code, nil
+			return roomID, code, nil
 		}
 		if !retry {
-			return "", err
+			return uuid.Nil, "", err
 		}
 		lastErr = err
 	}
-	return "", fmt.Errorf("create room after %d attempts: %w", maxJoinCodeAttempts, lastErr)
+	return uuid.Nil, "", fmt.Errorf("create room after %d attempts: %w", maxJoinCodeAttempts, lastErr)
 }
 
-func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTypeID uuid.UUID, code string) (bool, error) {
+func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTypeID uuid.UUID, code string) (uuid.UUID, bool, error) {
 	roomID, err := uuid.NewV7()
 	if err != nil {
-		return false, fmt.Errorf("generate room id: %w", err)
+		return uuid.Nil, false, fmt.Errorf("generate room id: %w", err)
 	}
 	participantID, err := uuid.NewV7()
 	if err != nil {
-		return false, fmt.Errorf("generate participant id: %w", err)
+		return uuid.Nil, false, fmt.Errorf("generate participant id: %w", err)
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("begin tx: %w", err)
+		return uuid.Nil, false, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := s.q.WithTx(tx)
@@ -94,62 +95,63 @@ func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTyp
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		retry := errors.As(err, &pgErr) && pgErr.Code == "23505"
-		return retry, fmt.Errorf("insert room: %w", err)
+		return uuid.Nil, retry, fmt.Errorf("insert room: %w", err)
 	}
 	if err := qtx.InsertRoomParticipant(ctx, db.InsertRoomParticipantParams{
 		ID: participantID, RoomID: roomID, UserID: hostUserID,
 	}); err != nil {
-		return false, fmt.Errorf("insert host participant: %w", err)
+		return uuid.Nil, false, fmt.Errorf("insert host participant: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit: %w", err)
+		return uuid.Nil, false, fmt.Errorf("commit: %w", err)
 	}
-	return false, nil
+	return roomID, false, nil
 }
 
-// JoinRoom adds a not-ready participant to the active waiting room for a code.
-func (s *RoomService) JoinRoom(ctx context.Context, userID uuid.UUID, joinCode string) error {
+// JoinRoom adds a not-ready participant to the active waiting room for a code
+// and returns that room's id.
+func (s *RoomService) JoinRoom(ctx context.Context, userID uuid.UUID, joinCode string) (uuid.UUID, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return uuid.Nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := s.q.WithTx(tx)
 	room, err := qtx.GetActiveRoomByJoinCode(ctx, joinCode)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrRoomNotFound
+			return uuid.Nil, ErrRoomNotFound
 		}
-		return fmt.Errorf("get active room: %w", err)
+		return uuid.Nil, fmt.Errorf("get active room: %w", err)
 	}
 	if room.Status != "waiting" {
-		return ErrRoomNotJoinable
+		return uuid.Nil, ErrRoomNotJoinable
 	}
 	exists, err := qtx.RoomParticipantExists(ctx, db.RoomParticipantExistsParams{RoomID: room.ID, UserID: userID})
 	if err != nil {
-		return fmt.Errorf("check participant: %w", err)
+		return uuid.Nil, fmt.Errorf("check participant: %w", err)
 	}
 	if exists {
-		return ErrAlreadyParticipant
+		return uuid.Nil, ErrAlreadyParticipant
 	}
 	count, err := qtx.CountRoomParticipants(ctx, room.ID)
 	if err != nil {
-		return fmt.Errorf("count participants: %w", err)
+		return uuid.Nil, fmt.Errorf("count participants: %w", err)
 	}
 	if count >= maxRoomParticipants {
-		return ErrRoomFull
+		return uuid.Nil, ErrRoomFull
 	}
 	id, err := uuid.NewV7()
 	if err != nil {
-		return fmt.Errorf("generate participant id: %w", err)
+		return uuid.Nil, fmt.Errorf("generate participant id: %w", err)
 	}
 	if err := qtx.InsertRoomParticipant(ctx, db.InsertRoomParticipantParams{ID: id, RoomID: room.ID, UserID: userID}); err != nil {
-		return fmt.Errorf("insert participant: %w", err)
+		return uuid.Nil, fmt.Errorf("insert participant: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
+		return uuid.Nil, fmt.Errorf("commit: %w", err)
 	}
-	return nil
+	return room.ID, nil
 }
 
 // LeaveRoom removes a participant, handing off the host or dissolving an empty room.
@@ -246,6 +248,73 @@ func (s *RoomService) BeginRace(ctx context.Context, roomID uuid.UUID) error {
 		}
 		return nil
 	})
+}
+
+// ResetCountdown returns a counting-down room to waiting after its race could
+// not begin, so it is joinable and can be started again. A room in any other
+// status is left unchanged and reported as ErrInvalidStatusTransition.
+func (s *RoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) error {
+	return s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
+		if room.Status != "counting_down" {
+			return ErrInvalidStatusTransition
+		}
+		if err := qtx.ResetRoomCountdown(ctx, roomID); err != nil {
+			return fmt.Errorf("reset countdown: %w", err)
+		}
+		return nil
+	})
+}
+
+// RoomRosterEntry is one participant as another participant sees it.
+type RoomRosterEntry struct {
+	PublicPlayer
+	Ready bool `json:"ready"`
+	Host  bool `json:"host"`
+}
+
+// RoomRoster lists a room's participants and, once begun, its race id.
+type RoomRoster struct {
+	Participants []RoomRosterEntry `json:"participants"`
+	RaceID       *uuid.UUID        `json:"race_id"`
+}
+
+// Roster returns the room's participants to one of them. A caller who is not
+// in the room gets ErrParticipantNotFound and no roster.
+func (s *RoomService) Roster(ctx context.Context, callerUserID, roomID uuid.UUID) (RoomRoster, error) {
+	var roster RoomRoster
+	err := s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
+		rows, err := qtx.ListRoomRoster(ctx, roomID)
+		if err != nil {
+			return fmt.Errorf("list room roster: %w", err)
+		}
+		member := false
+		entries := make([]RoomRosterEntry, 0, len(rows))
+		for _, row := range rows {
+			member = member || row.ID == callerUserID
+			entries = append(entries, RoomRosterEntry{
+				PublicPlayer: NewPublicPlayer(row.ID, row.DisplayName),
+				Ready:        row.Ready,
+				Host:         row.ID == room.HostUserID,
+			})
+		}
+		if !member {
+			return ErrParticipantNotFound
+		}
+		raceID, err := qtx.GetRoomRaceID(ctx, roomID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("get room race: %w", err)
+		default:
+			roster.RaceID = &raceID
+		}
+		roster.Participants = entries
+		return nil
+	})
+	if err != nil {
+		return RoomRoster{}, err
+	}
+	return roster, nil
 }
 
 // All lifecycle mutations lock the room first, serializing membership, readiness,

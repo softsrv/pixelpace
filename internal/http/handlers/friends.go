@@ -20,6 +20,8 @@ type friendServicer interface {
 	Accept(context.Context, uuid.UUID, uuid.UUID) error
 	Reject(context.Context, uuid.UUID, uuid.UUID) error
 	ListFriends(context.Context, uuid.UUID) ([]uuid.UUID, error)
+	ListFriendEntries(context.Context, uuid.UUID) ([]app.PublicPlayer, error)
+	ListRequests(context.Context, uuid.UUID) (app.FriendRequests, error)
 }
 
 // FriendHandler groups friend request and friendship HTTP handlers.
@@ -88,14 +90,14 @@ func (h *FriendHandler) decide(w http.ResponseWriter, r *http.Request, decide fu
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListFriends returns the authenticated user's friend IDs as JSON.
+// ListFriends returns the authenticated user's friends as JSON.
 func (h *FriendHandler) ListFriends(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.UserFromContext(r.Context())
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	friends, err := h.friends.ListFriends(r.Context(), user.ID)
+	friends, err := h.friends.ListFriendEntries(r.Context(), user.ID)
 	if err != nil {
 		friendError(w, r, err)
 		return
@@ -103,6 +105,24 @@ func (h *FriendHandler) ListFriends(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(friends); err != nil {
 		slog.ErrorContext(r.Context(), "encode friends", "error", err)
+	}
+}
+
+// ListRequests returns the authenticated user's incoming and outgoing pending friend requests.
+func (h *FriendHandler) ListRequests(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	requests, err := h.friends.ListRequests(r.Context(), user.ID)
+	if err != nil {
+		friendError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(requests); err != nil {
+		slog.ErrorContext(r.Context(), "encode friend requests", "error", err)
 	}
 }
 

@@ -65,4 +65,38 @@ func TestIssueAndValidateAccessToken(t *testing.T) {
 			t.Errorf("expected ErrTokenInvalid, got %v", err)
 		}
 	})
+
+	t.Run("consecutive tokens have distinct access tokens and non-empty distinct IDs", func(t *testing.T) {
+		t.Parallel()
+		tp1, err := auth.IssueAccessToken(userID, email, testSecret, expiry)
+		if err != nil {
+			t.Fatalf("first IssueAccessToken: %v", err)
+		}
+		tp2, err := auth.IssueAccessToken(userID, email, testSecret, expiry)
+		if err != nil {
+			t.Fatalf("second IssueAccessToken: %v", err)
+		}
+		if tp1.AccessToken == tp2.AccessToken {
+			t.Fatal("expected different access tokens for consecutive issuances")
+		}
+
+		claims1, err := auth.ValidateAccessToken(tp1.AccessToken, testSecret)
+		if err != nil {
+			t.Fatalf("ValidateAccessToken(tp1): %v", err)
+		}
+		claims2, err := auth.ValidateAccessToken(tp2.AccessToken, testSecret)
+		if err != nil {
+			t.Fatalf("ValidateAccessToken(tp2): %v", err)
+		}
+
+		if claims1.ID == "" {
+			t.Error("expected non-empty ID claim on first token")
+		}
+		if claims2.ID == "" {
+			t.Error("expected non-empty ID claim on second token")
+		}
+		if claims1.ID == claims2.ID {
+			t.Errorf("expected distinct IDs, got %q for both", claims1.ID)
+		}
+	})
 }

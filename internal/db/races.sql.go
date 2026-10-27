@@ -141,6 +141,22 @@ func (q *Queries) InsertRaceTelemetry(ctx context.Context, arg InsertRaceTelemet
 	return err
 }
 
+const isRaceParticipant = `-- name: IsRaceParticipant :one
+SELECT EXISTS (SELECT 1 FROM race_participants WHERE race_id = $1 AND user_id = $2)
+`
+
+type IsRaceParticipantParams struct {
+	RaceID uuid.UUID `json:"race_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) IsRaceParticipant(ctx context.Context, arg IsRaceParticipantParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isRaceParticipant, arg.RaceID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listRaceRoomParticipants = `-- name: ListRaceRoomParticipants :many
 SELECT user_id FROM room_participants WHERE room_id = $1 ORDER BY id
 `
@@ -158,6 +174,37 @@ func (q *Queries) ListRaceRoomParticipants(ctx context.Context, roomID uuid.UUID
 			return nil, err
 		}
 		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRaceRoster = `-- name: ListRaceRoster :many
+SELECT u.id, u.display_name
+FROM race_participants p JOIN users u ON u.id = p.user_id
+WHERE p.race_id = $1 ORDER BY p.id
+`
+
+type ListRaceRosterRow struct {
+	ID          uuid.UUID   `json:"id"`
+	DisplayName pgtype.Text `json:"display_name"`
+}
+
+func (q *Queries) ListRaceRoster(ctx context.Context, raceID uuid.UUID) ([]ListRaceRosterRow, error) {
+	rows, err := q.db.Query(ctx, listRaceRoster, raceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRaceRosterRow{}
+	for rows.Next() {
+		var i ListRaceRosterRow
+		if err := rows.Scan(&i.ID, &i.DisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

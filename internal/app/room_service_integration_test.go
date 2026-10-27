@@ -6,16 +6,20 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/softsrv/starter/internal/db"
+	"github.com/softsrv/starter/internal/realtime"
 )
 
 func roomIntegrationDB(t *testing.T) *pgxpool.Pool {
@@ -53,13 +57,16 @@ func roomIntegrationUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 func roomIntegrationCreate(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) (uuid.UUID, string) {
 	t.Helper()
 	ctx := context.Background()
-	code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID)
+	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	room, err := db.New(pool).GetActiveRoomByJoinCode(ctx, code)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if roomID != room.ID {
+		t.Fatalf("CreateRoom id = %s, want %s", roomID, room.ID)
 	}
 	t.Cleanup(func() {
 		if _, err := pool.Exec(ctx, "DELETE FROM rooms WHERE id = $1", room.ID); err != nil {
@@ -142,7 +149,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 		}
 		return generateJoinCode()
 	}
-	code, err := s.CreateRoom(ctx, host, roomTestID)
+	_, code, err := s.CreateRoom(ctx, host, roomTestID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,10 +185,10 @@ func TestRoomIntegrationLifecycle(t *testing.T) {
 	roomID, code := roomIntegrationCreate(t, pool, host)
 	q := db.New(pool)
 	s := NewRoomService(q, pool)
-	if err := s.JoinRoom(ctx, guest, code); err != nil {
-		t.Fatal(err)
+	if joined, err := s.JoinRoom(ctx, guest, code); err != nil || joined != roomID {
+		t.Fatalf("join = %s, %v; want %s", joined, err, roomID)
 	}
-	if err := s.JoinRoom(ctx, guest, code); !errors.Is(err, ErrAlreadyParticipant) {
+	if _, err := s.JoinRoom(ctx, guest, code); !errors.Is(err, ErrAlreadyParticipant) {
 		t.Fatalf("duplicate join = %v", err)
 	}
 	participant, err := q.GetRoomParticipant(ctx, db.GetRoomParticipantParams{RoomID: roomID, UserID: guest})
@@ -211,7 +218,7 @@ func TestRoomIntegrationLifecycle(t *testing.T) {
 	if err != nil || room.Status != "counting_down" {
 		t.Fatalf("start status = %s, %v", room.Status, err)
 	}
-	if err := s.JoinRoom(ctx, roomIntegrationUser(t, pool), code); !errors.Is(err, ErrRoomNotJoinable) {
+	if _, err := s.JoinRoom(ctx, roomIntegrationUser(t, pool), code); !errors.Is(err, ErrRoomNotJoinable) {
 		t.Fatalf("countdown join = %v", err)
 	}
 	if err := s.BeginRace(ctx, roomID); err != nil {
@@ -234,7 +241,7 @@ func TestRoomIntegrationLeaveAndKick(t *testing.T) {
 	q := db.New(pool)
 	s := NewRoomService(q, pool)
 	for _, user := range []uuid.UUID{guest, target} {
-		if err := s.JoinRoom(ctx, user, code); err != nil {
+		if _, err := s.JoinRoom(ctx, user, code); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -261,7 +268,7 @@ func TestRoomIntegrationLeaveAndKick(t *testing.T) {
 	if err != nil || room.Status != "dissolved" {
 		t.Fatalf("last leaver: %+v, %v", room, err)
 	}
-	if err := s.JoinRoom(ctx, target, code); !errors.Is(err, ErrRoomNotFound) {
+	if _, err := s.JoinRoom(ctx, target, code); !errors.Is(err, ErrRoomNotFound) {
 		t.Fatalf("dissolved join = %v", err)
 	}
 }
@@ -272,7 +279,7 @@ func TestRoomIntegrationAtomicFailures(t *testing.T) {
 	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
 	observed := &roomObservedPool{Pool: pool, failQuery: "InsertRoomParticipant"}
 	s := NewRoomService(db.New(observed), observed)
-	if _, err := s.CreateRoom(ctx, host, roomTestID); err == nil {
+	if _, _, err := s.CreateRoom(ctx, host, roomTestID); err == nil {
 		t.Fatal("expected create failure")
 	}
 	var count int
@@ -280,7 +287,7 @@ func TestRoomIntegrationAtomicFailures(t *testing.T) {
 		t.Fatalf("orphan room: %d, %v", count, err)
 	}
 	roomID, code := roomIntegrationCreate(t, pool, host)
-	if err := NewRoomService(db.New(pool), pool).JoinRoom(ctx, guest, code); err != nil {
+	if _, err := NewRoomService(db.New(pool), pool).JoinRoom(ctx, guest, code); err != nil {
 		t.Fatal(err)
 	}
 	observed.failQuery = "ReassignRoomHost"
@@ -304,7 +311,7 @@ func TestRoomIntegrationConcurrentJoins(t *testing.T) {
 		errs := make([]error, len(users))
 		for i, user := range users {
 			wg.Add(1)
-			go func() { defer wg.Done(); <-start; errs[i] = s.JoinRoom(ctx, user, code) }()
+			go func() { defer wg.Done(); <-start; _, errs[i] = s.JoinRoom(ctx, user, code) }()
 		}
 		close(start)
 		wg.Wait()
@@ -332,5 +339,189 @@ func TestRoomIntegrationConcurrentJoins(t *testing.T) {
 	count, err := db.New(pool).CountRoomParticipants(ctx, roomID)
 	if err != nil || count != 8 {
 		t.Fatalf("cap: count %d, err %v", count, err)
+	}
+}
+
+// The roster is read from the real participants and accounts: a named host,
+// an unnamed joiner shown by placeholder, ready flags from MarkReady, the
+// kicked participant gone, and the race id once a race row exists.
+func TestRoomIntegrationRoster(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host, joiner, target, outsider := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool), roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	q := db.New(pool)
+	hostName := "Host" + strings.ReplaceAll(host.String(), "-", "")[24:]
+	if err := q.SetUserDisplayName(ctx, db.SetUserDisplayNameParams{ID: host, DisplayName: pgtype.Text{String: hostName, Valid: true}}); err != nil {
+		t.Fatal(err)
+	}
+	roomID, code := roomIntegrationCreate(t, pool, host)
+	s := NewRoomService(q, pool)
+	for _, user := range []uuid.UUID{joiner, target} {
+		if _, err := s.JoinRoom(ctx, user, code); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.MarkReady(ctx, joiner, roomID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.KickParticipant(ctx, host, roomID, target); err != nil {
+		t.Fatal(err)
+	}
+	roster, err := s.Roster(ctx, joiner, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []RoomRosterEntry{
+		{PublicPlayer: PublicPlayer{UserID: host, Name: hostName}, Ready: false, Host: true},
+		{PublicPlayer: NewPublicPlayer(joiner, pgtype.Text{}), Ready: true, Host: false},
+	}
+	if !reflect.DeepEqual(roster.Participants, want) || roster.RaceID != nil {
+		t.Fatalf("roster = %+v (race %v), want %+v and no race", roster.Participants, roster.RaceID, want)
+	}
+	if !strings.HasPrefix(roster.Participants[1].Name, "Racer ") {
+		t.Fatalf("joiner placeholder = %q", roster.Participants[1].Name)
+	}
+	for _, caller := range []uuid.UUID{outsider, target} {
+		if got, err := s.Roster(ctx, caller, roomID); !errors.Is(err, ErrParticipantNotFound) || got.Participants != nil {
+			t.Fatalf("non-member roster = %+v, %v", got, err)
+		}
+	}
+	raceID := uuid.Must(uuid.NewV7())
+	if _, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at) VALUES ($1, $2, $3, now())", raceID, roomID, roomTestID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM races WHERE id = $1", raceID); err != nil {
+			t.Error(err)
+		}
+	})
+	roster, err = s.Roster(ctx, host, roomID)
+	if err != nil || roster.RaceID == nil || *roster.RaceID != raceID {
+		t.Fatalf("roster race = %v, %v; want %s", roster.RaceID, err, raceID)
+	}
+}
+
+// roomIntegrationReadyRoom creates a room with a host and a guest, both ready,
+// and removes any races begun for it before the room itself is deleted.
+func roomIntegrationReadyRoom(t *testing.T, pool *pgxpool.Pool) (uuid.UUID, uuid.UUID, uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	roomID, code := roomIntegrationCreate(t, pool, host)
+	t.Cleanup(func() {
+		for _, sql := range []string{
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
+			"DELETE FROM races WHERE room_id = $1",
+		} {
+			if _, err := pool.Exec(context.Background(), sql, roomID); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	s := NewRoomService(db.New(pool), pool)
+	if _, err := s.JoinRoom(ctx, guest, code); err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []uuid.UUID{host, guest} {
+		if err := s.MarkReady(ctx, user, roomID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return roomID, host, guest
+}
+
+func roomIntegrationRaceService(q *db.Queries, pool pgxBeginner) *RaceService {
+	return NewRaceService(q, pool, realtime.NewFake(), RaceServiceConfig{CountdownDuration: 10 * time.Millisecond})
+}
+
+// A started room's countdown begins its race: one race row for the room, every
+// room participant a race participant, and the roster naming that race.
+func TestRoomIntegrationStartBeginsRace(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	roomID, host, guest := roomIntegrationReadyRoom(t, pool)
+	q := db.New(pool)
+	s := NewRoomService(q, pool)
+	if err := s.StartRace(ctx, host, roomID); err != nil {
+		t.Fatal(err)
+	}
+	race, err := roomIntegrationRaceService(q, pool).Begin(ctx, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var races int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 1 {
+		t.Fatalf("races for room = %d, %v; want 1", races, err)
+	}
+	rows, err := pool.Query(ctx, "SELECT user_id FROM race_participants WHERE race_id = $1", race.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	racers, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, racer := range racers {
+		seen[racer] = true
+	}
+	if len(racers) != 2 || !seen[host] || !seen[guest] {
+		t.Fatalf("race participants = %v, want %s and %s", racers, host, guest)
+	}
+	roster, err := s.Roster(ctx, guest, roomID)
+	if err != nil || roster.RaceID == nil || *roster.RaceID != race.ID {
+		t.Fatalf("roster race = %v, %v; want %s", roster.RaceID, err, race.ID)
+	}
+}
+
+// A begin that is cancelled, or whose race write fails, leaves no race behind;
+// ResetCountdown returns the room to waiting and it can be started again.
+func TestRoomIntegrationFailedBeginResetsRoom(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		begin func(*testing.T, *pgxpool.Pool, uuid.UUID) error
+	}{
+		{"countdown cancelled", func(_ *testing.T, pool *pgxpool.Pool, roomID uuid.UUID) error {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, err := roomIntegrationRaceService(db.New(pool), pool).Begin(ctx, roomID)
+			return err
+		}},
+		{"race participant write fails", func(_ *testing.T, pool *pgxpool.Pool, roomID uuid.UUID) error {
+			observed := &roomObservedPool{Pool: pool, failQuery: "CreateRaceParticipant"}
+			_, err := roomIntegrationRaceService(db.New(observed), observed).Begin(context.Background(), roomID)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := roomIntegrationDB(t)
+			ctx := context.Background()
+			roomID, host, _ := roomIntegrationReadyRoom(t, pool)
+			q := db.New(pool)
+			s := NewRoomService(q, pool)
+			if err := s.StartRace(ctx, host, roomID); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.begin(t, pool, roomID); err == nil {
+				t.Fatal("expected begin failure")
+			}
+			if err := s.ResetCountdown(ctx, roomID); err != nil {
+				t.Fatal(err)
+			}
+			room, err := q.GetRoomForUpdate(ctx, roomID)
+			if err != nil || room.Status != "waiting" {
+				t.Fatalf("status after reset = %s, %v; want waiting", room.Status, err)
+			}
+			var races int
+			if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {
+				t.Fatalf("races after failed begin = %d, %v; want 0", races, err)
+			}
+			if err := s.ResetCountdown(ctx, roomID); !errors.Is(err, ErrInvalidStatusTransition) {
+				t.Fatalf("reset of waiting room = %v", err)
+			}
+			if err := s.StartRace(ctx, host, roomID); err != nil {
+				t.Fatalf("second start = %v", err)
+			}
+		})
 	}
 }

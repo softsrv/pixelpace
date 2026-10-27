@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,5 +92,42 @@ func TestFriendSendSelfRefused(t *testing.T) {
 	id := uuid.Must(uuid.NewV7())
 	if _, err := s.Send(context.Background(), id, id); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("Send to self = %v", err)
+	}
+}
+
+func TestFriendEntryAndRequestEntryNullName(t *testing.T) {
+	id := uuid.Must(uuid.NewV7())
+	reqID := uuid.Must(uuid.NewV7())
+	nullName := pgtype.Text{Valid: false}
+
+	want := NewPublicPlayer(id, nullName)
+	if want.Name == "" || strings.Contains(want.Name, "@") {
+		t.Fatalf("placeholder should be non-empty and not contain '@': got %q", want.Name)
+	}
+
+	friendEntry := friendEntry(id, nullName)
+	if friendEntry != want {
+		t.Fatalf("friend entry = %+v, want %+v", friendEntry, want)
+	}
+
+	reqEntry := friendRequestEntry(reqID, id, nullName)
+	if reqEntry.RequestID != reqID || reqEntry.PublicPlayer != want {
+		t.Fatalf("request entry = %+v, want RequestID %v and Player %+v", reqEntry, reqID, want)
+	}
+}
+
+func TestFriendEntryAndRequestEntryWithName(t *testing.T) {
+	id := uuid.Must(uuid.NewV7())
+	reqID := uuid.Must(uuid.NewV7())
+	name := pgtype.Text{String: "SpeedyRacer", Valid: true}
+
+	friendEntry := friendEntry(id, name)
+	if friendEntry.UserID != id || friendEntry.Name != "SpeedyRacer" {
+		t.Fatalf("friend entry = %+v", friendEntry)
+	}
+
+	reqEntry := friendRequestEntry(reqID, id, name)
+	if reqEntry.RequestID != reqID || reqEntry.UserID != id || reqEntry.Name != "SpeedyRacer" {
+		t.Fatalf("request entry = %+v", reqEntry)
 	}
 }

@@ -24,7 +24,7 @@ import (
 type stubQuickMatchService struct {
 	enqueueFn func(context.Context, uuid.UUID, uuid.UUID) error
 	leaveFn   func(context.Context, uuid.UUID, uuid.UUID) error
-	matchFn   func(context.Context, uuid.UUID, uuid.UUID) (string, error)
+	matchFn   func(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, string, error)
 }
 
 func (s *stubQuickMatchService) Enqueue(ctx context.Context, user, race uuid.UUID) error {
@@ -33,7 +33,7 @@ func (s *stubQuickMatchService) Enqueue(ctx context.Context, user, race uuid.UUI
 func (s *stubQuickMatchService) Leave(ctx context.Context, user, race uuid.UUID) error {
 	return s.leaveFn(ctx, user, race)
 }
-func (s *stubQuickMatchService) Match(ctx context.Context, user, race uuid.UUID) (string, error) {
+func (s *stubQuickMatchService) Match(ctx context.Context, user, race uuid.UUID) (uuid.UUID, string, error) {
 	return s.matchFn(ctx, user, race)
 }
 
@@ -66,7 +66,7 @@ func TestQuickMatchHandlers(t *testing.T) {
 			{"bad form", true, "%zz", nil, "", http.StatusBadRequest},
 		} {
 			t.Run(op.name+"/"+tc.name, func(t *testing.T) {
-				userID, raceID := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+				userID, raceID, matchedRoomID := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 				calls := 0
 				record := func(_ context.Context, user, race uuid.UUID) error {
 					calls++
@@ -75,8 +75,8 @@ func TestQuickMatchHandlers(t *testing.T) {
 					}
 					return tc.err
 				}
-				svc := &stubQuickMatchService{enqueueFn: record, leaveFn: record, matchFn: func(ctx context.Context, user, race uuid.UUID) (string, error) {
-					return tc.code, record(ctx, user, race)
+				svc := &stubQuickMatchService{enqueueFn: record, leaveFn: record, matchFn: func(ctx context.Context, user, race uuid.UUID) (uuid.UUID, string, error) {
+					return matchedRoomID, tc.code, record(ctx, user, race)
 				}}
 				h := handlers.NewQuickMatchHandler(svc)
 				var endpoint http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { op.handler(h, w, r) })
@@ -116,7 +116,7 @@ func TestQuickMatchHandlers(t *testing.T) {
 					if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
 						t.Fatal(err)
 					}
-					if result["join_code"] != tc.code || rr.Header().Get("Content-Type") != "application/json" {
+					if result["join_code"] != tc.code || result["room_id"] != matchedRoomID.String() || rr.Header().Get("Content-Type") != "application/json" {
 						t.Fatalf("response %v", result)
 					}
 				}

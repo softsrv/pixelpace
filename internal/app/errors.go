@@ -35,6 +35,7 @@ var (
 	ErrCooldownActive          = errors.New("friend request cooldown is active")
 	ErrNoSuchRequest           = errors.New("pending friend request not found")
 	ErrNotRecipient            = errors.New("only the recipient may decide a friend request")
+	ErrDisplayNameTaken        = errors.New("name is already taken")
 )
 
 // RateLimitedError is returned when an operation is attempted too frequently.

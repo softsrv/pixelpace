@@ -3,15 +3,19 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/softsrv/starter/internal/app"
@@ -62,7 +66,8 @@ func seedLeaderboard(t *testing.T, count int) *leaderboardFixture {
 	}
 	for i := 0; i < count; i++ {
 		id := uuid.Must(uuid.NewV7())
-		f.exec(t, "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'unused')", id, id.String()+"@leaderboard.example")
+		name := fmt.Sprintf("Racer %d", i)
+		f.exec(t, "INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, 'unused', $3)", id, id.String()+"@leaderboard.example", name)
 		f.users = append(f.users, id)
 	}
 	// Finished rooms do not participate in the active join-code unique index.
@@ -92,7 +97,7 @@ func (f *leaderboardFixture) friends(t *testing.T, a, b int) {
 	f.exec(t, "INSERT INTO friendships (id, user_id_a, user_id_b) VALUES ($1, LEAST($2::uuid, $3::uuid), GREATEST($2::uuid, $3::uuid))", uuid.Must(uuid.NewV7()), f.users[a], f.users[b])
 }
 
-func (f *leaderboardFixture) check(t *testing.T, scope, window string, caller int, want ...db.LeaderboardPersonalBestRow) {
+func (f *leaderboardFixture) check(t *testing.T, scope, window string, caller int, want ...app.LeaderboardRow) {
 	t.Helper()
 	got, err := f.svc.Leaderboard(context.Background(), scope, window, f.raceType, f.users[caller])
 	if err != nil {
@@ -114,9 +119,24 @@ func TestLeaderboardPersonalBestAndStatusesIntegration(t *testing.T) {
 	f.result(t, 2, f.raceType, "racing", 2, f.now)
 	f.result(t, 3, f.otherType, "finished", 1, f.now)
 	f.result(t, 1, f.otherType, "finished", 1, f.now)
-	f.check(t, "global", "all-time", 0,
-		db.LeaderboardPersonalBestRow{UserID: f.users[0], ElapsedMilliseconds: 2000},
-		db.LeaderboardPersonalBestRow{UserID: f.users[1], ElapsedMilliseconds: 3000})
+	for _, window := range []string{"all-time", "month", "week"} {
+		f.check(t, "global", window, 0,
+			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 2000},
+			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 3000})
+
+		got, err := f.svc.Leaderboard(context.Background(), "global", window, f.raceType, f.users[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range got {
+			for _, id := range f.users {
+				email := id.String() + "@leaderboard.example"
+				if row.Name == email || strings.Contains(row.Name, "@") {
+					t.Fatalf("row leaked email %s: %+v", email, row)
+				}
+			}
+		}
+	}
 }
 
 func TestLeaderboardWindowBoundariesIntegration(t *testing.T) {
@@ -139,12 +159,12 @@ func TestLeaderboardWindowBoundariesIntegration(t *testing.T) {
 			f.result(t, 0, f.raceType, "finished", 1000, tc.boundary.Add(-time.Microsecond))
 			for _, scope := range []string{"global", "friends"} {
 				f.check(t, scope, tc.window, 3,
-					db.LeaderboardPersonalBestRow{UserID: f.users[0], ElapsedMilliseconds: 3000},
-					db.LeaderboardPersonalBestRow{UserID: f.users[2], ElapsedMilliseconds: 4000})
+					app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 3000},
+					app.LeaderboardRow{UserID: f.users[2], Name: "Racer 2", ElapsedMilliseconds: 4000})
 				f.check(t, scope, "all-time", 3,
-					db.LeaderboardPersonalBestRow{UserID: f.users[0], ElapsedMilliseconds: 1000},
-					db.LeaderboardPersonalBestRow{UserID: f.users[1], ElapsedMilliseconds: 2000},
-					db.LeaderboardPersonalBestRow{UserID: f.users[2], ElapsedMilliseconds: 4000})
+					app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 1000},
+					app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 2000},
+					app.LeaderboardRow{UserID: f.users[2], Name: "Racer 2", ElapsedMilliseconds: 4000})
 			}
 		})
 	}
@@ -162,14 +182,76 @@ func TestLeaderboardFriendsAndFinishedIntegration(t *testing.T) {
 	f.result(t, 3, f.raceType, "finished", 1000, f.now)
 	for _, window := range []string{"all-time", "month", "week"} {
 		f.check(t, "friends", window, 0,
-			db.LeaderboardPersonalBestRow{UserID: f.users[2], ElapsedMilliseconds: 2000},
-			db.LeaderboardPersonalBestRow{UserID: f.users[1], ElapsedMilliseconds: 3000})
+			app.LeaderboardRow{UserID: f.users[2], Name: "Racer 2", ElapsedMilliseconds: 2000},
+			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 3000})
 		f.check(t, "global", window, 0,
-			db.LeaderboardPersonalBestRow{UserID: f.users[0], ElapsedMilliseconds: 500},
-			db.LeaderboardPersonalBestRow{UserID: f.users[3], ElapsedMilliseconds: 1000},
-			db.LeaderboardPersonalBestRow{UserID: f.users[2], ElapsedMilliseconds: 2000},
-			db.LeaderboardPersonalBestRow{UserID: f.users[1], ElapsedMilliseconds: 3000})
+			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 500},
+			app.LeaderboardRow{UserID: f.users[3], Name: "Racer 3", ElapsedMilliseconds: 1000},
+			app.LeaderboardRow{UserID: f.users[2], Name: "Racer 2", ElapsedMilliseconds: 2000},
+			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 3000})
 		f.check(t, "friends", window, 3) // No friends must not fall back to Global.
+
+		got, err := f.svc.Leaderboard(context.Background(), "global", window, f.raceType, f.users[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range got {
+			for _, id := range f.users {
+				email := id.String() + "@leaderboard.example"
+				if row.Name == email || strings.Contains(row.Name, "@") {
+					t.Fatalf("row leaked email %s: %+v", email, row)
+				}
+			}
+		}
+	}
+}
+
+func TestLeaderboardTieCaseIntegration(t *testing.T) {
+	f := seedLeaderboard(t, 3)
+	// Clear display_name for user 1 to make them a nameless player
+	f.exec(t, "UPDATE users SET display_name = NULL WHERE id = $1", f.users[1])
+
+	// Give all 3 users the exact same elapsed time (2000ms)
+	f.result(t, 0, f.raceType, "finished", 2000, f.now)
+	f.result(t, 1, f.raceType, "finished", 2000, f.now)
+	f.result(t, 2, f.raceType, "finished", 2000, f.now)
+	// Additional finished results for user 0 with equal and worse times to verify distinct finishers
+	f.result(t, 0, f.raceType, "finished", 3000, f.now)
+	f.result(t, 0, f.raceType, "finished", 2000, f.now)
+
+	got, err := f.svc.Leaderboard(context.Background(), "global", "all-time", f.raceType, f.users[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Row count equal to distinct finishers (3)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 distinct finishers, got %d", len(got))
+	}
+	// Equal times
+	for _, row := range got {
+		if row.ElapsedMilliseconds != 2000 {
+			t.Fatalf("expected elapsed 2000, got %d", row.ElapsedMilliseconds)
+		}
+	}
+	// Ordered by user_id ASC
+	for i := 0; i < len(got)-1; i++ {
+		if bytes.Compare(got[i].UserID[:], got[i+1].UserID[:]) >= 0 {
+			t.Fatalf("rows not ordered by user_id ASC: %s >= %s", got[i].UserID, got[i+1].UserID)
+		}
+	}
+	// Verify nameless player got the shared placeholder rule name
+	namelessExpected := app.NewPublicPlayer(f.users[1], pgtype.Text{}).Name
+	foundNameless := false
+	for _, row := range got {
+		if row.UserID == f.users[1] {
+			foundNameless = true
+			if row.Name != namelessExpected {
+				t.Fatalf("got nameless name %q, want %q", row.Name, namelessExpected)
+			}
+		}
+	}
+	if !foundNameless {
+		t.Fatalf("nameless user not found in results")
 	}
 }
 
@@ -199,11 +281,11 @@ func TestLeaderboardRouteIntegration(t *testing.T) {
 				}
 				continue
 			}
-			var got []db.LeaderboardPersonalBestRow
+			var got []app.LeaderboardRow
 			if rr.Code != http.StatusOK || rr.Header().Get("Location") != "" {
 				t.Fatalf("authenticated: %d %s", rr.Code, rr.Body)
 			}
-			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil || len(got) != 1 || got[0].UserID != f.users[1] || got[0].ElapsedMilliseconds != 1000 {
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil || len(got) != 1 || got[0].UserID != f.users[1] || got[0].ElapsedMilliseconds != 1000 || got[0].Name != "Racer 1" {
 				t.Fatalf("ranking = %s (%v)", rr.Body, err)
 			}
 		}

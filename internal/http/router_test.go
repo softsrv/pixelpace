@@ -99,15 +99,20 @@ func TestRoomRoutesRequireVerifiedUser(t *testing.T) {
 	paths := []string{
 		"/rooms", "/rooms/join", "/rooms/" + id + "/leave",
 		"/rooms/" + id + "/kick", "/rooms/" + id + "/ready", "/rooms/" + id + "/start",
+		"GET /rooms/" + id,
 	}
-	for _, path := range paths {
+	for _, route := range paths {
+		method, path := http.MethodPost, route
+		if rest, ok := strings.CutPrefix(route, "GET "); ok {
+			method, path = http.MethodGet, rest
+		}
 		for _, authenticated := range []bool{false, true} {
 			for _, htmx := range []bool{false, true} {
-				name := path + "/anonymous"
+				name := route + "/anonymous"
 				wantLocation := "/login"
 				wantStatus := http.StatusUnauthorized
 				if authenticated {
-					name = path + "/unverified"
+					name = route + "/unverified"
 					wantLocation = "/verify-email"
 					wantStatus = http.StatusForbidden
 				}
@@ -115,7 +120,7 @@ func TestRoomRoutesRequireVerifiedUser(t *testing.T) {
 					name += "/htmx"
 				}
 				t.Run(name, func(t *testing.T) {
-					req := httptest.NewRequest(http.MethodPost, path, nil)
+					req := httptest.NewRequest(method, path, nil)
 					if authenticated {
 						req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
 					}
@@ -149,4 +154,65 @@ func TestDashboardTemplateDataCarriesDevMode(t *testing.T) {
 	if got := data["DevMode"]; got != false {
 		t.Fatalf("DevMode = %v, want false", got)
 	}
+}
+
+func TestProfileDisplayNameRouteRequiresVerifiedUser(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	user := db.User{ID: uuid.New(), Email: "unverified@example.com", EmailVerified: false}
+	token, err := auth.IssueAccessToken(user.ID, user.Email, routerTestJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue access token: %v", err)
+	}
+	h := NewRouter(ctx, RouterConfig{
+		Queries:   routerUserFetcher{user: user},
+		Renderer:  newDashboardTestRenderer(t),
+		JWTSecret: routerTestJWTSecret,
+	})
+
+	path := "/profile/display-name"
+	for _, authenticated := range []bool{false, true} {
+		for _, htmx := range []bool{false, true} {
+			name := path + "/anonymous"
+			wantLocation := "/login"
+			wantStatus := http.StatusUnauthorized
+			if authenticated {
+				name = path + "/unverified"
+				wantLocation = "/verify-email"
+				wantStatus = http.StatusForbidden
+			}
+			if htmx {
+				name += "/htmx"
+			} else {
+				wantStatus = http.StatusSeeOther
+			}
+			t.Run(name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, path, nil)
+				if authenticated {
+					req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
+				}
+				locationHeader := "Location"
+				if htmx {
+					req.Header.Set("HX-Request", "true")
+					locationHeader = "HX-Redirect"
+				}
+				rr := httptest.NewRecorder()
+				h.ServeHTTP(rr, req)
+				if rr.Code != wantStatus {
+					t.Errorf("status = %d, want %d", rr.Code, wantStatus)
+				}
+				if got := rr.Header().Get(locationHeader); got != wantLocation {
+					t.Errorf("%s = %q, want %q", locationHeader, got, wantLocation)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := NewRouter(ctx, RouterConfig{})
+	// Wait should return cleanly when no in-flight begins exist.
+	r.Wait()
 }

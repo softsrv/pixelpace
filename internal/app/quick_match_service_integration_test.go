@@ -66,7 +66,7 @@ func quickMatchIntegrationFinish(t *testing.T, pool *pgxpool.Pool, user, raceTyp
 	t.Helper()
 	ctx := context.Background()
 	q := db.New(pool)
-	code, err := NewRoomService(q, pool).CreateRoom(ctx, user, raceType)
+	_, code, err := NewRoomService(q, pool).CreateRoom(ctx, user, raceType)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,17 +242,20 @@ func TestQuickMatchIntegrationHostAndWindows(t *testing.T) {
 	quickMatchIntegrationWait(t, pool, slow, raceType, now.Add(-time.Minute))
 	quickMatchIntegrationWait(t, pool, fast, raceType, now)
 	quickMatchIntegrationWait(t, pool, unrated, raceType, now.Add(-time.Minute))
-	if code, err := s.Match(ctx, slow, raceType); err != nil || code != "" {
+	if _, code, err := s.Match(ctx, slow, raceType); err != nil || code != "" {
 		t.Fatalf("asymmetric matched: %q, %v", code, err)
 	}
 	now = now.Add(10 * time.Second)
-	code, err := s.Match(ctx, slow, raceType)
+	roomID, code, err := s.Match(ctx, slow, raceType)
 	if err != nil || code == "" {
 		t.Fatalf("mutual match: %q, %v", code, err)
 	}
 	room, err := s.q.GetActiveRoomByJoinCode(ctx, code)
 	if err != nil || room.HostUserID != fast {
 		t.Fatalf("host = %+v, %v", room, err)
+	}
+	if roomID != room.ID {
+		t.Fatalf("match room id = %s, want %s", roomID, room.ID)
 	}
 	for _, user := range []uuid.UUID{slow, fast} {
 		if _, err := s.q.GetRoomParticipant(ctx, db.GetRoomParticipantParams{RoomID: room.ID, UserID: user}); err != nil {
@@ -283,7 +286,7 @@ func TestQuickMatchIntegrationUnratedGroup(t *testing.T) {
 		}
 		quickMatchIntegrationWait(t, pool, user, raceType, now.Add(-time.Minute))
 	}
-	code, err := s.Match(ctx, a, raceType)
+	_, code, err := s.Match(ctx, a, raceType)
 	if err != nil || code == "" {
 		t.Fatalf("unrated match: %q, %v", code, err)
 	}
@@ -322,7 +325,7 @@ func TestQuickMatchIntegrationAtomicFailure(t *testing.T) {
 	// real room writes, then assert PostgreSQL rolls the whole operation back.
 	observed := &roomObservedPool{Pool: pool, failQuery: "LeaveQuickMatch"}
 	s.q, s.pool = db.New(observed), observed
-	if _, err := s.Match(ctx, a, raceType); err == nil {
+	if _, _, err := s.Match(ctx, a, raceType); err == nil {
 		t.Fatal("expected delete failure")
 	}
 	var count int
@@ -353,7 +356,7 @@ func TestQuickMatchIntegrationConcurrentMatch(t *testing.T) {
 	start := make(chan struct{})
 	for i := range codes {
 		wg.Add(1)
-		go func() { defer wg.Done(); <-start; codes[i], errs[i] = s.Match(ctx, a, raceType) }()
+		go func() { defer wg.Done(); <-start; _, codes[i], errs[i] = s.Match(ctx, a, raceType) }()
 	}
 	close(start)
 	wg.Wait()

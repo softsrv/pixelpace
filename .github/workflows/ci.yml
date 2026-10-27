@@ -21,6 +21,19 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pixelpace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pixelpace_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Check out repository
@@ -52,7 +65,18 @@ jobs:
       - name: Unit tests
         run: go test ./...
 
+      - name: Apply migrations
+        run: |
+          for f in $(ls db/migrations/*.up.sql | sort); do
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/pixelpace_test?sslmode=disable
+
+      # -p 1: every DB-backed package shares the one test database, so run
+      # packages one at a time to keep their fixtures from interleaving.
       - name: Integration tests
-        run: go test -tags integration ./...
+        run: go test -tags integration -p 1 ./...
         env:
           VALKEY_ADDR: localhost:6379
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/pixelpace_test?sslmode=disable

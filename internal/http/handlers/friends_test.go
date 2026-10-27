@@ -20,10 +20,12 @@ import (
 )
 
 type stubFriendService struct {
-	sendFn   func(context.Context, uuid.UUID, uuid.UUID) (db.FriendRequest, error)
-	acceptFn func(context.Context, uuid.UUID, uuid.UUID) error
-	rejectFn func(context.Context, uuid.UUID, uuid.UUID) error
-	listFn   func(context.Context, uuid.UUID) ([]uuid.UUID, error)
+	sendFn        func(context.Context, uuid.UUID, uuid.UUID) (db.FriendRequest, error)
+	acceptFn      func(context.Context, uuid.UUID, uuid.UUID) error
+	rejectFn      func(context.Context, uuid.UUID, uuid.UUID) error
+	listFn        func(context.Context, uuid.UUID) ([]uuid.UUID, error)
+	listEntriesFn func(context.Context, uuid.UUID) ([]app.PublicPlayer, error)
+	listReqsFn    func(context.Context, uuid.UUID) (app.FriendRequests, error)
 }
 
 func (s *stubFriendService) Send(ctx context.Context, a, b uuid.UUID) (db.FriendRequest, error) {
@@ -36,12 +38,30 @@ func (s *stubFriendService) Reject(ctx context.Context, a, b uuid.UUID) error {
 	return s.rejectFn(ctx, a, b)
 }
 func (s *stubFriendService) ListFriends(ctx context.Context, a uuid.UUID) ([]uuid.UUID, error) {
-	return s.listFn(ctx, a)
+	if s.listFn != nil {
+		return s.listFn(ctx, a)
+	}
+	return nil, nil
+}
+func (s *stubFriendService) ListFriendEntries(ctx context.Context, a uuid.UUID) ([]app.PublicPlayer, error) {
+	if s.listEntriesFn != nil {
+		return s.listEntriesFn(ctx, a)
+	}
+	return []app.PublicPlayer{}, nil
+}
+func (s *stubFriendService) ListRequests(ctx context.Context, a uuid.UUID) (app.FriendRequests, error) {
+	if s.listReqsFn != nil {
+		return s.listReqsFn(ctx, a)
+	}
+	return app.FriendRequests{
+		Incoming: []app.FriendRequestEntry{},
+		Outgoing: []app.FriendRequestEntry{},
+	}, nil
 }
 
 func TestFriendsAuthenticatedActor(t *testing.T) {
 	actor, target, spoof := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
-	for _, op := range []string{"send", "accept", "reject", "list"} {
+	for _, op := range []string{"send", "accept", "reject", "list", "requests"} {
 		t.Run(op, func(t *testing.T) {
 			called := false
 			check := func(_ context.Context, gotActor, gotTarget uuid.UUID) error {
@@ -57,16 +77,29 @@ func TestFriendsAuthenticatedActor(t *testing.T) {
 				},
 				acceptFn: check,
 				rejectFn: check,
-				listFn: func(_ context.Context, a uuid.UUID) ([]uuid.UUID, error) {
+				listEntriesFn: func(_ context.Context, a uuid.UUID) ([]app.PublicPlayer, error) {
 					called = true
 					if a != actor {
 						t.Fatalf("actor = %s, want %s", a, actor)
 					}
-					return []uuid.UUID{target}, nil
+					return []app.PublicPlayer{{UserID: target, Name: "TargetUser"}}, nil
+				},
+				listReqsFn: func(_ context.Context, a uuid.UUID) (app.FriendRequests, error) {
+					called = true
+					if a != actor {
+						t.Fatalf("actor = %s, want %s", a, actor)
+					}
+					return app.FriendRequests{
+						Incoming: []app.FriendRequestEntry{
+							{RequestID: target, PublicPlayer: app.PublicPlayer{UserID: spoof, Name: "SpoofUser"}},
+						},
+						Outgoing: []app.FriendRequestEntry{},
+					}, nil
 				},
 			}
 			h := handlers.NewFriendHandler(stub)
 			fn, method, status := h.Send, http.MethodPost, http.StatusCreated
+			path := "/friends"
 			switch op {
 			case "accept":
 				fn, status = h.Accept, http.StatusNoContent
@@ -74,8 +107,11 @@ func TestFriendsAuthenticatedActor(t *testing.T) {
 				fn, status = h.Reject, http.StatusNoContent
 			case "list":
 				fn, method, status = h.ListFriends, http.MethodGet, http.StatusOK
+			case "requests":
+				fn, method, status = h.ListRequests, http.MethodGet, http.StatusOK
+				path = "/friends/requests"
 			}
-			protected, req := authedRequest(t, fn, actor, method, "/friends")
+			protected, req := authedRequest(t, fn, actor, method, path)
 			req.SetPathValue("id", target.String())
 			form := url.Values{"recipient_id": {target.String()}, "sender_id": {spoof.String()}, "user_id": {spoof.String()}, "acting_user_id": {spoof.String()}}
 			req.Body = io.NopCloser(strings.NewReader(form.Encode()))
@@ -86,9 +122,15 @@ func TestFriendsAuthenticatedActor(t *testing.T) {
 				t.Fatalf("status = %d, called = %v", rr.Code, called)
 			}
 			if op == "list" {
-				var ids []uuid.UUID
-				if err := json.Unmarshal(rr.Body.Bytes(), &ids); err != nil || len(ids) != 1 || ids[0] != target {
+				var friends []app.PublicPlayer
+				if err := json.Unmarshal(rr.Body.Bytes(), &friends); err != nil || len(friends) != 1 || friends[0].UserID != target || friends[0].Name != "TargetUser" {
 					t.Fatalf("list response = %s (%v)", rr.Body, err)
+				}
+			}
+			if op == "requests" {
+				var got app.FriendRequests
+				if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil || len(got.Incoming) != 1 || got.Incoming[0].RequestID != target || got.Incoming[0].UserID != spoof {
+					t.Fatalf("requests response = %s (%v)", rr.Body, err)
 				}
 			}
 			if op == "send" {
@@ -110,7 +152,7 @@ func TestFriendsErrorStatuses(t *testing.T) {
 		{app.ErrAlreadyFriends, 409}, {app.ErrRequestPending, 409}, {app.ErrCooldownActive, 409},
 		{errors.New("private database details"), 500},
 	} {
-		for _, op := range []string{"send", "accept", "reject", "list"} {
+		for _, op := range []string{"send", "accept", "reject", "list", "requests"} {
 			t.Run(op+"/"+tc.err.Error(), func(t *testing.T) {
 				wrapped := fmt.Errorf("wrapped: %w", tc.err)
 				decide := func(context.Context, uuid.UUID, uuid.UUID) error { return wrapped }
@@ -119,9 +161,11 @@ func TestFriendsErrorStatuses(t *testing.T) {
 						return db.FriendRequest{}, wrapped
 					},
 					acceptFn: decide, rejectFn: decide,
-					listFn: func(context.Context, uuid.UUID) ([]uuid.UUID, error) { return nil, wrapped },
+					listEntriesFn: func(context.Context, uuid.UUID) ([]app.PublicPlayer, error) { return nil, wrapped },
+					listReqsFn:    func(context.Context, uuid.UUID) (app.FriendRequests, error) { return app.FriendRequests{}, wrapped },
 				})
 				fn, method := h.Send, http.MethodPost
+				path := "/friends"
 				switch op {
 				case "accept":
 					fn = h.Accept
@@ -129,9 +173,12 @@ func TestFriendsErrorStatuses(t *testing.T) {
 					fn = h.Reject
 				case "list":
 					fn, method = h.ListFriends, http.MethodGet
+				case "requests":
+					fn, method = h.ListRequests, http.MethodGet
+					path = "/friends/requests"
 				}
 				id := uuid.Must(uuid.NewV7())
-				protected, req := authedRequest(t, fn, id, method, "/friends")
+				protected, req := authedRequest(t, fn, id, method, path)
 				req.SetPathValue("id", id.String())
 				req.Body = io.NopCloser(strings.NewReader("recipient_id=" + id.String()))
 				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -159,7 +206,7 @@ func TestFriendsInvalidIDAndAuthentication(t *testing.T) {
 			t.Fatalf("invalid ID status = %d", rr.Code)
 		}
 	}
-	for _, fn := range []http.HandlerFunc{h.Send, h.Accept, h.Reject, h.ListFriends} {
+	for _, fn := range []http.HandlerFunc{h.Send, h.Accept, h.Reject, h.ListFriends, h.ListRequests} {
 		protected, req := authedRequest(t, fn, uuid.Must(uuid.NewV7()), http.MethodPost, "/friends")
 		req.Header.Del("Cookie")
 		rr := httptest.NewRecorder()

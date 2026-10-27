@@ -44,6 +44,7 @@ type Querier interface {
 	GetRemainingRoomParticipant(ctx context.Context, roomID uuid.UUID) (uuid.UUID, error)
 	GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, error)
 	GetRoomParticipant(ctx context.Context, arg GetRoomParticipantParams) (RoomParticipant, error)
+	GetRoomRaceID(ctx context.Context, roomID uuid.UUID) (uuid.UUID, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetVerificationCodeByTokenHash(ctx context.Context, tokenHash string) (EmailVerificationCode, error)
@@ -54,13 +55,19 @@ type Querier interface {
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (RefreshToken, error)
 	InsertRoom(ctx context.Context, arg InsertRoomParams) error
 	InsertRoomParticipant(ctx context.Context, arg InsertRoomParticipantParams) error
+	IsRaceParticipant(ctx context.Context, arg IsRaceParticipantParams) (bool, error)
 	LatestFriendRequestRejection(ctx context.Context, arg LatestFriendRequestRejectionParams) (pgtype.Timestamptz, error)
 	LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPersonalBestParams) ([]LeaderboardPersonalBestRow, error)
 	LeaveQuickMatch(ctx context.Context, arg LeaveQuickMatchParams) error
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
 	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
+	ListFriendEntries(ctx context.Context, userIDA uuid.UUID) ([]ListFriendEntriesRow, error)
+	ListIncomingFriendRequests(ctx context.Context, recipientID uuid.UUID) ([]ListIncomingFriendRequestsRow, error)
+	ListOutgoingFriendRequests(ctx context.Context, senderID uuid.UUID) ([]ListOutgoingFriendRequestsRow, error)
 	ListRaceRoomParticipants(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
+	ListRaceRoster(ctx context.Context, raceID uuid.UUID) ([]ListRaceRosterRow, error)
 	ListRaceStandings(ctx context.Context, arg ListRaceStandingsParams) ([]ListRaceStandingsRow, error)
+	ListRoomRoster(ctx context.Context, roomID uuid.UUID) ([]ListRoomRosterRow, error)
 	ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)
@@ -71,11 +78,13 @@ type Querier interface {
 	ReassignRoomHost(ctx context.Context, arg ReassignRoomHostParams) error
 	RecentFinishesByRaceType(ctx context.Context, arg RecentFinishesByRaceTypeParams) ([]RecentFinishesByRaceTypeRow, error)
 	ResetLoginAttempts(ctx context.Context, id uuid.UUID) error
+	ResetRoomCountdown(ctx context.Context, id uuid.UUID) error
 	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error
 	RevokeRefreshToken(ctx context.Context, id uuid.UUID) error
 	RoomHasUnreadyParticipants(ctx context.Context, roomID uuid.UUID) (bool, error)
 	RoomParticipantExists(ctx context.Context, arg RoomParticipantExistsParams) (bool, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
+	SetUserDisplayName(ctx context.Context, arg SetUserDisplayNameParams) error
 	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
 	UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error

@@ -187,6 +187,12 @@ func TestIntegration_FriendAcceptAndList(t *testing.T) {
 	svc := testFriendService(t, pool, time.Now())
 	ids := []uuid.UUID{friendTestUser(t, pool), friendTestUser(t, pool), friendTestUser(t, pool)}
 	sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
+	if _, err := pool.Exec(ctx, "UPDATE users SET display_name = $2 WHERE id = $1", ids[0], "AlphaUser"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE users SET display_name = $2 WHERE id = $1", ids[2], "GammaUser"); err != nil {
+		t.Fatal(err)
+	}
 	middle := ids[1]
 	for _, other := range []uuid.UUID{ids[0], ids[2]} {
 		request, err := svc.Send(ctx, middle, other)
@@ -248,6 +254,14 @@ func TestIntegration_FriendAcceptAndList(t *testing.T) {
 	sort.Slice(friends, func(i, j int) bool { return bytes.Compare(friends[i][:], friends[j][:]) < 0 })
 	if len(friends) != 2 || friends[0] != ids[0] || friends[1] != ids[2] {
 		t.Fatalf("friends = %v", friends)
+	}
+	entries, err := svc.ListFriendEntries(ctx, middle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(entries, func(i, j int) bool { return bytes.Compare(entries[i].UserID[:], entries[j].UserID[:]) < 0 })
+	if len(entries) != 2 || entries[0].UserID != ids[0] || entries[0].Name != "AlphaUser" || entries[1].UserID != ids[2] || entries[1].Name != "GammaUser" {
+		t.Fatalf("friend entries = %+v", entries)
 	}
 }
 
@@ -313,5 +327,97 @@ func TestIntegration_FriendAcceptRollback(t *testing.T) {
 	stored, err := db.New(pool).GetFriendRequest(ctx, request.ID)
 	if err != nil || stored.Status != "pending" || stored.DecidedAt.Valid {
 		t.Fatalf("request update escaped rollback: %+v (%v)", stored, err)
+	}
+}
+
+func TestIntegration_ListRequests(t *testing.T) {
+	pool := testDB(t)
+	ctx := context.Background()
+	svc := testFriendService(t, pool, time.Now())
+
+	a, b, c := friendTestUser(t, pool), friendTestUser(t, pool), friendTestUser(t, pool)
+	if _, err := pool.Exec(ctx, "UPDATE users SET display_name = $2 WHERE id = $1", a, "UserA"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE users SET display_name = $2 WHERE id = $1", b, "UserB"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE users SET display_name = $2 WHERE id = $1", c, "UserC"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A sends to B
+	reqAB, err := svc.Send(ctx, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// C sends to A
+	reqCA, err := svc.Send(ctx, c, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Check A's listing: outgoing has B with B's name, incoming has C with C's name. A's own name is never what is shown.
+	reqsA, err := svc.ListRequests(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqsA.Outgoing) != 1 || reqsA.Outgoing[0].RequestID != reqAB.ID || reqsA.Outgoing[0].UserID != b || reqsA.Outgoing[0].Name != "UserB" {
+		t.Fatalf("A outgoing requests = %+v, want B with UserB", reqsA.Outgoing)
+	}
+	if len(reqsA.Incoming) != 1 || reqsA.Incoming[0].RequestID != reqCA.ID || reqsA.Incoming[0].UserID != c || reqsA.Incoming[0].Name != "UserC" {
+		t.Fatalf("A incoming requests = %+v, want C with UserC", reqsA.Incoming)
+	}
+
+	// Check B's listing: incoming has A with A's name, outgoing empty
+	reqsB, err := svc.ListRequests(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqsB.Incoming) != 1 || reqsB.Incoming[0].RequestID != reqAB.ID || reqsB.Incoming[0].UserID != a || reqsB.Incoming[0].Name != "UserA" {
+		t.Fatalf("B incoming requests = %+v, want A with UserA", reqsB.Incoming)
+	}
+	if len(reqsB.Outgoing) != 0 {
+		t.Fatalf("B outgoing requests = %+v, want empty", reqsB.Outgoing)
+	}
+
+	// B accepts A's request
+	if err := svc.Accept(ctx, b, reqAB.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Accepted request is absent
+	reqsA, err = svc.ListRequests(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqsA.Outgoing) != 0 {
+		t.Fatalf("A outgoing after accept = %+v, want empty", reqsA.Outgoing)
+	}
+	reqsB, err = svc.ListRequests(ctx, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqsB.Incoming) != 0 {
+		t.Fatalf("B incoming after accept = %+v, want empty", reqsB.Incoming)
+	}
+
+	// A rejects C's request
+	if err := svc.Reject(ctx, a, reqCA.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Rejected request is absent
+	reqsA, err = svc.ListRequests(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqsA.Incoming) != 0 {
+		t.Fatalf("A incoming after reject = %+v, want empty", reqsA.Incoming)
+	}
+	reqsC, err := svc.ListRequests(ctx, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqsC.Outgoing) != 0 {
+		t.Fatalf("C outgoing after reject = %+v, want empty", reqsC.Outgoing)
 	}
 }

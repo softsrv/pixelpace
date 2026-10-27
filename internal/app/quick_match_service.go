@@ -69,37 +69,37 @@ func (s *QuickMatchService) Leave(ctx context.Context, userID, raceTypeID uuid.U
 	return nil
 }
 
-// Match attempts to form a room containing the caller. An empty code means the
-// caller is still waiting. Clients can retry this POST as the search widens.
+// Match attempts to form a room containing the caller and returns its id and
+// join code. An empty code (and nil id) means the caller is still waiting. Clients can retry this POST as the search widens.
 // Queue row locks serialize competing matches and leaves across server instances.
-func (s *QuickMatchService) Match(ctx context.Context, userID, raceTypeID uuid.UUID) (string, error) {
+func (s *QuickMatchService) Match(ctx context.Context, userID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", fmt.Errorf("begin quick match: %w", err)
+		return uuid.Nil, "", fmt.Errorf("begin quick match: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.q.WithTx(tx)
 	waiting, err := q.ListWaitingByRaceType(ctx, raceTypeID)
 	if err != nil {
-		return "", fmt.Errorf("list waiting racers: %w", err)
+		return uuid.Nil, "", fmt.Errorf("list waiting racers: %w", err)
 	}
 	racers := make([]quickMatchRacer, 0, len(waiting))
 	found := false
 	for _, entry := range waiting {
 		finishes, err := q.RecentFinishesByRaceType(ctx, db.RecentFinishesByRaceTypeParams{RaceTypeID: raceTypeID, UserID: entry.UserID})
 		if err != nil {
-			return "", fmt.Errorf("recent finishes: %w", err)
+			return uuid.Nil, "", fmt.Errorf("recent finishes: %w", err)
 		}
 		average, rated := quickMatchRating(finishes)
 		racers = append(racers, quickMatchRacer{userID: entry.UserID, joinedAt: entry.JoinedAt.Time, average: average, rated: rated})
 		found = found || entry.UserID == userID
 	}
 	if !found {
-		return "", ErrNotQueued
+		return uuid.Nil, "", ErrNotQueued
 	}
 	group := selectQuickMatch(racers, userID, s.cfg.Now())
 	if len(group) == 0 {
-		return "", nil
+		return uuid.Nil, "", nil
 	}
 	host := quickMatchHost(group, s.cfg.IntN)
 	// pgx.Tx.Begin creates a savepoint. Rebind a copy of the existing service
@@ -107,26 +107,26 @@ func (s *QuickMatchService) Match(ctx context.Context, userID, raceTypeID uuid.U
 	// transaction: a failed join or queue deletion cannot leave a partial room.
 	rooms := *s.rooms
 	rooms.q, rooms.pool = q, tx
-	code, err := rooms.CreateRoom(ctx, host, raceTypeID)
+	roomID, code, err := rooms.CreateRoom(ctx, host, raceTypeID)
 	if err != nil {
-		return "", fmt.Errorf("create quick match room: %w", err)
+		return uuid.Nil, "", fmt.Errorf("create quick match room: %w", err)
 	}
 	for _, racer := range group {
 		if racer.userID != host {
-			if err := rooms.JoinRoom(ctx, racer.userID, code); err != nil {
-				return "", fmt.Errorf("join quick match room: %w", err)
+			if _, err := rooms.JoinRoom(ctx, racer.userID, code); err != nil {
+				return uuid.Nil, "", fmt.Errorf("join quick match room: %w", err)
 			}
 		}
 	}
 	for _, racer := range group {
 		if err := q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: racer.userID, RaceTypeID: raceTypeID}); err != nil {
-			return "", fmt.Errorf("remove matched racer: %w", err)
+			return uuid.Nil, "", fmt.Errorf("remove matched racer: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("commit quick match: %w", err)
+		return uuid.Nil, "", fmt.Errorf("commit quick match: %w", err)
 	}
-	return code, nil
+	return roomID, code, nil
 }
 
 type quickMatchRacer struct {

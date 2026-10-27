@@ -121,6 +121,29 @@ func (s *RaceService) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, err
 	return race, nil
 }
 
+// IsParticipant reports whether the user was seeded into the race when it began.
+func (s *RaceService) IsParticipant(ctx context.Context, raceID, userID uuid.UUID) (bool, error) {
+	ok, err := s.q.IsRaceParticipant(ctx, db.IsRaceParticipantParams{RaceID: raceID, UserID: userID})
+	if err != nil {
+		return false, fmt.Errorf("check race participant: %w", err)
+	}
+	return ok, nil
+}
+
+// Roster returns the public view of every participant seeded into the race,
+// in seeding order. One query reads only each participant's id and name.
+func (s *RaceService) Roster(ctx context.Context, raceID uuid.UUID) ([]PublicPlayer, error) {
+	rows, err := s.q.ListRaceRoster(ctx, raceID)
+	if err != nil {
+		return nil, fmt.Errorf("list race roster: %w", err)
+	}
+	players := make([]PublicPlayer, 0, len(rows))
+	for _, row := range rows {
+		players = append(players, NewPublicPlayer(row.ID, row.DisplayName))
+	}
+	return players, nil
+}
+
 // Ingest stores each sample, including zero measurements, and publishes it once
 // after commit. A publish error means the sample is stored but delivery failed;
 // callers must not retry the entire ingest to retry delivery.

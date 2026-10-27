@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const beginRoomRace = `-- name: BeginRoomRace :exec
@@ -141,6 +142,17 @@ func (q *Queries) GetRoomParticipant(ctx context.Context, arg GetRoomParticipant
 	return i, err
 }
 
+const getRoomRaceID = `-- name: GetRoomRaceID :one
+SELECT id FROM races WHERE room_id = $1 LIMIT 1
+`
+
+func (q *Queries) GetRoomRaceID(ctx context.Context, roomID uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getRoomRaceID, roomID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertRoom = `-- name: InsertRoom :exec
 INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code)
 VALUES ($1, $2, $3, 'waiting', $4)
@@ -179,6 +191,39 @@ func (q *Queries) InsertRoomParticipant(ctx context.Context, arg InsertRoomParti
 	return err
 }
 
+const listRoomRoster = `-- name: ListRoomRoster :many
+SELECT u.id, u.display_name, rp.ready
+FROM room_participants rp JOIN users u ON u.id = rp.user_id
+WHERE rp.room_id = $1
+ORDER BY rp.joined_at, rp.id
+`
+
+type ListRoomRosterRow struct {
+	ID          uuid.UUID   `json:"id"`
+	DisplayName pgtype.Text `json:"display_name"`
+	Ready       bool        `json:"ready"`
+}
+
+func (q *Queries) ListRoomRoster(ctx context.Context, roomID uuid.UUID) ([]ListRoomRosterRow, error) {
+	rows, err := q.db.Query(ctx, listRoomRoster, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRoomRosterRow{}
+	for rows.Next() {
+		var i ListRoomRosterRow
+		if err := rows.Scan(&i.ID, &i.DisplayName, &i.Ready); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markRoomParticipantReady = `-- name: MarkRoomParticipantReady :exec
 UPDATE room_participants SET ready = true WHERE room_id = $1 AND user_id = $2
 `
@@ -204,6 +249,15 @@ type ReassignRoomHostParams struct {
 
 func (q *Queries) ReassignRoomHost(ctx context.Context, arg ReassignRoomHostParams) error {
 	_, err := q.db.Exec(ctx, reassignRoomHost, arg.ID, arg.HostUserID)
+	return err
+}
+
+const resetRoomCountdown = `-- name: ResetRoomCountdown :exec
+UPDATE rooms SET status = 'waiting' WHERE id = $1 AND status = 'counting_down'
+`
+
+func (q *Queries) ResetRoomCountdown(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, resetRoomCountdown, id)
 	return err
 }
 

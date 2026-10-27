@@ -1,6 +1,7 @@
 package users_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -57,6 +58,51 @@ func TestValidateEmail(t *testing.T) {
 			t.Parallel()
 			if err := users.ValidateEmail(email); err == nil {
 				t.Errorf("ValidateEmail(%q) expected error, got nil", email)
+			}
+		})
+	}
+}
+
+func TestValidateDisplayName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr error
+		reason  string // substring the error message must carry
+	}{
+		{"empty", "", users.ErrDisplayNameEmpty, "empty"},
+		{"whitespace only", "  ", users.ErrDisplayNameEmpty, "empty"},
+		{"two chars", "ab", users.ErrDisplayNameTooShort, "at least 3"},
+		{"two chars padded", "  ab  ", users.ErrDisplayNameTooShort, "at least 3"},
+		{"21 chars", strings.Repeat("a", 21), users.ErrDisplayNameTooLong, "at most 20"},
+		{"punctuation", "rower!", users.ErrDisplayNameInvalidChars, "only contain"},
+		{"inner space", "row er", users.ErrDisplayNameInvalidChars, "only contain"},
+		{"non-ascii letter", "rowér", users.ErrDisplayNameInvalidChars, "only contain"},
+		{"email", "me@example.com", users.ErrDisplayNameLooksLikeEmail, "email"},
+		{"short email-like", "a@b", users.ErrDisplayNameLooksLikeEmail, "email"},
+		{"email-like with bad chars", "a b@c!", users.ErrDisplayNameLooksLikeEmail, "email"},
+		{"three chars", "abc", nil, ""},
+		{"20 chars", strings.Repeat("z", 20), nil, ""},
+		{"every allowed class", "Row_er-1.x", nil, ""},
+		{"trimmed to valid", "  Rower  ", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := users.ValidateDisplayName(tt.input)
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("ValidateDisplayName(%q) = %v, want nil", tt.input, err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("ValidateDisplayName(%q) = %v, want %v", tt.input, err, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.reason) {
+				t.Errorf("ValidateDisplayName(%q) message %q does not say %q", tt.input, err.Error(), tt.reason)
 			}
 		})
 	}

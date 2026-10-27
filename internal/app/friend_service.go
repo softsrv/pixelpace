@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/softsrv/starter/internal/db"
 )
@@ -172,4 +173,67 @@ func (s *FriendService) ListFriends(ctx context.Context, userID uuid.UUID) ([]uu
 		return nil, fmt.Errorf("list friends: %w", err)
 	}
 	return friends, nil
+}
+
+// FriendRequestEntry is one pending friend request counterpart as the caller sees it.
+type FriendRequestEntry struct {
+	RequestID uuid.UUID `json:"request_id"`
+	PublicPlayer
+}
+
+// FriendRequests groups the caller's incoming and outgoing pending friend requests.
+type FriendRequests struct {
+	Incoming []FriendRequestEntry `json:"incoming"`
+	Outgoing []FriendRequestEntry `json:"outgoing"`
+}
+
+func friendEntry(id uuid.UUID, name pgtype.Text) PublicPlayer {
+	return NewPublicPlayer(id, name)
+}
+
+func friendRequestEntry(requestID, userID uuid.UUID, name pgtype.Text) FriendRequestEntry {
+	return FriendRequestEntry{
+		RequestID:    requestID,
+		PublicPlayer: NewPublicPlayer(userID, name),
+	}
+}
+
+// ListFriendEntries returns each friend of userID as a PublicPlayer carrying their id and name.
+func (s *FriendService) ListFriendEntries(ctx context.Context, userID uuid.UUID) ([]PublicPlayer, error) {
+	rows, err := s.q.ListFriendEntries(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list friend entries: %w", err)
+	}
+	friends := make([]PublicPlayer, 0, len(rows))
+	for _, row := range rows {
+		friends = append(friends, friendEntry(row.ID, row.DisplayName))
+	}
+	return friends, nil
+}
+
+// ListRequests returns the caller's incoming and outgoing pending friend requests.
+func (s *FriendService) ListRequests(ctx context.Context, userID uuid.UUID) (FriendRequests, error) {
+	incomingRows, err := s.q.ListIncomingFriendRequests(ctx, userID)
+	if err != nil {
+		return FriendRequests{}, fmt.Errorf("list incoming friend requests: %w", err)
+	}
+	outgoingRows, err := s.q.ListOutgoingFriendRequests(ctx, userID)
+	if err != nil {
+		return FriendRequests{}, fmt.Errorf("list outgoing friend requests: %w", err)
+	}
+
+	incoming := make([]FriendRequestEntry, 0, len(incomingRows))
+	for _, row := range incomingRows {
+		incoming = append(incoming, friendRequestEntry(row.RequestID, row.UserID, row.DisplayName))
+	}
+
+	outgoing := make([]FriendRequestEntry, 0, len(outgoingRows))
+	for _, row := range outgoingRows {
+		outgoing = append(outgoing, friendRequestEntry(row.RequestID, row.UserID, row.DisplayName))
+	}
+
+	return FriendRequests{
+		Incoming: incoming,
+		Outgoing: outgoing,
+	}, nil
 }

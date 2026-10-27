@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/auth"
@@ -47,7 +48,8 @@ func (r *leaderboardRouterRows) Next() bool {
 }
 func (r *leaderboardRouterRows) Scan(dest ...any) error {
 	*dest[0].(*uuid.UUID) = r.racer
-	*dest[1].(*int32) = 1200
+	*dest[1].(*pgtype.Text) = pgtype.Text{String: "Racer Speed", Valid: true}
+	*dest[2].(*int32) = 1200
 	return nil
 }
 func (r *leaderboardRouterRows) Close()     {}
@@ -94,7 +96,7 @@ func TestLeaderboardRoutesAuthenticate(t *testing.T) {
 				}
 				continue
 			}
-			var got []db.LeaderboardPersonalBestRow
+			var got []app.LeaderboardRow
 			if rr.Code != http.StatusOK || rr.Header().Get("Location") != "" || store.calls != before+1 {
 				t.Fatalf("authenticated: status=%d headers=%v calls=%d", rr.Code, rr.Header(), store.calls)
 			}

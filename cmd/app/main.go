@@ -161,6 +161,18 @@ func main() {
 	// Stop background goroutines (token cleanup, rate-limiter sweepers).
 	stopCleanup()
 
+	// Wait for in-flight race begins to finish or reset their rooms.
+	waitDone := make(chan struct{})
+	go func() {
+		handler.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-shutdownCtx.Done():
+		slog.Error("in-flight race begins wait timed out", "error", shutdownCtx.Err())
+	}
+
 	// Wait for any in-flight email deliveries to complete before closing the pool.
 	authSvc.Shutdown()
 

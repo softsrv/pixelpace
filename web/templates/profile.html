@@ -6,8 +6,36 @@
   <div class="card bg-base-100 shadow-xl">
     <div class="card-body">
       <h2 class="card-title">Account</h2>
+      {{if .User.DisplayName.Valid}}
+      <p class="text-base-content/90 font-medium">{{.User.DisplayName.String}}</p>
+      {{end}}
       <p class="text-base-content/70">{{.User.Email}}</p>
       <p class="text-xs text-base-content/50">Member since {{.User.CreatedAt.Time.Format "January 2, 2006"}}</p>
+    </div>
+  </div>
+
+  <div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+      <h3 class="card-title text-lg">Display Name</h3>
+
+      <div id="display-name-result"></div>
+
+      <form hx-post="/profile/display-name"
+            hx-target="#display-name-result"
+            hx-swap="innerHTML"
+            class="space-y-4 mt-2">
+        <div class="form-control">
+          <label class="label" for="display_name">
+            <span class="label-text">Display Name</span>
+          </label>
+          <input id="display_name" name="display_name" type="text"
+                 value="{{if .User.DisplayName.Valid}}{{.User.DisplayName.String}}{{end}}"
+                 class="input input-bordered w-full"
+                 maxlength="20" />
+        </div>
+
+        <button type="submit" class="btn btn-primary w-full">Update Display Name</button>
+      </form>
     </div>
   </div>
 

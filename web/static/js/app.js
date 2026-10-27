@@ -151,7 +151,11 @@ document.body.addEventListener('token-expired', async function () {
     if (activeRaceStream && activeRaceStream.raceId === raceId) return activeRaceStream;
     if (activeRaceStream) activeRaceStream.stop();
 
-    var stream = { raceId: raceId, buffer: [], socket: null, stop: stop };
+    // roster and racers are prototype-less so ids like '__proto__' are plain keys.
+    var stream = {
+      raceId: raceId, buffer: [], socket: null, stop: stop,
+      roster: Object.create(null), racers: Object.create(null), nameFor: nameFor
+    };
     var retryTimer = null;
     var retryDelay = 1000;
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -163,6 +167,49 @@ document.body.addEventListener('token-expired', async function () {
       activeRaceStream = null;
       if (retryTimer !== null) clearTimeout(retryTimer);
       if (stream.socket) stream.socket.close();
+    }
+
+    // Names come only from the server's roster frame, never from an email.
+    function nameFor(userId) {
+      return typeof userId === 'string' && userId in stream.roster ? stream.roster[userId] : null;
+    }
+
+    function renderRoster() {
+      var el = document.getElementById('race-roster');
+      if (!el) return;
+      var names = Object.keys(stream.roster).map(function (id) { return stream.roster[id]; });
+      el.textContent = names.length ? 'Racers: ' + names.join(', ') : '';
+      if (el.classList) el.classList[names.length ? 'remove' : 'add']('hidden');
+    }
+
+    function handleMessage(data) {
+      var frame;
+      try {
+        frame = JSON.parse(data);
+      } catch (_) {
+        return;
+      }
+      if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return;
+      if (frame.type === 'roster') {
+        if (!Array.isArray(frame.players)) return;
+        var roster = Object.create(null);
+        frame.players.forEach(function (player) {
+          if (player && typeof player.user_id === 'string' && typeof player.name === 'string') {
+            roster[player.user_id] = player.name;
+          }
+        });
+        stream.roster = roster;
+        Object.keys(stream.racers).forEach(function (id) {
+          stream.racers[id].name = nameFor(id);
+        });
+        renderRoster();
+        return;
+      }
+      if (typeof frame.user_id !== 'string') return;
+      var racer = Object.create(null);
+      Object.keys(frame).forEach(function (key) { racer[key] = frame[key]; });
+      racer.name = nameFor(frame.user_id);
+      stream.racers[frame.user_id] = racer;
     }
 
     function retry() {
@@ -188,6 +235,10 @@ document.body.addEventListener('token-expired', async function () {
         if (activeRaceStream !== stream || stream.socket !== socket) return;
         retryDelay = 1000;
         flushRaceStream(stream);
+      };
+      socket.onmessage = function (event) {
+        if (activeRaceStream !== stream || stream.socket !== socket) return;
+        handleMessage(event && event.data);
       };
       socket.onclose = function () {
         if (stream.socket === socket) retry();

@@ -53,7 +53,10 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
       arc: function () {}
     };
   };
+  var rosterEl = metricElement();
+  rosterEl.classList = { add: function () { this.hidden = true; }, remove: function () { this.hidden = false; }, hidden: true };
   var byID = {
+    'race-roster': rosterEl,
     'bt-connect-btn': connectBtn,
     'rowing-machine-card': rowingMachineCard,
     'bt-connection-info': metricElement(),
@@ -170,6 +173,7 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
 
   return {
     metricEls: metricEls,
+    rosterEl: rosterEl,
     sockets: sockets,
     timers: timers,
     timeouts: timeouts,
@@ -291,8 +295,8 @@ test('reconnect alone synchronously replays the whole ordered batch with origina
   var reconnected = stream.socket;
   assert.notEqual(reconnected, firstSocket, 'reconnect creates a new native socket');
   assert.equal(reconnected.frames.length, 0);
-  assert.equal(firstSocket.onmessage, null);
-  assert.equal(reconnected.onmessage, null, 'no inbound control handler is required');
+  assert.equal(typeof firstSocket.onmessage, 'function');
+  assert.equal(typeof reconnected.onmessage, 'function', 'every socket handles inbound frames');
   reconnected.open();
 
   // All frames are present before onopen returns: no extra timer or inbound message.
@@ -422,4 +426,81 @@ test('starting the same race is idempotent and switching races cannot replay an 
   first.stop();
   app.tick();
   assert.equal(second.socket.frames.length, 1, 'a stale stop cannot stop the current race');
+});
+
+function rosterFrame(players) {
+  return { data: JSON.stringify({ type: 'roster', players: players }) };
+}
+
+test('a roster frame populates stream.roster, nameFor and the rendered roster; reconnect replaces it', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  var first = stream.socket;
+  first.open();
+  assert.equal(stream.nameFor('u1'), null);
+  first.onmessage(rosterFrame([{ user_id: 'u1', name: 'Ada' }, { user_id: 'u2', name: 'Player abc' }]));
+  assert.equal(stream.nameFor('u1'), 'Ada');
+  assert.equal(stream.nameFor('u2'), 'Player abc');
+  assert.equal(stream.roster.u1, 'Ada');
+  assert.equal(app.rosterEl.textContent, 'Racers: Ada, Player abc', 'names are rendered, not just stored');
+  assert.equal(app.rosterEl.classList.hidden, false);
+
+  first.finishClose();
+  app.retry();
+  var second = stream.socket;
+  assert.notEqual(second, first);
+  second.open();
+  second.onmessage(rosterFrame([{ user_id: 'u3', name: 'Grace' }]));
+  assert.equal(stream.nameFor('u1'), null, 'old names are gone');
+  assert.equal(stream.nameFor('u3'), 'Grace');
+  assert.equal(app.rosterEl.textContent, 'Racers: Grace');
+  first.onmessage(rosterFrame([{ user_id: 'u9', name: 'Stale' }]));
+  assert.equal(stream.nameFor('u9'), null, 'a superseded socket cannot change the roster');
+});
+
+test('a roster id of __proto__ is an own key and cannot reach the prototype', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  stream.socket.open();
+  stream.socket.onmessage(rosterFrame([{ user_id: '__proto__', name: 'Eve' }]));
+  assert.equal(stream.nameFor('__proto__'), 'Eve');
+  assert.equal(stream.nameFor('toString'), null);
+  assert.equal(stream.nameFor('constructor'), null);
+});
+
+test('inbound telemetry is recorded on stream.racers labelled with the roster name only', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  var socket = stream.socket;
+  socket.open();
+  socket.onmessage({ data: JSON.stringify({ user_id: 'u1', distance_millimeters: 5, email: 'a@b.c' }) });
+  assert.equal(stream.racers.u1.name, null, 'no roster yet: no name, never an email');
+  assert.equal(stream.racers.u1.distance_millimeters, 5);
+  socket.onmessage(rosterFrame([{ user_id: 'u1', name: 'Ada' }]));
+  assert.equal(stream.racers.u1.name, 'Ada', 'existing racers are relabelled');
+  socket.onmessage({ data: JSON.stringify({ user_id: 'u1', distance_millimeters: 9 }) });
+  assert.equal(stream.racers.u1.distance_millimeters, 9);
+  assert.equal(stream.racers.u1.name, 'Ada');
+});
+
+test('malformed inbound frames are ignored and leave buffering and replay unaffected', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  var socket = stream.socket;
+  socket.open();
+  ['not json', 'null', '42', '[]', '{}', '{"user_id":7}', '{"type":"roster","players":"x"}', undefined].forEach(function (data) {
+    socket.onmessage({ data: data });
+  });
+  socket.onmessage(undefined);
+  assert.equal(Object.keys(stream.racers).length, 0);
+  assert.equal(Object.keys(stream.roster).length, 0);
+  socket.finishClose();
+  app.setTime('2026-10-08T12:00:01.000Z');
+  app.tick();
+  assert.equal(stream.buffer.length, 1);
+  app.retry();
+  stream.socket.open();
+  assert.equal(stream.socket.frames.length, 1);
+  assert.equal(JSON.parse(stream.socket.frames[0]).sampled_at, '2026-10-08T12:00:01.000Z');
+  assert.equal(stream.buffer.length, 0);
 });

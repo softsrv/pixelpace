@@ -30,3 +30,24 @@ Before running `make dev`, make sure you have:
   - [`migrate`](https://github.com/golang-migrate/migrate) (golang-migrate CLI, used by `make migrate-up`)
   - [`air`](https://github.com/air-verse/air) (Go hot-reload)
   - [`tailwindcss`](https://tailwindcss.com/) (CSS watch/build)
+
+## Running with Docker Compose
+
+`docker-compose.yml` runs the published `trriplejay/pixelpace` image with a private Valkey for live race updates. Postgres stays external, as in development.
+
+1. Create `.env` from `.env.example`. Use your hosted `DATABASE_URL`, `APP_ENV=production` and the public HTTPS origin as `APP_BASE_URL`. Compose points `VALKEY_ADDR` at its own Valkey, whatever `.env` says.
+2. Apply migrations (they never run on startup):
+
+   ```sh
+   docker compose run --rm migrate
+   ```
+
+3. Start the app and Valkey:
+
+   ```sh
+   docker compose up -d
+   ```
+
+The app listens on `127.0.0.1:8080`, for a reverse proxy on the same host that serves HTTPS. Web Bluetooth and the production login cookies both require HTTPS. `APP_PORT` changes the port; `APP_BIND=0.0.0.0` exposes it on all interfaces. `PIXELPACE_TAG` pins an image tag such as `sha-6a7d038`, and `docker compose build` builds the image from this checkout instead.
+
+To update: `docker compose pull && docker compose run --rm migrate && docker compose up -d`.

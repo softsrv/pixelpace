@@ -1,0 +1,48 @@
+# Runs the published app image with a private Valkey for live race fan-out.
+# Postgres is external: DATABASE_URL and the other settings come from .env
+# (see .env.example). Migrations never run on startup; apply them first with
+#
+#   docker compose run --rm migrate
+#
+# then start everything with `docker compose up -d`.
+services:
+  app:
+    image: trriplejay/pixelpace:${PIXELPACE_TAG:-latest}
+    build: .
+    env_file: .env
+    environment:
+      # Overrides any localhost address in .env: Valkey is the service below.
+      VALKEY_ADDR: valkey:6379
+      PORT: "8080"
+    ports:
+      # Loopback only by default, for a reverse proxy on the same host (it
+      # must serve HTTPS: Web Bluetooth and Secure cookies require it). Set
+      # APP_BIND=0.0.0.0 to expose the port directly.
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
+    depends_on:
+      valkey:
+        condition: service_healthy
+    # The app drains in-flight requests and race starts for up to 30s.
+    stop_grace_period: 35s
+    restart: unless-stopped
+
+  # Pub/sub only: the app stores nothing in Valkey, so persistence is off and
+  # the port is reachable only from the app.
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # One-off: docker compose run --rm migrate [up|down 1|version]
+  migrate:
+    image: migrate/migrate:v4.18.3
+    profiles: [tools]
+    volumes:
+      - ./db/migrations:/migrations:ro
+    entrypoint: ["migrate", "-path", "/migrations", "-database", "${DATABASE_URL:?set DATABASE_URL in .env}"]
+    command: ["up"]

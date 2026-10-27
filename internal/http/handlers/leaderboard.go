@@ -10,12 +10,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/softsrv/starter/internal/app"
-	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/http/middleware"
 )
 
 type leaderboardServicer interface {
-	Leaderboard(context.Context, string, string, uuid.UUID, uuid.UUID) ([]db.LeaderboardPersonalBestRow, error)
+	Leaderboard(context.Context, string, string, uuid.UUID, uuid.UUID) ([]app.LeaderboardRow, error)
 }
 
 // LeaderboardHandler serves personal-best rankings.

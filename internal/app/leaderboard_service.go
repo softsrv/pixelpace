@@ -44,7 +44,7 @@ func NewLeaderboardService(q *db.Queries, friends friendLister, cfg LeaderboardS
 // Windows use completion time: month is a trailing calendar month in UTC,
 // week is seven days, and all-time has no lower bound. Friends includes only
 // the caller's friends, not the caller, unless they are in that resolved set.
-func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window string, raceTypeID, callerID uuid.UUID) ([]db.LeaderboardPersonalBestRow, error) {
+func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window string, raceTypeID, callerID uuid.UUID) ([]LeaderboardRow, error) {
 	if scope != "global" && scope != "friends" {
 		return nil, ErrInvalidLeaderboardFilter
 	}
@@ -70,5 +70,13 @@ func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window stri
 	if err != nil {
 		return nil, fmt.Errorf("leaderboard personal best: %w", err)
 	}
-	return rows, nil
+	out := make([]LeaderboardRow, len(rows))
+	for i, row := range rows {
+		out[i] = LeaderboardRow{
+			UserID:              row.UserID,
+			Name:                NewPublicPlayer(row.UserID, row.DisplayName).Name,
+			ElapsedMilliseconds: row.ElapsedMilliseconds,
+		}
+	}
+	return out, nil
 }

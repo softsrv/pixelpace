@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,5 +126,65 @@ func TestLeaderboardServiceDefaultClock(t *testing.T) {
 	svc := app.NewLeaderboardService(db.New(store), nil, app.LeaderboardServiceConfig{})
 	if _, err := svc.Leaderboard(context.Background(), "global", "week", uuid.Nil, uuid.Nil); err == nil || !called {
 		t.Fatalf("called=%v err=%v", called, err)
+	}
+}
+
+type fakeLeaderboardRows struct {
+	pgx.Rows
+	rows []db.LeaderboardPersonalBestRow
+	idx  int
+}
+
+func (r *fakeLeaderboardRows) Next() bool {
+	return r.idx < len(r.rows)
+}
+
+func (r *fakeLeaderboardRows) Scan(dest ...any) error {
+	row := r.rows[r.idx]
+	r.idx++
+	*dest[0].(*uuid.UUID) = row.UserID
+	*dest[1].(*pgtype.Text) = row.DisplayName
+	*dest[2].(*int32) = row.ElapsedMilliseconds
+	return nil
+}
+
+func (r *fakeLeaderboardRows) Close()     {}
+func (r *fakeLeaderboardRows) Err() error { return nil }
+
+func TestLeaderboardServiceNamelessPlayerPlaceholder(t *testing.T) {
+	namelessID := uuid.Must(uuid.NewV7())
+	namedID := uuid.Must(uuid.NewV7())
+	raceTypeID := uuid.Must(uuid.NewV7())
+	callerID := uuid.Must(uuid.NewV7())
+
+	fakeDBRows := []db.LeaderboardPersonalBestRow{
+		{UserID: namedID, DisplayName: pgtype.Text{String: "Champion", Valid: true}, ElapsedMilliseconds: 1000},
+		{UserID: namelessID, DisplayName: pgtype.Text{}, ElapsedMilliseconds: 2000},
+	}
+
+	store := leaderboardDB{queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+		return &fakeLeaderboardRows{rows: fakeDBRows}, nil
+	}}
+	svc := app.NewLeaderboardService(db.New(store), nil, app.LeaderboardServiceConfig{})
+	got, err := svc.Leaderboard(context.Background(), "global", "all-time", raceTypeID, callerID)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(got))
+	}
+	if got[0].Name != "Champion" {
+		t.Fatalf("expected named row 'Champion', got %q", got[0].Name)
+	}
+
+	expectedNamelessName := app.NewPublicPlayer(namelessID, pgtype.Text{}).Name
+	if got[1].Name != expectedNamelessName {
+		t.Fatalf("got nameless name %q, want computed %q", got[1].Name, expectedNamelessName)
+	}
+	if got[1].Name == "" {
+		t.Fatalf("nameless name must be non-empty")
+	}
+	if strings.Contains(got[1].Name, "@") {
+		t.Fatalf("nameless name %q must not contain '@'", got[1].Name)
 	}
 }

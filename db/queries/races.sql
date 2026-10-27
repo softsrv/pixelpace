@@ -63,3 +63,34 @@ WHERE id = $1 AND status <> 'dnf';
 
 -- name: FinishRace :exec
 UPDATE races SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL;
+
+-- name: GetRoomRace :one
+SELECT r.status, r.race_starts_at, rt.kind, rt.target_value, rt.label, races.id AS race_id
+FROM rooms r
+JOIN race_types rt ON rt.id = r.race_type_id
+LEFT JOIN races ON races.room_id = r.id
+WHERE r.id = $1;
+
+-- Lanes follow the same order Begin seeds race participants in.
+-- name: ListRoomLineup :many
+SELECT u.id, u.display_name, (rp.equipment_ready_at IS NOT NULL)::boolean AS equipment_ready
+FROM room_participants rp JOIN users u ON u.id = rp.user_id
+WHERE rp.room_id = $1
+ORDER BY rp.id;
+
+-- name: MarkRoomEquipmentReady :execrows
+UPDATE room_participants rp
+SET equipment_ready_at = COALESCE(rp.equipment_ready_at, NOW())
+FROM rooms r
+WHERE r.id = rp.room_id AND rp.room_id = $1 AND rp.user_id = $2
+  AND r.status IN ('counting_down', 'in_progress');
+
+-- name: CountRoomEquipmentUnready :one
+SELECT count(*) FROM room_participants WHERE room_id = $1 AND equipment_ready_at IS NULL;
+
+-- name: DeleteRoomEquipmentUnready :many
+DELETE FROM room_participants WHERE room_id = $1 AND equipment_ready_at IS NULL
+RETURNING user_id;
+
+-- name: SetRoomRaceStartsAt :exec
+UPDATE rooms SET race_starts_at = $2 WHERE id = $1;

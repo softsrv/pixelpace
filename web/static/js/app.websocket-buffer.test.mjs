@@ -112,12 +112,24 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
   var timeouts = [];
   var notifications = {};
   var documentListeners = {};
+  var dispatched = [];
+  class MockCustomEvent {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init && init.detail;
+    }
+  }
   var window = { isSecureContext: true, location: { protocol: protocol, host: 'pixelpace.test:8080' } };
   runInNewContext(appJs, {
     document: {
       addEventListener: function (type, fn) {
         if (!documentListeners[type]) documentListeners[type] = [];
         documentListeners[type].push(fn);
+      },
+      dispatchEvent: function (evt) {
+        dispatched.push(evt);
+        (documentListeners[evt.type] || []).forEach(function (fn) { fn(evt); });
+        return true;
       },
       body: { addEventListener: function () {} },
       getElementById: function (id) { return byID[id] || null; },
@@ -157,6 +169,7 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
     Object: Object,
     String: String,
     WebSocket: MockWebSocket,
+    CustomEvent: MockCustomEvent,
     Date: SampleDate,
     JSON: JSON,
     setInterval: function (fn, delay) {
@@ -178,6 +191,7 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
     timers: timers,
     timeouts: timeouts,
     start: window.startRaceStream,
+    window: window,
     connectPm5: function () { return click(); },
     notify: function (characteristic, bytes) {
       var uuid = 'ce0600' + characteristic + '-43e5-11e4-916c-0800200c9a66';
@@ -186,6 +200,13 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
     tick: function () { timers.find(function (timer) { return timer.active && timer.delay === 1000; }).fn(); },
     setTime: function (timestamp) { now = timestamp; },
     dateReads: function () { return dateReads; },
+    events: function (type) {
+      return dispatched.filter(function (evt) { return evt.type === type; }).map(function (evt) { return evt.detail; });
+    },
+    dispatch: function (type) {
+      var evt = new MockCustomEvent(type);
+      (documentListeners[type] || []).forEach(function (fn) { fn(evt); });
+    },
     draws: function () { return draws; },
     failConstruction: function (fail) { constructorFails = fail; },
     retry: function () {
@@ -503,4 +524,71 @@ test('malformed inbound frames are ignored and leave buffering and replay unaffe
   assert.equal(stream.socket.frames.length, 1);
   assert.equal(JSON.parse(stream.socket.frames[0]).sampled_at, '2026-10-08T12:00:01.000Z');
   assert.equal(stream.buffer.length, 0);
+});
+
+test('broadcast frames from the current socket are re-dispatched as race telemetry', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  var firstSocket = stream.socket;
+  firstSocket.open();
+  var sample = { user_id: 'rival', distance_millimeters: 120000, elapsed_milliseconds: 30000 };
+
+  firstSocket.onmessage({ data: JSON.stringify(sample) });
+  firstSocket.onmessage({ data: 'not json' });
+
+  var dispatched = JSON.parse(JSON.stringify(app.events('pixelpace:race-telemetry')));
+  assert.deepEqual(dispatched, [Object.assign({ name: null }, sample)], 'the stored racer, labelled from the roster');
+  firstSocket.finishClose();
+  app.retry();
+  firstSocket.onmessage({ data: JSON.stringify({ user_id: 'stale' }) });
+  assert.equal(app.events('pixelpace:race-telemetry').length, 1, 'a replaced socket no longer dispatches');
+  stream.stop();
+  stream.socket.onmessage({ data: JSON.stringify({ user_id: 'stopped' }) });
+  assert.equal(app.events('pixelpace:race-telemetry').length, 1, 'a stopped stream no longer dispatches');
+});
+
+test('each streamed sample is also dispatched locally, only while a race is active', function () {
+  var app = runDashboardApp();
+  app.tick();
+  assert.equal(app.events('pixelpace:local-telemetry').length, 0, 'no local race telemetry before a race');
+  var stream = app.start('race-one');
+  stream.socket.finishClose();
+  app.setTime('2026-10-08T12:00:02.000Z');
+  app.tick();
+
+  var local = app.events('pixelpace:local-telemetry');
+  assert.equal(local.length, 1, 'dispatched even while disconnected');
+  assert.deepEqual(local[0], stream.buffer[0]);
+});
+
+test('the race-started event measures streamed samples from the race start', function () {
+  var app = runDashboardApp();
+  app.tick();
+  app.tick();
+  var stream = app.start('race-one');
+  stream.socket.open();
+
+  app.dispatch('pixelpace:race-started');
+  app.tick();
+
+  var frames = stream.socket.frames.map(function (frame) { return JSON.parse(frame); });
+  assert.deepEqual(frames.map(function (f) { return [f.elapsed_milliseconds, f.distance_millimeters]; }), [[1000, 8667]]);
+  assert.equal(app.metricEls.distance.textContent, '68 m', 'the dashboard metrics keep showing the machine total');
+});
+
+test('the dev mock reports a connected rowing machine', function () {
+  var app = runDashboardApp();
+  assert.deepEqual(JSON.parse(JSON.stringify(app.events('pixelpace:pm5-status'))), [{ connected: true }]);
+  assert.equal(app.window.isPm5Connected(), true);
+  var real = runDashboardApp(false);
+  assert.equal(real.events('pixelpace:pm5-status').length, 0);
+  assert.equal(real.window.isPm5Connected(), false);
+});
+
+test('the race-started event does not touch real PM5 readings', function () {
+  var app = runDashboardApp(false);
+  var stream = app.start('race-one');
+  stream.socket.open();
+  app.dispatch('pixelpace:race-started');
+  assert.equal(stream.socket.frames.length, 0);
 });

@@ -104,10 +104,10 @@ var (
 )
 
 func roomStep(name, status string) roomDBStep {
-	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}}}
+	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
 }
 func participantStep(userID uuid.UUID, ready bool) roomDBStep {
-	return roomDBStep{name: "GetRoomParticipant", args: []any{roomTestID, userID}, values: []any{roomTestID, roomTestID, userID, ready, pgtype.Timestamptz{}}}
+	return roomDBStep{name: "GetRoomParticipant", args: []any{roomTestID, userID}, values: []any{roomTestID, roomTestID, userID, ready, pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
 }
 func countStep(count int64) roomDBStep {
 	return roomDBStep{name: "CountRoomParticipants", args: []any{roomTestID}, values: []any{count}}
@@ -168,7 +168,8 @@ func TestRoomJoinGuards(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("JoinRoom = %v, want %v", err, tc.want)
 			}
-			if wantID := map[bool]uuid.UUID{true: roomTestID, false: uuid.Nil}[tc.want == nil]; roomID != wantID {
+			// A duplicate join still reports the room, so the caller can return to it.
+			if wantID := map[bool]uuid.UUID{true: roomTestID, false: uuid.Nil}[tc.want == nil || errors.Is(tc.want, ErrAlreadyParticipant)]; roomID != wantID {
 				t.Fatalf("JoinRoom room id = %s, want %s", roomID, wantID)
 			}
 			wantCommits := 0
@@ -294,7 +295,7 @@ func TestRoomStartRaceGuards(t *testing.T) {
 			if tc.caller == roomTestHost && tc.status == "waiting" {
 				steps = append(steps, countStep(tc.count))
 				if tc.count >= 2 && tc.count <= 8 {
-					steps = append(steps, roomDBStep{name: "RoomHasUnreadyParticipants", args: []any{roomTestID}, values: []any{tc.unready}})
+					steps = append(steps, roomDBStep{name: "RoomHasUnreadyGuests", args: []any{roomTestID, roomTestHost}, values: []any{tc.unready}})
 				}
 			}
 			if tc.want == nil {

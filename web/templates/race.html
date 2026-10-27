@@ -1,0 +1,41 @@
+{{define "title"}}{{.Race.Label}} Race{{end}}
+
+{{define "scripts"}}
+<script src="/static/js/vendor/pixi/pixi.min.js" defer></script>
+<script src="/static/js/vendor/pixi/unsafe-eval.min.js" defer></script>
+<script type="module" src="/static/js/race.mjs"></script>
+{{end}}
+
+{{define "content"}}
+<div class="space-y-6">
+  <div class="card bg-base-100 shadow-xl">
+    <div class="card-body p-4">
+      <h1 class="card-title">{{.Race.Label}} race</h1>
+      <p id="race-status" class="text-base-content/70" role="status" aria-live="polite">Getting the start line ready…</p>
+      <div id="race-track"
+           class="h-[70vh] min-h-96 w-full overflow-hidden rounded-box bg-base-200"
+           data-self-id="{{.User.ID}}"
+           data-target-mm="{{.Race.TargetMillimeters}}"
+           data-status-url="/rooms/{{.Race.RoomID}}/race/status"
+           data-ready-url="/rooms/{{.Race.RoomID}}/race/ready"
+           data-lobby-url="/rooms/{{.Race.RoomID}}/lobby"
+           data-race-id="{{with .Race.RaceID}}{{.}}{{end}}"
+           role="img"
+           aria-label="Race track: start line at the bottom, finish line at the top"></div>
+      <ol id="race-lanes" class="sr-only" aria-label="Racers, by lane from left to right">
+        {{range .Lanes}}<li data-user-id="{{.UserID}}" data-self="{{.IsSelf}}">{{.Label}}</li>
+        {{end}}
+      </ol>
+    </div>
+  </div>
+
+  <div id="rowing-machine-card" class="card bg-base-100 shadow-xl" data-dev-mode="{{if .DevMode}}true{{else}}false{{end}}">
+    <div class="card-body p-4">
+      <h2 class="card-title">Rowing Machine</h2>
+      <p class="text-base-content/70 text-sm">The countdown starts once every racer's rowing machine is connected. Racers who aren't connected within a minute are left out.</p>
+      <button id="bt-connect-btn" type="button" class="btn btn-primary">Connect Rowing Machine</button>
+      <div id="bt-connection-info" class="alert alert-info hidden" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+{{end}}

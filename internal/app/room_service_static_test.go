@@ -17,11 +17,15 @@ func TestRoomQuerySurface(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := os.ReadFile("room_service.go")
-	if err != nil {
-		t.Fatal(err)
+	var source []byte
+	for _, file := range []string{"room_service.go", "room_lobby.go"} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source = append(source, b...)
 	}
-	queries := regexp.MustCompile(`-- name: (\w+) :(?:one|exec|many)`).FindAllStringSubmatch(string(sql), -1)
+	queries := regexp.MustCompile(`-- name: (\w+) :(?:one|execrows|exec|many)`).FindAllStringSubmatch(string(sql), -1)
 	if len(queries) == 0 {
 		t.Fatal("no annotated room queries")
 	}

@@ -75,7 +75,8 @@ func seedRaceRoom(t *testing.T, n int, target int64, threshold time.Duration) *r
 		t.Fatal(err)
 	}
 	for _, id := range f.users {
-		if _, err := f.pool.Exec(ctx, "INSERT INTO room_participants (id, room_id, user_id) VALUES ($1, $2, $3)", uuid.Must(uuid.NewV7()), f.room, id); err != nil {
+		// Every racer's equipment is ready, so Begin goes straight to the countdown.
+		if _, err := f.pool.Exec(ctx, "INSERT INTO room_participants (id, room_id, user_id, equipment_ready_at) VALUES ($1, $2, $3, NOW())", uuid.Must(uuid.NewV7()), f.room, id); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -162,7 +163,7 @@ func TestRaceServiceBegin(t *testing.T) {
 			t.Fatalf("participant %s count=%d", id, seen[id])
 		}
 	}
-	if _, err := f.svc.Begin(ctx, f.room); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := f.svc.Begin(ctx, f.room); !errors.Is(err, app.ErrInvalidStatusTransition) {
 		t.Fatalf("duplicate begin: %v", err)
 	}
 	var count int
@@ -417,4 +418,61 @@ func TestRaceServiceDNFExcludesAndRetainsSamples(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRaceServiceRoomRace(t *testing.T) {
+	f := seedRaceRoom(t, 3, 500000, time.Minute)
+	ctx := context.Background()
+
+	view, err := f.svc.RoomRace(ctx, f.room, f.users[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.RaceID != nil || view.RaceStartsAt != nil || view.RoomID != f.room || view.Label != "500m" || view.TargetMillimeters != 500000 {
+		t.Fatalf("counting-down view = %+v", view)
+	}
+	if got := racerIDs(view.Racers); !reflect.DeepEqual(got, f.users) {
+		t.Fatalf("racers = %v, want %v", got, f.users)
+	}
+	for _, racer := range view.Racers {
+		if !racer.EquipmentReady || racer.Name == "" {
+			t.Fatalf("racer = %+v, want a named racer with equipment ready", racer)
+		}
+	}
+
+	f.begin(t)
+	view, err = f.svc.RoomRace(ctx, f.room, f.users[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.RaceID == nil || *view.RaceID != f.race.ID {
+		t.Fatalf("race ID = %v, want %s", view.RaceID, f.race.ID)
+	}
+	if view.RaceStartsAt == nil || !view.RaceStartsAt.Equal(f.race.StartedAt.Time) {
+		t.Fatalf("race starts at = %v, want the race's start %v", view.RaceStartsAt, f.race.StartedAt.Time)
+	}
+	if got := racerIDs(view.Racers); !reflect.DeepEqual(got, f.users) {
+		t.Fatalf("racers after begin = %v, want %v", got, f.users)
+	}
+
+	if _, err := f.svc.RoomRace(ctx, f.room, uuid.Must(uuid.NewV7())); !errors.Is(err, app.ErrParticipantNotFound) {
+		t.Fatalf("non-participant err = %v, want ErrParticipantNotFound", err)
+	}
+	if _, err := f.svc.RoomRace(ctx, uuid.Must(uuid.NewV7()), f.users[0]); !errors.Is(err, app.ErrRoomNotFound) {
+		t.Fatalf("missing room err = %v, want ErrRoomNotFound", err)
+	}
+	if _, err := f.pool.Exec(ctx, "UPDATE rooms SET status = 'waiting' WHERE id = $1", f.room); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.RoomRace(ctx, f.room, f.users[0]); !errors.Is(err, app.ErrRaceNotStarted) {
+		t.Fatalf("waiting room err = %v, want ErrRaceNotStarted", err)
+	}
+}
+
+func racerIDs(racers []app.RaceRacer) []uuid.UUID {
+	ids := make([]uuid.UUID, len(racers))
+	for i, racer := range racers {
+		ids[i] = racer.UserID
+	}
+	return ids
 }

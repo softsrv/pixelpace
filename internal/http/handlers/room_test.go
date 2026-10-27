@@ -562,3 +562,71 @@ func TestRoomStartLifetimeCancelResetsRoom(t *testing.T) {
 		t.Fatalf("resetCtx was already cancelled when ResetCountdown was called: %v", resetCtxErr)
 	}
 }
+
+// Successful room actions tell HTMX pages where to go next: create and join
+// open the lobby, leaving returns to the dashboard, starting opens the race,
+// and other lobby changes refresh the open lobby.
+func TestRoomHandlersHTMXNavigation(t *testing.T) {
+	for _, op := range roomOperations() {
+		t.Run(op.name, func(t *testing.T) {
+			roomID := op.want.roomID
+			want := map[string][2]string{
+				"create": {"HX-Redirect", "/rooms/" + stubRoomID.String() + "/lobby"},
+				"join":   {"HX-Redirect", "/rooms/" + stubRoomID.String() + "/lobby"},
+				"leave":  {"HX-Redirect", "/dashboard"},
+				"kick":   {"HX-Trigger", "room-updated"},
+				"ready":  {"HX-Trigger", "room-updated"},
+				"start":  {"HX-Redirect", "/rooms/" + roomID.String() + "/race"},
+			}[op.name]
+			svc := recordingRoomService(func(roomCall) error { return nil })
+			rr := serveRoomRequest(t, op, svc, uuid.New(), op.form.Encode(), roomID.String(), true)
+			if rr.Code != op.status {
+				t.Fatalf("status = %d, want %d", rr.Code, op.status)
+			}
+			if got := rr.Header().Get(want[0]); got != want[1] {
+				t.Errorf("%s = %q, want %q", want[0], got, want[1])
+			}
+		})
+	}
+}
+
+// Rejoining a room already joined still leads back to its lobby.
+func TestRoomJoinAlreadyParticipantRedirectsToLobby(t *testing.T) {
+	op := roomOperations()[1]
+	svc := recordingRoomService(func(roomCall) error { return app.ErrAlreadyParticipant })
+	rr := serveRoomRequest(t, op, svc, uuid.New(), op.form.Encode(), "", true)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rr.Code)
+	}
+	if got, want := rr.Header().Get("HX-Redirect"), "/rooms/"+stubRoomID.String()+"/lobby"; got != want {
+		t.Errorf("HX-Redirect = %q, want %q", got, want)
+	}
+}
+
+// A refused start leaves the host in the lobby.
+func TestRoomStartRefusedDoesNotRedirect(t *testing.T) {
+	roomID := uuid.New()
+	svc := recordingRoomService(func(roomCall) error { return app.ErrNotAllReady })
+	rr := serveRoomRequest(t, startOperation(roomID), svc, uuid.New(), "", roomID.String(), true)
+	if rr.Code != http.StatusConflict || rr.Header().Get("HX-Redirect") != "" {
+		t.Fatalf("status = %d, HX-Redirect = %q; want 409 and no redirect", rr.Code, rr.Header().Get("HX-Redirect"))
+	}
+}
+
+// A begin that found no racer ready has already dissolved the room, so the
+// handler does not try to return it to waiting.
+func TestRoomStartNoRacersReadyDoesNotReset(t *testing.T) {
+	roomID := uuid.New()
+	beginner := &fakeBeginner{err: fmt.Errorf("schedule: %w", app.ErrNoRacersReady)}
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Error("reset after no racer was ready")
+		return nil
+	}
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	h.Wait()
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+}

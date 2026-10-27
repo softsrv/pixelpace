@@ -109,7 +109,7 @@ func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTyp
 }
 
 // JoinRoom adds a not-ready participant to the active waiting room for a code
-// and returns that room's id.
+// and returns that room's id. ErrAlreadyParticipant also carries the room id.
 func (s *RoomService) JoinRoom(ctx context.Context, userID uuid.UUID, joinCode string) (uuid.UUID, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -132,7 +132,8 @@ func (s *RoomService) JoinRoom(ctx context.Context, userID uuid.UUID, joinCode s
 		return uuid.Nil, fmt.Errorf("check participant: %w", err)
 	}
 	if exists {
-		return uuid.Nil, ErrAlreadyParticipant
+		// The room id lets a returning participant be sent back to the lobby.
+		return room.ID, ErrAlreadyParticipant
 	}
 	count, err := qtx.CountRoomParticipants(ctx, room.ID)
 	if err != nil {
@@ -204,7 +205,8 @@ func (s *RoomService) MarkReady(ctx context.Context, userID, roomID uuid.UUID) e
 	})
 }
 
-// StartRace transitions a ready lobby to counting_down. The caller owns the countdown.
+// StartRace transitions a lobby whose guests are all ready to counting_down.
+// The host need not mark themselves ready. The caller owns the countdown.
 func (s *RoomService) StartRace(ctx context.Context, callerUserID, roomID uuid.UUID) error {
 	return s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
 		if callerUserID != room.HostUserID {
@@ -223,7 +225,7 @@ func (s *RoomService) StartRace(ctx context.Context, callerUserID, roomID uuid.U
 		if count > maxRoomParticipants {
 			return ErrRoomFull
 		}
-		unready, err := qtx.RoomHasUnreadyParticipants(ctx, roomID)
+		unready, err := qtx.RoomHasUnreadyGuests(ctx, db.RoomHasUnreadyGuestsParams{RoomID: roomID, UserID: room.HostUserID})
 		if err != nil {
 			return fmt.Errorf("check participant readiness: %w", err)
 		}
@@ -260,6 +262,9 @@ func (s *RoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) erro
 		}
 		if err := qtx.ResetRoomCountdown(ctx, roomID); err != nil {
 			return fmt.Errorf("reset countdown: %w", err)
+		}
+		if err := qtx.ResetRoomEquipmentReadiness(ctx, roomID); err != nil {
+			return fmt.Errorf("reset equipment readiness: %w", err)
 		}
 		return nil
 	})

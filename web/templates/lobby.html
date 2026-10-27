@@ -1,0 +1,120 @@
+{{define "title"}}Race Lobby{{end}}
+
+{{define "content"}}
+<div class="space-y-6">
+  <div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+      <h1 class="card-title">Race lobby</h1>
+      {{if .Lobby.IsHost}}
+      <form hx-post="/rooms/{{.Lobby.RoomID}}/race-type" hx-trigger="change" hx-swap="none"
+            data-error-target="#race-type-error" data-error-message="Couldn't change the race type.">
+        <label class="form-control w-full">
+          <span class="label-text">Race type</span>
+          <select id="race-type-select" name="race_type_id" class="select select-bordered w-full">
+            {{range .RaceTypes}}
+            <option value="{{.ID}}"{{if eq .ID $.Lobby.RaceTypeID}} selected{{end}}>{{.Label}}</option>
+            {{end}}
+          </select>
+        </label>
+        <p class="text-base-content/60 text-sm mt-1">Changing the race asks everyone to ready up again.</p>
+        <p id="race-type-error" class="text-error text-sm" role="alert"></p>
+      </form>
+      {{end}}
+
+      <div class="space-y-2">
+        <span class="label-text">Invite others with this link or code</span>
+        <div class="join w-full">
+          <input id="join-url" class="input input-bordered join-item w-full" value="{{.JoinURL}}" readonly aria-label="Join link" />
+          <button type="button" class="btn join-item" data-copy-target="#join-url">Copy</button>
+        </div>
+        <p class="text-sm">Code: <span id="join-code" class="font-mono font-bold tracking-widest">{{.Lobby.JoinCode}}</span></p>
+        <button type="button" class="btn btn-secondary btn-sm" data-dialog-open="#invite-dialog">Invite friends</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="lobby-panel" class="card bg-base-100 shadow-xl"
+       hx-get="/rooms/{{.Lobby.RoomID}}/lobby/panel" hx-trigger="every 2s, room-updated from:body">
+    {{template "lobby-panel" .}}
+  </div>
+
+  <dialog id="invite-dialog" class="modal">
+    <div class="modal-box">
+      <h2 class="text-lg font-bold">Invite friends</h2>
+      {{if .Friends}}
+      <ul class="mt-4 space-y-2">
+        {{range .Friends}}
+        <li class="flex items-center justify-between gap-2">
+          <span>{{.Name}}</span>
+          {{if .Joined}}
+          <span class="badge badge-ghost">In lobby</span>
+          {{else if .Invited}}
+          {{template "invite-sent"}}
+          {{else}}
+          <form hx-post="/rooms/{{$.Lobby.RoomID}}/invites" hx-swap="outerHTML"
+                data-error-target="#invite-error" data-error-message="Couldn't send that invite.">
+            <input type="hidden" name="user_id" value="{{.UserID}}" />
+            <button type="submit" class="btn btn-primary btn-sm">Invite</button>
+          </form>
+          {{end}}
+        </li>
+        {{end}}
+      </ul>
+      <p id="invite-error" class="text-error text-sm mt-2" role="alert"></p>
+      {{else}}
+      <p class="mt-4 text-base-content/70">You haven't added any friends yet. Share the link instead.</p>
+      {{end}}
+      <div class="modal-action">
+        <form method="dialog"><button class="btn">Close</button></form>
+      </div>
+    </div>
+    <form method="dialog" class="modal-backdrop"><button>close</button></form>
+  </dialog>
+</div>
+{{end}}
+
+{{define "invite-sent"}}<span class="badge badge-success">Invited</span>{{end}}
+
+{{define "lobby-panel"}}
+{{with .Lobby}}
+<div class="card-body">
+  <div class="flex items-center justify-between">
+    <h2 class="card-title">Racers</h2>
+    <span id="lobby-race-label" class="badge badge-primary badge-lg">{{.RaceLabel}}</span>
+  </div>
+  <ul id="lobby-roster" class="space-y-2">
+    {{range .Participants}}
+    <li class="flex items-center justify-between gap-2 rounded-box bg-base-200 px-3 py-2" data-user-id="{{.UserID}}">
+      <span class="font-medium">{{.Name}}{{if .Host}} <span class="badge badge-outline badge-sm">Host</span>{{end}}</span>
+      {{if .Host}}
+      <span class="text-base-content/60 text-sm">Starts the race</span>
+      {{else if .Ready}}
+      <span class="badge badge-success">Ready</span>
+      {{else}}
+      <span class="badge badge-ghost">Not ready</span>
+      {{end}}
+    </li>
+    {{end}}
+  </ul>
+  <p id="lobby-error" class="text-error text-sm" role="alert"></p>
+  <div class="card-actions justify-between">
+    <button type="button" class="btn btn-ghost" hx-post="/rooms/{{.RoomID}}/leave" hx-swap="none"
+            data-error-target="#lobby-error" data-error-message="Couldn't leave the lobby.">Leave</button>
+    {{if .IsHost}}
+    <button id="lobby-start" type="button" class="btn btn-primary" hx-post="/rooms/{{.RoomID}}/start" hx-swap="none"
+            data-error-target="#lobby-error" data-error-message="Couldn't start the race. Everyone else must be ready."
+            {{if not .CanStart}}disabled{{end}}>Start race</button>
+    {{else if .SelfReady}}
+    <button id="lobby-ready" type="button" class="btn btn-outline" hx-post="/rooms/{{.RoomID}}/unready" hx-swap="none"
+            data-error-target="#lobby-error" data-error-message="Couldn't update your status.">Not ready</button>
+    {{else}}
+    <button id="lobby-ready" type="button" class="btn btn-success" hx-post="/rooms/{{.RoomID}}/ready" hx-swap="none"
+            data-error-target="#lobby-error" data-error-message="Couldn't update your status.">I'm ready</button>
+    {{end}}
+  </div>
+  {{if and .IsHost (not .CanStart)}}
+  <p class="text-base-content/60 text-sm">You can start once at least one other racer has joined and everyone is ready.</p>
+  {{end}}
+</div>
+{{end}}
+{{end}}

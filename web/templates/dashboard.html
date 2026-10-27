@@ -23,6 +23,13 @@
     </div>
   </div>
 
+  <div id="race-card" class="card bg-base-100 shadow-xl" hx-get="/dashboard/race-card" hx-trigger="load">
+    <div class="card-body">
+      <h2 class="card-title">Race</h2>
+      <span class="loading loading-dots loading-sm" aria-label="Loading"></span>
+    </div>
+  </div>
+
   <div id="rowing-machine-card" class="card bg-base-100 shadow-xl" data-dev-mode="{{if .DevMode}}true{{else}}false{{end}}">
     <div class="card-body">
       <h2 class="card-title">Rowing Machine</h2>
@@ -68,4 +75,48 @@
     </div>
   </div>
 </div>
+{{end}}
+
+{{define "race-card"}}
+<div class="card-body">
+  <h2 class="card-title">Race</h2>
+  <div id="room-invites" hx-get="/invites" hx-trigger="load, every 10s, invites-updated from:body"></div>
+  <form class="space-y-2" hx-post="/rooms" hx-swap="none"
+        data-error-target="#create-room-error" data-error-message="Couldn't create the race. Please try again.">
+    <label class="form-control w-full">
+      <span class="label-text">Race type</span>
+      <select name="race_type_id" class="select select-bordered w-full">
+        {{range .RaceTypes}}<option value="{{.ID}}">{{.Label}}</option>{{end}}
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary w-full">Create race</button>
+    <p id="create-room-error" class="text-error text-sm" role="alert"></p>
+  </form>
+  <div class="divider">or</div>
+  <form class="space-y-2" hx-post="/rooms/join" hx-swap="none"
+        data-error-target="#join-room-error" data-error-message="Couldn't join. Check the code and make sure the race hasn't started.">
+    <label class="form-control w-full">
+      <span class="label-text">Join code</span>
+      <input name="join_code" class="input input-bordered w-full font-mono uppercase tracking-widest" maxlength="6" autocomplete="off" required />
+    </label>
+    <button type="submit" class="btn btn-secondary w-full">Join race</button>
+    <p id="join-room-error" class="text-error text-sm" role="alert"></p>
+  </form>
+</div>
+{{end}}
+
+{{define "room-invites"}}
+{{if .Invites}}
+<ul class="space-y-2" aria-label="Race invites">
+  {{range .Invites}}
+  <li class="alert" data-invite-id="{{.ID}}">
+    <span><strong>{{.Inviter.Name}}</strong> invited you to a {{.RaceLabel}} race.</span>
+    <div class="flex gap-2">
+      <button type="button" class="btn btn-ghost btn-sm" hx-post="/invites/{{.ID}}/decline" hx-swap="none">Dismiss</button>
+      <button type="button" class="btn btn-primary btn-sm" hx-post="/invites/{{.ID}}/accept" hx-swap="none">Join</button>
+    </div>
+  </li>
+  {{end}}
+</ul>
+{{end}}
 {{end}}

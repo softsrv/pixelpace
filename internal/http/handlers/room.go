@@ -38,6 +38,12 @@ type raceBeginner interface {
 
 var _ raceBeginner = (*app.RaceService)(nil)
 
+// roomUpdatedEvent is the HX-Trigger event that refreshes an open lobby.
+const roomUpdatedEvent = "room-updated"
+
+func lobbyPath(roomID uuid.UUID) string { return "/rooms/" + roomID.String() + "/lobby" }
+func racePath(roomID uuid.UUID) string  { return "/rooms/" + roomID.String() + "/race" }
+
 // resetCountdownTimeout bounds returning a room to waiting after a failed begin.
 const resetCountdownTimeout = 10 * time.Second
 
@@ -84,6 +90,8 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
+	// HTMX forms follow the redirect to the new room's lobby.
+	w.Header().Set("HX-Redirect", lobbyPath(roomID))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"room_id": roomID.String(), "join_code": code})
@@ -99,12 +107,16 @@ func (h *RoomHandler) Join(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	code := strings.TrimSpace(r.PostForm.Get("join_code"))
+	code := strings.ToUpper(strings.TrimSpace(r.PostForm.Get("join_code")))
 	if code == "" {
 		http.Error(w, "Join code is required", http.StatusBadRequest)
 		return
 	}
 	roomID, err := h.room.JoinRoom(r.Context(), user.ID, code)
+	if roomID != uuid.Nil {
+		// Joining, or rejoining a room already joined, leads to its lobby.
+		w.Header().Set("HX-Redirect", lobbyPath(roomID))
+	}
 	if err != nil {
 		writeRoomError(w, r, err)
 		return
@@ -151,6 +163,7 @@ func (h *RoomHandler) Leave(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
+	w.Header().Set("HX-Redirect", "/dashboard")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -178,6 +191,7 @@ func (h *RoomHandler) Kick(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
+	w.Header().Set("HX-Trigger", roomUpdatedEvent)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -196,6 +210,7 @@ func (h *RoomHandler) MarkReady(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
+	w.Header().Set("HX-Trigger", roomUpdatedEvent)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -225,11 +240,18 @@ func (h *RoomHandler) Start(w http.ResponseWriter, r *http.Request) {
 		defer stop()
 		h.beginRace(ctx, roomID)
 	}()
+	// The host goes straight to the race page; guests follow from the lobby.
+	w.Header().Set("HX-Redirect", racePath(roomID))
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *RoomHandler) beginRace(ctx context.Context, roomID uuid.UUID) {
 	if _, err := h.beginner.Begin(ctx, roomID); err != nil {
+		if errors.Is(err, app.ErrNoRacersReady) {
+			// Begin dissolved the room; there is no lobby to return to.
+			slog.InfoContext(ctx, "race abandoned: no racer was ready", "room_id", roomID)
+			return
+		}
 		slog.ErrorContext(ctx, "race begin failed", "room_id", roomID, "error", err)
 		resetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resetCountdownTimeout)
 		defer cancel()

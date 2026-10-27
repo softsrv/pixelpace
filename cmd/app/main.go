@@ -119,6 +119,7 @@ func main() {
 		LeaderboardSvc:    leaderboardSvc,
 		Renderer:          renderer,
 		JWTSecret:         cfg.JWTSecret,
+		AppBaseURL:        cfg.AppBaseURL,
 		Secure:            cfg.AppEnv == "production",
 		DevMode:           devModeForAppEnv(cfg.AppEnv),
 		TrustedProxyCount: cfg.TrustedProxyCount,

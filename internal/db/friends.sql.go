@@ -153,32 +153,6 @@ func (q *Queries) LatestFriendRequestRejection(ctx context.Context, arg LatestFr
 	return decided_at, err
 }
 
-const listFriends = `-- name: ListFriends :many
-SELECT f.user_id_b AS friend_id FROM friendships AS f WHERE f.user_id_a = $1
-UNION
-SELECT f.user_id_a AS friend_id FROM friendships AS f WHERE f.user_id_b = $1
-`
-
-func (q *Queries) ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listFriends, userIDA)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []uuid.UUID{}
-	for rows.Next() {
-		var friend_id uuid.UUID
-		if err := rows.Scan(&friend_id); err != nil {
-			return nil, err
-		}
-		items = append(items, friend_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listFriendEntries = `-- name: ListFriendEntries :many
 SELECT u.id, u.display_name
 FROM (
@@ -208,6 +182,32 @@ func (q *Queries) ListFriendEntries(ctx context.Context, userIDA uuid.UUID) ([]L
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFriends = `-- name: ListFriends :many
+SELECT f.user_id_b AS friend_id FROM friendships AS f WHERE f.user_id_a = $1
+UNION
+SELECT f.user_id_a AS friend_id FROM friendships AS f WHERE f.user_id_b = $1
+`
+
+func (q *Queries) ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listFriends, userIDA)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var friend_id uuid.UUID
+		if err := rows.Scan(&friend_id); err != nil {
+			return nil, err
+		}
+		items = append(items, friend_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

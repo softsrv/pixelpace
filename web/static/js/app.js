@@ -11,6 +11,47 @@ document.addEventListener('click', function(evt) {
   btn.querySelector('.eye-off').classList.toggle('hidden', !show);
 });
 
+// ── Copy, dialogs and HTMX errors ─────────────────────────────────────────────
+
+// <button data-copy-target="#input"> copies that input's value.
+document.addEventListener('click', function (evt) {
+  var btn = evt.target.closest && evt.target.closest('[data-copy-target]');
+  if (!btn) return;
+  var source = document.querySelector(btn.getAttribute('data-copy-target'));
+  if (!source || !navigator.clipboard) return;
+  navigator.clipboard.writeText(source.value || source.textContent).then(function () {
+    var label = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(function () { btn.textContent = label; }, 1500);
+  }, function () {
+    if (source.select) source.select();
+  });
+});
+
+// <button data-dialog-open="#dialog"> opens that <dialog> as a modal.
+document.addEventListener('click', function (evt) {
+  var btn = evt.target.closest && evt.target.closest('[data-dialog-open]');
+  if (!btn) return;
+  var dialog = document.querySelector(btn.getAttribute('data-dialog-open'));
+  if (dialog && dialog.showModal) dialog.showModal();
+});
+
+// HTMX actions marked with data-error-target show data-error-message there when
+// the server refuses them, and clear it when they are tried again.
+function htmxErrorTarget(evt) {
+  var source = evt.target && evt.target.closest && evt.target.closest('[data-error-target]');
+  if (!source) return null;
+  return { source: source, target: document.querySelector(source.getAttribute('data-error-target')) };
+}
+document.addEventListener('htmx:before:request', function (evt) {
+  var found = htmxErrorTarget(evt);
+  if (found && found.target) found.target.textContent = '';
+});
+document.addEventListener('htmx:response:error', function (evt) {
+  var found = htmxErrorTarget(evt);
+  if (found && found.target) found.target.textContent = found.source.getAttribute('data-error-message') || 'Something went wrong.';
+});
+
 // ── Token expiry handling ─────────────────────────────────────────────────────
 
 // When the server fires the token-expired event, attempt a silent refresh.
@@ -144,6 +185,23 @@ document.body.addEventListener('token-expired', async function () {
   var activeRaceStream = null;
   // PM5 characteristics report partial updates; retain the latest known readings.
   var streamMetrics = { elapsedTime: 0, distance: 0, strokeRate: 0, power: 0 };
+  // A race measures from its own start: the readings at that moment are
+  // subtracted from every streamed sample, so a machine that was already
+  // rowing (or the dev mock) starts the race at zero.
+  var raceBaseline = { elapsedTime: 0, distance: 0 };
+  var pm5Connected = false;
+
+  document.addEventListener('pixelpace:race-started', function () {
+    raceBaseline = { elapsedTime: streamMetrics.elapsedTime, distance: streamMetrics.distance };
+  });
+
+  // The race page waits for live rowing data before reporting its racer ready.
+  function setPm5Connected(connected) {
+    if (pm5Connected === connected) return;
+    pm5Connected = connected;
+    document.dispatchEvent(new CustomEvent('pixelpace:pm5-status', { detail: { connected: connected } }));
+  }
+  window.isPm5Connected = function () { return pm5Connected; };
 
   function startRaceStream(raceId) {
     if (!raceId) throw new Error('A race id is required');
@@ -210,6 +268,8 @@ document.body.addEventListener('token-expired', async function () {
       Object.keys(frame).forEach(function (key) { racer[key] = frame[key]; });
       racer.name = nameFor(frame.user_id);
       stream.racers[frame.user_id] = racer;
+      // Every participant's stored sample, including our own, as broadcast by the server.
+      document.dispatchEvent(new CustomEvent('pixelpace:race-telemetry', { detail: racer }));
     }
 
     function retry() {
@@ -276,13 +336,16 @@ document.body.addEventListener('token-expired', async function () {
       if (typeof metrics[key] === 'number') streamMetrics[key] = metrics[key];
     });
     if (!activeRaceStream || Object.keys(metrics).length === 0) return;
-    activeRaceStream.buffer.push({
-      elapsed_milliseconds: Math.round(streamMetrics.elapsedTime * 1000),
-      distance_millimeters: Math.round(streamMetrics.distance * 1000),
+    var sample = {
+      elapsed_milliseconds: Math.max(0, Math.round((streamMetrics.elapsedTime - raceBaseline.elapsedTime) * 1000)),
+      distance_millimeters: Math.max(0, Math.round((streamMetrics.distance - raceBaseline.distance) * 1000)),
       stroke_rate: Math.round(streamMetrics.strokeRate),
       power: Math.round(streamMetrics.power),
       sampled_at: new Date().toISOString()
-    });
+    };
+    activeRaceStream.buffer.push(sample);
+    // Lets the race view move our own rower without waiting for the server echo.
+    document.dispatchEvent(new CustomEvent('pixelpace:local-telemetry', { detail: sample }));
     flushRaceStream(activeRaceStream);
   }
 
@@ -540,6 +603,7 @@ document.body.addEventListener('token-expired', async function () {
     showZeroMetrics();
     showConnectionInfo('Development mock PM5 — streaming synthetic rowing metrics.');
     startMockPm5KeyboardControls();
+    setPm5Connected(true);
 
     mockPm5Tick = 0;
     emitMockPm5Metrics(mockPm5Tick);
@@ -640,6 +704,7 @@ document.body.addEventListener('token-expired', async function () {
         stopRowerAnimation();
         hideRowerCanvas();
         showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — Disconnected');
+        setPm5Connected(false);
       });
 
       var server = await device.gatt.connect();
@@ -650,6 +715,7 @@ document.body.addEventListener('token-expired', async function () {
 
       try {
         await subscribeToPm5Metrics(server);
+        setPm5Connected(true);
       } catch (err) {
         console.error('[PM5] failed to start live rowing data:', err);
         showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — ' + status + '. Connected, but live rowing data could not be started.');

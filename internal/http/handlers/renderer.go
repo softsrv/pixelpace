@@ -66,3 +66,26 @@ func (r *TemplateRenderer) Partial(w http.ResponseWriter, status int, name strin
 		slog.Error("execute partial template", "name", name, "error", err)
 	}
 }
+
+// Fragment clones the base template, parses the given page file into the clone,
+// and executes only the named template defined in it. Pages use this to serve
+// HTMX updates of one region from the same file that renders the full page.
+func (r *TemplateRenderer) Fragment(w http.ResponseWriter, status int, pagePath, name string, data any) {
+	t, err := r.base.Clone()
+	if err != nil {
+		slog.Error("clone base template for fragment", "page", pagePath, "name", name, "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if _, err = t.ParseFS(r.fsys, fmt.Sprintf("%s/%s", r.pageDir, pagePath)); err != nil {
+		slog.Error("parse page template for fragment", "page", pagePath, "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := t.ExecuteTemplate(w, name, data); err != nil {
+		// Header is already written; we cannot change the status code.
+		slog.Error("execute fragment template", "page", pagePath, "name", name, "error", err)
+	}
+}

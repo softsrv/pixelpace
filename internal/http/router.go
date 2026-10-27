@@ -29,8 +29,9 @@ type RouterConfig struct {
 	LeaderboardSvc    *app.LeaderboardService
 	Renderer          *handlers.TemplateRenderer
 	JWTSecret         string
-	Secure            bool // true in production
-	DevMode           bool // true outside production
+	AppBaseURL        string // prefixes shareable links, e.g. room join links
+	Secure            bool   // true in production
+	DevMode           bool   // true outside production
 	TrustedProxyCount int
 }
 
@@ -69,6 +70,8 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	leaderboardH := handlers.NewLeaderboardHandler(cfg.LeaderboardSvc)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
 	roomH := handlers.NewRoomHandler(ctx, cfg.RoomSvc, cfg.RaceSvc, cfg.Renderer, cfg.Secure)
+	racePageH := handlers.NewRacePageHandler(cfg.RaceSvc, cfg.Renderer, cfg.DevMode)
+	lobbyH := handlers.NewLobbyHandler(cfg.RoomSvc, cfg.FriendSvc, cfg.Renderer, cfg.AppBaseURL)
 	raceWSH := handlers.NewRaceWSHandler(cfg.RaceSvc, cfg.RaceSvc, cfg.Broadcaster)
 	quickMatchH := handlers.NewQuickMatchHandler(cfg.QuickMatchSvc)
 
@@ -149,6 +152,19 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux.Handle("POST /rooms/{id}/kick", verifiedMW(http.HandlerFunc(roomH.Kick)))
 	mux.Handle("POST /rooms/{id}/ready", verifiedMW(http.HandlerFunc(roomH.MarkReady)))
 	mux.Handle("POST /rooms/{id}/start", verifiedMW(http.HandlerFunc(roomH.Start)))
+	mux.Handle("GET /rooms/{id}/lobby", verifiedMW(http.HandlerFunc(lobbyH.Page)))
+	mux.Handle("GET /rooms/{id}/lobby/panel", verifiedMW(http.HandlerFunc(lobbyH.Panel)))
+	mux.Handle("POST /rooms/{id}/race-type", verifiedMW(http.HandlerFunc(lobbyH.ChangeRaceType)))
+	mux.Handle("POST /rooms/{id}/unready", verifiedMW(http.HandlerFunc(lobbyH.MarkUnready)))
+	mux.Handle("POST /rooms/{id}/invites", verifiedMW(http.HandlerFunc(lobbyH.Invite)))
+	mux.Handle("GET /rooms/{id}/race", verifiedMW(http.HandlerFunc(racePageH.Page)))
+	mux.Handle("GET /rooms/{id}/race/status", verifiedMW(http.HandlerFunc(racePageH.Status)))
+	mux.Handle("POST /rooms/{id}/race/ready", verifiedMW(http.HandlerFunc(racePageH.Ready)))
+	mux.Handle("GET /join/{code}", verifiedMW(http.HandlerFunc(lobbyH.JoinLink)))
+	mux.Handle("GET /dashboard/race-card", verifiedMW(http.HandlerFunc(lobbyH.RaceCard)))
+	mux.Handle("GET /invites", verifiedMW(http.HandlerFunc(lobbyH.Invites)))
+	mux.Handle("POST /invites/{id}/accept", verifiedMW(http.HandlerFunc(lobbyH.AcceptInvite)))
+	mux.Handle("POST /invites/{id}/decline", verifiedMW(http.HandlerFunc(lobbyH.DeclineInvite)))
 
 	mux.Handle("GET /dashboard", verifiedMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, _ := middleware.UserFromContext(r.Context())

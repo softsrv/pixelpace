@@ -206,7 +206,8 @@ func (h *LobbyHandler) JoinLink(w http.ResponseWriter, r *http.Request) {
 	}
 	code := strings.ToUpper(strings.TrimSpace(r.PathValue("code")))
 	roomID, err := h.rooms.JoinRoom(r.Context(), user.ID, code)
-	if err != nil && !(errors.Is(err, app.ErrAlreadyParticipant) && roomID != uuid.Nil) {
+	// Rejoining a room already joined is fine; it reports the room id.
+	if err != nil && (!errors.Is(err, app.ErrAlreadyParticipant) || roomID == uuid.Nil) {
 		h.unavailable(w, r, err)
 		return
 	}

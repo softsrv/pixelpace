@@ -109,7 +109,7 @@ document.body.addEventListener('token-expired', async function () {
   var PM5_ADDITIONAL_STATUS_2_TOTAL_CALORIES_OFFSET = 6;
   var PM5_STROKE_DATA_ELAPSED_TIME_OFFSET = 0;
   var PM5_STROKE_DATA_ELAPSED_TIME_SCALE_SECONDS = 0.01;
-  var PM5_STROKE_DATA_STROKE_COUNT_OFFSET = 16;
+  var PM5_STROKE_DATA_STROKE_COUNT_OFFSET = 18;
   var PM5_ADDITIONAL_STROKE_DATA_STROKE_POWER_OFFSET = 3;
   var PM5_ADDITIONAL_STROKE_DATA_STROKE_COUNT_OFFSET = 7;
   var SPM_INTERVAL_LOW = 16;
@@ -576,6 +576,7 @@ document.body.addEventListener('token-expired', async function () {
   }
 
   // Concept2's pace-to-watts relation: watts = 2.80 / (seconds per metre)^3.
+  // Calories accumulate at (4 x watts + 350) kcal per hour.
   function mockPm5Power() {
     if (!mockPm5Rowing()) return 0;
     return 2.8 / Math.pow(mockPm5State.pace / 500, 3);
@@ -672,8 +673,8 @@ document.body.addEventListener('token-expired', async function () {
     putU16(dv, 10, 500 / mockPm5State.pace * strokeSeconds * 100);
     putU16(dv, 12, averageForceLbs * 1.5 * 10);
     putU16(dv, 14, averageForceLbs * 10);
-    putU16(dv, 16, work * 10);
-    putU16(dv, 18, mockPm5State.strokeCount);
+    putU16(dv, 16, work * 10); // work per stroke, 0.1 J
+    putU16(dv, PM5_STROKE_DATA_STROKE_COUNT_OFFSET, mockPm5State.strokeCount);
     return dv;
   }
 
@@ -681,7 +682,7 @@ document.body.addEventListener('token-expired', async function () {
     var dv = new DataView(new ArrayBuffer(15));
     putU24(dv, 0, mockPm5State.elapsedTime * 100);
     putU16(dv, PM5_ADDITIONAL_STROKE_DATA_STROKE_POWER_OFFSET, power);
-    putU16(dv, 5, power > 0 ? 4 * power + 300 : 0); // stroke calories, cal/hr
+    putU16(dv, 5, power > 0 ? 4 * power + 350 : 0); // stroke calories, cal/hr
     putU16(dv, PM5_ADDITIONAL_STROKE_DATA_STROKE_COUNT_OFFSET, mockPm5State.strokeCount);
     putU24(dv, 9, 0); // projected work time
     putU24(dv, 12, 0); // projected work distance
@@ -705,7 +706,7 @@ document.body.addEventListener('token-expired', async function () {
       var power = mockPm5Power();
       mockPm5State.distance += dt * 500 / mockPm5State.pace;
       mockPm5State.work += power * dt;
-      mockPm5State.calories += dt * (4 * power + 300) / 3600;
+      mockPm5State.calories += dt * (4 * power + 350) / 3600;
     }
     emitMockPm5Status();
   }

@@ -588,6 +588,28 @@ test('the race-started event measures streamed samples from the race start', fun
   assert.equal(app.metricEls.distance.textContent, '6 m', 'the dashboard metrics keep showing the machine total');
 });
 
+test('simulated race samples carry the simulator state decoded at 0.01 s and 0.1 m', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  stream.socket.open();
+  var n = 25;
+  for (var i = 0; i < n; i++) app.tick();
+  app.timers.find(function (timer) { return timer.active && timer.fn.name === 'mockPm5StrokeTick'; }).fn();
+
+  var seconds = n * 0.5;
+  var metres = seconds * 500 / 132;
+  var watts = 2.8 / Math.pow(132 / 500, 3);
+  var frames = stream.socket.frames.map(function (frame) { return JSON.parse(frame); });
+  assert.equal(frames.length, 3 * n + 2, 'one sample per notification: 3 per status tick, 2 per stroke');
+  var last = frames[frames.length - 1];
+  assert.equal(last.elapsed_milliseconds, Math.round(seconds * 100) * 10, 'elapsed at 0.01 s');
+  assert.equal(last.distance_millimeters, Math.round(metres * 10) * 100, 'distance at 0.1 m');
+  assert.equal(last.stroke_rate, 26);
+  assert.equal(last.power, Math.round(watts), 'stroke power decoded from 0x36');
+  assert.equal(app.metricEls.distance.textContent, Math.round(Math.round(metres * 10) / 10) + ' m');
+  assert.equal(app.metricEls.power.textContent, Math.round(watts) + ' W');
+});
+
 test('the dev mock reports a connected rowing machine', function () {
   var app = runDashboardApp();
   assert.deepEqual(JSON.parse(JSON.stringify(app.events('pixelpace:pm5-status'))), [{ connected: true }]);

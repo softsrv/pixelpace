@@ -109,7 +109,7 @@ document.body.addEventListener('token-expired', async function () {
   var PM5_ADDITIONAL_STATUS_2_TOTAL_CALORIES_OFFSET = 6;
   var PM5_STROKE_DATA_ELAPSED_TIME_OFFSET = 0;
   var PM5_STROKE_DATA_ELAPSED_TIME_SCALE_SECONDS = 0.01;
-  var PM5_STROKE_DATA_STROKE_COUNT_OFFSET = 16;
+  var PM5_STROKE_DATA_STROKE_COUNT_OFFSET = 18;
   var PM5_ADDITIONAL_STROKE_DATA_STROKE_POWER_OFFSET = 3;
   var PM5_ADDITIONAL_STROKE_DATA_STROKE_COUNT_OFFSET = 7;
   var SPM_INTERVAL_LOW = 16;
@@ -171,17 +171,21 @@ document.body.addEventListener('token-expired', async function () {
     calories: 0,
     heartRate: 0
   };
+  // Dev-mode PM5 simulator settings: the defaults the panel starts at and the
+  // bounds its inputs are clamped to. Pace is seconds per 500 m.
   var mockPm5Config = {
-    elapsedTime: 12,
-    distance: 42,
-    pace: 132,
     strokeRate: 26,
-    power: 180,
-    strokeCount: 6,
-    calories: 4,
-    heartRate: 142
+    pace: 132,
+    minStrokeRate: 0,
+    maxStrokeRate: 60,
+    minPace: 60,
+    maxPace: 300,
+    statusIntervalMs: 500
   };
-  var mockPm5Timer = null;
+  // The simulator's two timers: status characteristics every statusIntervalMs,
+  // stroke characteristics once per stroke (60000 / SPM ms).
+  var mockPm5StatusTimer = null;
+  var mockPm5StrokeTimer = null;
   var activeRaceStream = null;
   // PM5 characteristics report partial updates; retain the latest known readings.
   var streamMetrics = { elapsedTime: 0, distance: 0, strokeRate: 0, power: 0 };
@@ -550,51 +554,242 @@ document.body.addEventListener('token-expired', async function () {
   }
 
   // DEV_MOCK_PM5_START
-  var mockPm5Tick = 0;
-  var mockPm5KeyboardControlsStarted = false;
+  // A development-only PM5 simulator. It rows at the panel's stroke rate and
+  // pace, encodes its readings as Concept2 PM5 Bluetooth notification payloads
+  // and feeds them to onNotify: the same decode, render, animation and race
+  // stream path a real rowing machine's notifications take.
+  var mockPm5State = {
+    running: true,
+    strokeRate: mockPm5Config.strokeRate,
+    pace: mockPm5Config.pace,
+    elapsedTime: 0,
+    distance: 0,
+    strokeCount: 0,
+    calories: 0,
+    work: 0,
+    strokeTimerMs: null
+  };
+  var mockPm5PanelStarted = false;
 
-  function mockPm5Metrics(tick) {
-    return {
-      elapsedTime: mockPm5Config.elapsedTime + tick,
-      distance: mockPm5Config.distance + (tick * (mockPm5Config.strokeRate / 3)),
-      pace: mockPm5Config.pace,
-      strokeRate: mockPm5Config.strokeRate,
-      power: mockPm5Config.power,
-      strokeCount: mockPm5Config.strokeCount + Math.floor(tick * mockPm5Config.strokeRate / 60),
-      calories: mockPm5Config.calories + Math.floor(tick / 15),
-      heartRate: mockPm5Config.heartRate
-    };
+  function mockPm5Rowing() {
+    return mockPm5State.running && mockPm5State.strokeRate > 0;
   }
 
-  function emitMockPm5Metrics(tick) {
-    var metrics = mockPm5Metrics(tick);
-    renderMetrics(metrics);
-    syncRowerAnimation(metrics.strokeRate);
-    streamRaceMetrics(metrics);
+  // Concept2's pace-to-watts relation: watts = 2.80 / (seconds per metre)^3.
+  // Calories accumulate at (4 x watts + 350) kcal per hour.
+  function mockPm5Power() {
+    if (!mockPm5Rowing()) return 0;
+    return 2.8 / Math.pow(mockPm5State.pace / 500, 3);
   }
 
-  function handleMockPm5Keydown(evt) {
-    if (!devMode) return;
-    if (evt.key === 'ArrowUp') {
-      mockPm5Config.strokeRate = Math.max(0, mockPm5Config.strokeRate + 1);
-    } else if (evt.key === 'ArrowDown') {
-      mockPm5Config.strokeRate = Math.max(0, mockPm5Config.strokeRate - 1);
-    } else if (evt.key === 'ArrowLeft') {
-      mockPm5Config.pace = Math.max(0, mockPm5Config.pace - 1);
-    } else if (evt.key === 'ArrowRight') {
-      mockPm5Config.pace = Math.max(0, mockPm5Config.pace + 1);
-    } else {
+  function mockPm5Uint(value, max) {
+    var n = Math.round(Number(value));
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return n > max ? max : n;
+  }
+
+  function putU8(dv, offset, value) {
+    dv.setUint8(offset, mockPm5Uint(value, 0xff));
+  }
+
+  function putU16(dv, offset, value) {
+    dv.setUint16(offset, mockPm5Uint(value, 0xffff), true);
+  }
+
+  function putU24(dv, offset, value) {
+    var n = mockPm5Uint(value, 0xffffff);
+    dv.setUint8(offset, n & 0xff);
+    dv.setUint8(offset + 1, (n >> 8) & 0xff);
+    dv.setUint8(offset + 2, (n >> 16) & 0xff);
+  }
+
+  function mockPm5AveragePace() {
+    if (mockPm5State.distance <= 0) return 0;
+    return mockPm5State.elapsedTime / mockPm5State.distance * 500;
+  }
+
+  function mockPm5AveragePower() {
+    if (mockPm5State.elapsedTime <= 0) return 0;
+    return mockPm5State.work / mockPm5State.elapsedTime;
+  }
+
+  // Payloads follow the Concept2 PM5 Bluetooth Smart Interface Definition.
+  function mockPm5GeneralStatus() {
+    var dv = new DataView(new ArrayBuffer(19));
+    putU24(dv, 0, mockPm5State.elapsedTime * 100);
+    putU24(dv, 3, mockPm5State.distance * 10);
+    putU8(dv, 6, 1); // workout type: just row, splits
+    putU8(dv, 7, 255); // interval type: none
+    putU8(dv, 8, 1); // workout state: workout row
+    putU8(dv, 9, mockPm5Rowing() ? 1 : 0); // rowing state
+    putU8(dv, 10, 0); // stroke state
+    putU24(dv, 11, Math.floor(mockPm5State.distance)); // total work distance, m
+    putU24(dv, 14, 0); // workout duration
+    putU8(dv, 17, 0); // workout duration type
+    putU8(dv, 18, 120); // drag factor
+    return dv;
+  }
+
+  function mockPm5AdditionalStatus1() {
+    var rowing = mockPm5Rowing();
+    var dv = new DataView(new ArrayBuffer(17));
+    putU24(dv, 0, mockPm5State.elapsedTime * 100);
+    putU16(dv, 3, rowing ? 500 / mockPm5State.pace * 1000 : 0); // speed, 0.001 m/s
+    putU8(dv, PM5_ADDITIONAL_STATUS_1_STROKE_RATE_OFFSET, rowing ? mockPm5State.strokeRate : 0);
+    putU8(dv, PM5_ADDITIONAL_STATUS_1_HEART_RATE_OFFSET, PM5_ADDITIONAL_STATUS_1_HEART_RATE_INVALID);
+    putU16(dv, PM5_ADDITIONAL_STATUS_1_CURRENT_PACE_OFFSET, rowing ? mockPm5State.pace * 100 : 0);
+    putU16(dv, 9, mockPm5AveragePace() * 100);
+    putU16(dv, 11, 0); // rest distance
+    putU24(dv, 13, 0); // rest time
+    putU8(dv, 16, 0); // erg machine type
+    return dv;
+  }
+
+  function mockPm5AdditionalStatus2() {
+    var dv = new DataView(new ArrayBuffer(20));
+    putU24(dv, 0, mockPm5State.elapsedTime * 100);
+    putU8(dv, 3, 0); // interval count
+    putU16(dv, 4, mockPm5AveragePower());
+    putU16(dv, PM5_ADDITIONAL_STATUS_2_TOTAL_CALORIES_OFFSET, mockPm5State.calories);
+    putU16(dv, 8, mockPm5AveragePace() * 100); // split average pace
+    putU16(dv, 10, mockPm5AveragePower()); // split average power
+    putU16(dv, 12, mockPm5State.elapsedTime > 0 ? mockPm5State.calories * 3600 / mockPm5State.elapsedTime : 0);
+    putU24(dv, 14, 0); // last split time
+    putU24(dv, 17, 0); // last split distance
+    return dv;
+  }
+
+  function mockPm5StrokeData(strokeSeconds, power) {
+    var driveSeconds = Math.min(0.8, strokeSeconds / 2);
+    var driveLength = 1.4;
+    var work = power * strokeSeconds;
+    var averageForceLbs = work / driveLength / 4.448;
+    var dv = new DataView(new ArrayBuffer(20));
+    putU24(dv, 0, mockPm5State.elapsedTime * 100);
+    putU24(dv, 3, mockPm5State.distance * 10);
+    putU8(dv, 6, driveLength * 100);
+    putU8(dv, 7, driveSeconds * 100);
+    putU16(dv, 8, (strokeSeconds - driveSeconds) * 100);
+    putU16(dv, 10, 500 / mockPm5State.pace * strokeSeconds * 100);
+    putU16(dv, 12, averageForceLbs * 1.5 * 10);
+    putU16(dv, 14, averageForceLbs * 10);
+    putU16(dv, 16, work * 10); // work per stroke, 0.1 J
+    putU16(dv, PM5_STROKE_DATA_STROKE_COUNT_OFFSET, mockPm5State.strokeCount);
+    return dv;
+  }
+
+  function mockPm5AdditionalStrokeData(power) {
+    var dv = new DataView(new ArrayBuffer(15));
+    putU24(dv, 0, mockPm5State.elapsedTime * 100);
+    putU16(dv, PM5_ADDITIONAL_STROKE_DATA_STROKE_POWER_OFFSET, power);
+    putU16(dv, 5, power > 0 ? 4 * power + 350 : 0); // stroke calories, cal/hr
+    putU16(dv, PM5_ADDITIONAL_STROKE_DATA_STROKE_COUNT_OFFSET, mockPm5State.strokeCount);
+    putU24(dv, 9, 0); // projected work time
+    putU24(dv, 12, 0); // projected work distance
+    return dv;
+  }
+
+  function notifyMockPm5(key, value) {
+    onNotify({ target: { uuid: pm5Characteristics[key].uuid, value: value } });
+  }
+
+  function emitMockPm5Status() {
+    notifyMockPm5('generalStatus', mockPm5GeneralStatus());
+    notifyMockPm5('additionalStatus1', mockPm5AdditionalStatus1());
+    notifyMockPm5('additionalStatus2', mockPm5AdditionalStatus2());
+  }
+
+  function mockPm5StatusTick() {
+    var dt = mockPm5Config.statusIntervalMs / 1000;
+    mockPm5State.elapsedTime += dt;
+    if (mockPm5Rowing()) {
+      var power = mockPm5Power();
+      mockPm5State.distance += dt * 500 / mockPm5State.pace;
+      mockPm5State.work += power * dt;
+      mockPm5State.calories += dt * (4 * power + 350) / 3600;
+    }
+    emitMockPm5Status();
+  }
+
+  function mockPm5StrokeTick() {
+    if (!mockPm5Rowing()) return;
+    var power = mockPm5Power();
+    mockPm5State.strokeCount += 1;
+    notifyMockPm5('strokeData', mockPm5StrokeData(60 / mockPm5State.strokeRate, power));
+    notifyMockPm5('additionalStrokeData', mockPm5AdditionalStrokeData(power));
+  }
+
+  // One stroke timer at 60000 / SPM ms while rowing; none at rest. Coming to
+  // rest sends one closing stroke notification carrying zero power, so the
+  // power reading drops to 0 instead of holding the last stroke's.
+  function scheduleMockPm5Strokes() {
+    var intervalMs = mockPm5Rowing() ? Math.round(60000 / mockPm5State.strokeRate) : null;
+    if (intervalMs === mockPm5State.strokeTimerMs) return;
+    var wasRowing = mockPm5State.strokeTimerMs !== null;
+    if (mockPm5StrokeTimer) clearInterval(mockPm5StrokeTimer);
+    mockPm5StrokeTimer = null;
+    mockPm5State.strokeTimerMs = intervalMs;
+    if (intervalMs === null) {
+      if (wasRowing) notifyMockPm5('additionalStrokeData', mockPm5AdditionalStrokeData(0));
       return;
     }
-
-    evt.preventDefault();
-    emitMockPm5Metrics(mockPm5Tick);
+    mockPm5StrokeTimer = setInterval(mockPm5StrokeTick, intervalMs);
   }
 
-  function startMockPm5KeyboardControls() {
-    if (mockPm5KeyboardControlsStarted) return;
-    document.addEventListener('keydown', handleMockPm5Keydown);
-    mockPm5KeyboardControlsStarted = true;
+  function parseMockPm5Spm(text) {
+    var s = String(text == null ? '' : text).trim();
+    if (!/^[+-]?\d+(\.\d+)?$/.test(s)) return null;
+    var spm = Math.round(Number(s));
+    return Math.min(mockPm5Config.maxStrokeRate, Math.max(mockPm5Config.minStrokeRate, spm));
+  }
+
+  function parseMockPm5Pace(text) {
+    var match = String(text == null ? '' : text).trim().match(/^(\d+):(\d{1,2})$/);
+    if (!match) return null;
+    var seconds = Number(match[1]) * 60 + Number(match[2]);
+    return Math.min(mockPm5Config.maxPace, Math.max(mockPm5Config.minPace, seconds));
+  }
+
+  // 'input' applies a valid value as it is typed; 'change' also writes the
+  // clamped value (or the last good one) back into the field.
+  function bindMockPm5Setting(input, parse, apply, format) {
+    if (!input || !input.addEventListener) return;
+    function update(writeBack) {
+      var value = parse(input.value);
+      if (value !== null) apply(value);
+      if (writeBack) input.value = format();
+    }
+    input.addEventListener('input', function () { update(false); });
+    input.addEventListener('change', function () { update(true); });
+  }
+
+  function renderMockPm5StartButton(button) {
+    if (button) button.textContent = mockPm5State.running ? 'Stop rowing' : 'Start rowing';
+  }
+
+  function startMockPm5Panel() {
+    if (mockPm5PanelStarted) return;
+    mockPm5PanelStarted = true;
+    var spmInput = document.getElementById('sim-spm');
+    var paceInput = document.getElementById('sim-pace');
+    var startButton = document.getElementById('sim-start');
+
+    bindMockPm5Setting(spmInput, parseMockPm5Spm, function (spm) {
+      mockPm5State.strokeRate = spm;
+      scheduleMockPm5Strokes();
+    }, function () { return String(mockPm5State.strokeRate); });
+    bindMockPm5Setting(paceInput, parseMockPm5Pace, function (pace) {
+      mockPm5State.pace = pace;
+    }, function () { return formatDuration(mockPm5State.pace); });
+
+    if (startButton && startButton.addEventListener) {
+      startButton.addEventListener('click', function () {
+        mockPm5State.running = !mockPm5State.running;
+        renderMockPm5StartButton(startButton);
+        scheduleMockPm5Strokes();
+      });
+    }
+    renderMockPm5StartButton(startButton);
   }
 
   function startMockPm5() {
@@ -602,16 +797,13 @@ document.body.addEventListener('token-expired', async function () {
     revealRowerCanvas();
     showZeroMetrics();
     showConnectionInfo('Development mock PM5 — streaming synthetic rowing metrics.');
-    startMockPm5KeyboardControls();
+    startMockPm5Panel();
     setPm5Connected(true);
 
-    mockPm5Tick = 0;
-    emitMockPm5Metrics(mockPm5Tick);
-    if (mockPm5Timer) clearInterval(mockPm5Timer);
-    mockPm5Timer = setInterval(function () {
-      mockPm5Tick += 1;
-      emitMockPm5Metrics(mockPm5Tick);
-    }, 1000);
+    if (mockPm5StatusTimer) clearInterval(mockPm5StatusTimer);
+    mockPm5StatusTimer = setInterval(mockPm5StatusTick, mockPm5Config.statusIntervalMs);
+    scheduleMockPm5Strokes();
+    emitMockPm5Status();
   }
 
   if (devMode) startMockPm5();

@@ -61,7 +61,12 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
     'rowing-machine-card': rowingMachineCard,
     'bt-connection-info': metricElement(),
     'bt-metrics': metricsRegion,
-    'bt-rower-canvas': rowerCanvas
+    'bt-rower-canvas': rowerCanvas,
+    // The development-mode simulator panel dashboard.html and race.html render.
+    'sim-panel': metricElement(),
+    'sim-spm': Object.assign(metricElement(), { value: '26' }),
+    'sim-pace': Object.assign(metricElement(), { value: '2:12' }),
+    'sim-start': Object.assign(metricElement(), { textContent: 'Stop rowing' })
   };
   var sockets = [];
   var constructorFails = false;
@@ -197,7 +202,11 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
       var uuid = 'ce0600' + characteristic + '-43e5-11e4-916c-0800200c9a66';
       notifications[uuid]({ target: { uuid: uuid, value: new DataView(Uint8Array.from(bytes).buffer) } });
     },
-    tick: function () { timers.find(function (timer) { return timer.active && timer.delay === 1000; }).fn(); },
+    // One simulator status tick: 500 ms of rowing, three status notifications.
+    tick: function () { timers.find(function (timer) { return timer.active && timer.fn.name === 'mockPm5StatusTick'; }).fn(); },
+    rowerTimer: function () {
+      return timers.find(function (timer) { return timer.active && !/^mockPm5/.test(timer.fn.name); });
+    },
     setTime: function (timestamp) { now = timestamp; },
     dateReads: function () { return dateReads; },
     events: function (type) {
@@ -218,7 +227,7 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
   };
 }
 
-test('open race socket sends one converted sample while retaining local rendering and animation', function () {
+test('open race socket sends one converted sample per notification while retaining local rendering and animation', function () {
   var app = runDashboardApp();
   assert.equal(app.sockets.length, 0, 'no streaming until a race is active');
   app.tick();
@@ -229,20 +238,21 @@ test('open race socket sends one converted sample while retaining local renderin
   app.setTime('2026-10-08T12:00:02.000Z');
   app.tick();
 
-  assert.equal(stream.socket.frames.length, 1);
+  // 1 s at 2:12/500m is 3.79 m, encoded in 0.1 m steps; one sample per status notification.
+  assert.equal(stream.socket.frames.length, 3);
   assert.deepEqual(JSON.parse(stream.socket.frames[0]), {
-    elapsed_milliseconds: 14000,
-    distance_millimeters: 59333,
+    elapsed_milliseconds: 1000,
+    distance_millimeters: 3800,
     stroke_rate: 26,
-    power: 180,
+    power: 0,
     sampled_at: '2026-10-08T12:00:02.000Z'
   });
-  assert.equal(app.dateReads(), 1, 'capture time only once per emission');
+  assert.equal(app.dateReads(), 3, 'capture time only once per emission');
   assert.equal(stream.buffer.length, 0);
-  assert.equal(app.metricEls.elapsedTime.textContent, '0:14');
-  assert.equal(app.metricEls.distance.textContent, '59 m');
+  assert.equal(app.metricEls.elapsedTime.textContent, '0:01');
+  assert.equal(app.metricEls.distance.textContent, '4 m');
   var before = app.draws();
-  app.timers.find(function (timer) { return timer.active && timer.delay !== 1000; }).fn();
+  app.rowerTimer().fn();
   assert.equal(app.draws(), before + 1, 'rower animation still runs');
 });
 
@@ -292,10 +302,11 @@ test('connecting, closing, and closed sockets buffer each emission with its own 
   });
   assert.equal(stream.socket.frames.length, 0);
   assert.ok(Array.isArray(stream.buffer));
-  assert.equal(stream.buffer.length, 3);
-  assert.deepEqual(Array.from(stream.buffer, function (sample) { return sample.sampled_at; }), timestamps);
-  assert.equal(app.dateReads(), 3);
-  assert.equal(app.metricEls.elapsedTime.textContent, '0:15', 'disconnected rendering continues');
+  assert.equal(stream.buffer.length, 9);
+  assert.deepEqual(Array.from(stream.buffer, function (sample) { return sample.sampled_at; }), timestamps.flatMap(function (t) { return [t, t, t]; }));
+  assert.equal(app.dateReads(), 9);
+  assert.equal(app.metricEls.elapsedTime.textContent, '0:01', 'disconnected rendering continues');
+  assert.equal(app.metricEls.distance.textContent, '6 m');
 });
 
 test('reconnect alone synchronously replays the whole ordered batch with original timestamps and clears it', function () {
@@ -322,17 +333,17 @@ test('reconnect alone synchronously replays the whole ordered batch with origina
 
   // All frames are present before onopen returns: no extra timer or inbound message.
   assert.deepEqual(reconnected.frames, original);
-  assert.deepEqual(reconnected.frames.map(function (frame) { return JSON.parse(frame).elapsed_milliseconds; }), [13000, 14000, 15000]);
+  assert.deepEqual(reconnected.frames.map(function (frame) { return JSON.parse(frame).elapsed_milliseconds; }), [500, 500, 500, 1000, 1000, 1000, 1500, 1500, 1500]);
   assert.equal(stream.buffer, buffer, 'drain the inspectable array in place');
   assert.equal(buffer.length, 0);
-  assert.equal(app.dateReads(), 3, 'replay does not re-timestamp samples');
+  assert.equal(app.dateReads(), 9, 'replay does not re-timestamp samples');
   reconnected.frames.forEach(function (frame) {
     assert.notEqual(JSON.parse(frame).sampled_at, '2026-10-08T12:05:00.000Z');
   });
   app.tick();
-  assert.equal(reconnected.frames.length, 4);
-  assert.equal(JSON.parse(reconnected.frames[3]).sampled_at, '2026-10-08T12:05:00.000Z');
-  assert.equal(JSON.parse(reconnected.frames[3]).elapsed_milliseconds, 16000);
+  assert.equal(reconnected.frames.length, 12);
+  assert.equal(JSON.parse(reconnected.frames[9]).sampled_at, '2026-10-08T12:05:00.000Z');
+  assert.equal(JSON.parse(reconnected.frames[9]).elapsed_milliseconds, 2000);
   assert.equal(buffer.length, 0);
 });
 
@@ -370,15 +381,15 @@ test('a send failure retains only the unsent suffix for the next reconnect witho
   firstSocket.failAt = 1;
   firstSocket.open();
   assert.deepEqual(firstSocket.frames, original.slice(0, 1));
-  assert.equal(stream.buffer.length, 2);
+  assert.equal(stream.buffer.length, 8);
   app.tick();
-  assert.equal(app.metricEls.elapsedTime.textContent, '0:16');
-  assert.equal(stream.buffer.length, 3);
+  assert.equal(app.metricEls.elapsedTime.textContent, '0:02');
+  assert.equal(stream.buffer.length, 11);
   firstSocket.finishClose();
   app.retry();
   stream.socket.open();
-  assert.deepEqual(stream.socket.frames.slice(0, 2), original.slice(1));
-  assert.equal(stream.socket.frames.length, 3);
+  assert.deepEqual(stream.socket.frames.slice(0, 8), original.slice(1));
+  assert.equal(stream.socket.frames.length, 11);
   assert.equal(stream.buffer.length, 0);
 });
 
@@ -393,7 +404,7 @@ test('socket errors retry with bounded backoff, reset on open, and stop cancels 
   for (var i = 0; i < 6; i++) app.retry();
   assert.deepEqual(app.timeouts.map(function (timer) { return timer.delay; }), [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
   app.tick();
-  assert.equal(stream.buffer.length, 1);
+  assert.equal(stream.buffer.length, 3);
   app.failConstruction(false);
   app.retry();
   stream.socket.open();
@@ -416,13 +427,13 @@ test('samples buffer even when socket construction fails before a socket exists'
   app.setTime('2026-10-08T12:00:01.000Z');
   app.tick();
   assert.equal(app.sockets.length, 0);
-  assert.equal(stream.buffer.length, 1);
+  assert.equal(stream.buffer.length, 3);
   assert.equal(stream.buffer[0].sampled_at, '2026-10-08T12:00:01.000Z');
   app.failConstruction(false);
   app.setTime('2026-10-08T12:05:00.000Z');
   app.retry();
   stream.socket.open();
-  assert.equal(stream.socket.frames.length, 1);
+  assert.equal(stream.socket.frames.length, 3);
   assert.equal(JSON.parse(stream.socket.frames[0]).sampled_at, '2026-10-08T12:00:01.000Z');
   assert.equal(stream.buffer.length, 0);
 });
@@ -443,10 +454,10 @@ test('starting the same race is idempotent and switching races cannot replay an 
   assert.equal(app.timeouts.filter(function (timer) { return timer.active; }).length, 0);
   second.socket.open();
   assert.equal(second.socket.frames.length, 0);
-  assert.equal(first.buffer.length, 1);
+  assert.equal(first.buffer.length, 3);
   first.stop();
   app.tick();
-  assert.equal(second.socket.frames.length, 1, 'a stale stop cannot stop the current race');
+  assert.equal(second.socket.frames.length, 3, 'a stale stop cannot stop the current race');
 });
 
 function rosterFrame(players) {
@@ -518,10 +529,10 @@ test('malformed inbound frames are ignored and leave buffering and replay unaffe
   socket.finishClose();
   app.setTime('2026-10-08T12:00:01.000Z');
   app.tick();
-  assert.equal(stream.buffer.length, 1);
+  assert.equal(stream.buffer.length, 3);
   app.retry();
   stream.socket.open();
-  assert.equal(stream.socket.frames.length, 1);
+  assert.equal(stream.socket.frames.length, 3);
   assert.equal(JSON.parse(stream.socket.frames[0]).sampled_at, '2026-10-08T12:00:01.000Z');
   assert.equal(stream.buffer.length, 0);
 });
@@ -557,7 +568,7 @@ test('each streamed sample is also dispatched locally, only while a race is acti
   app.tick();
 
   var local = app.events('pixelpace:local-telemetry');
-  assert.equal(local.length, 1, 'dispatched even while disconnected');
+  assert.equal(local.length, 3, 'dispatched even while disconnected, once per notification');
   assert.deepEqual(local[0], stream.buffer[0]);
 });
 
@@ -572,8 +583,31 @@ test('the race-started event measures streamed samples from the race start', fun
   app.tick();
 
   var frames = stream.socket.frames.map(function (frame) { return JSON.parse(frame); });
-  assert.deepEqual(frames.map(function (f) { return [f.elapsed_milliseconds, f.distance_millimeters]; }), [[1000, 8667]]);
-  assert.equal(app.metricEls.distance.textContent, '68 m', 'the dashboard metrics keep showing the machine total');
+  // Baseline 1.0 s / 3.8 m; after one more 500 ms tick the machine reads 1.5 s / 5.7 m.
+  assert.deepEqual(frames.map(function (f) { return [f.elapsed_milliseconds, f.distance_millimeters]; }), [[500, 1900], [500, 1900], [500, 1900]]);
+  assert.equal(app.metricEls.distance.textContent, '6 m', 'the dashboard metrics keep showing the machine total');
+});
+
+test('simulated race samples carry the simulator state decoded at 0.01 s and 0.1 m', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  stream.socket.open();
+  var n = 25;
+  for (var i = 0; i < n; i++) app.tick();
+  app.timers.find(function (timer) { return timer.active && timer.fn.name === 'mockPm5StrokeTick'; }).fn();
+
+  var seconds = n * 0.5;
+  var metres = seconds * 500 / 132;
+  var watts = 2.8 / Math.pow(132 / 500, 3);
+  var frames = stream.socket.frames.map(function (frame) { return JSON.parse(frame); });
+  assert.equal(frames.length, 3 * n + 2, 'one sample per notification: 3 per status tick, 2 per stroke');
+  var last = frames[frames.length - 1];
+  assert.equal(last.elapsed_milliseconds, Math.round(seconds * 100) * 10, 'elapsed at 0.01 s');
+  assert.equal(last.distance_millimeters, Math.round(metres * 10) * 100, 'distance at 0.1 m');
+  assert.equal(last.stroke_rate, 26);
+  assert.equal(last.power, Math.round(watts), 'stroke power decoded from 0x36');
+  assert.equal(app.metricEls.distance.textContent, Math.round(Math.round(metres * 10) / 10) + ' m');
+  assert.equal(app.metricEls.power.textContent, Math.round(watts) + ' W');
 });
 
 test('the dev mock reports a connected rowing machine', function () {

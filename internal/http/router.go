@@ -2,9 +2,14 @@ package http
 
 import (
 	"context"
+	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/auth"
@@ -60,6 +65,52 @@ func dashboardTemplateData(user db.User, devMode bool) map[string]any {
 	}
 }
 
+// rootSession classifies the access token presented on "/".
+type rootSession int
+
+const (
+	rootSignedOut rootSession = iota // missing, malformed, expired or wrong-secret token
+	rootOrphaned                     // valid token whose user no longer exists
+	rootSignedIn                     // valid token for an existing user (or a lookup that failed transiently)
+)
+
+// classifyRootToken validates token and looks its user up with the same
+// UserFetcher the Authenticate middleware uses.
+func classifyRootToken(r *http.Request, cfg RouterConfig, token string) rootSession {
+	claims, err := auth.ValidateAccessToken(token, cfg.JWTSecret)
+	if err != nil {
+		return rootSignedOut
+	}
+	userID, err := uuid.Parse(claims.Subject)
+	if err != nil || cfg.Queries == nil {
+		return rootOrphaned
+	}
+	if _, err := cfg.Queries.GetUserByID(r.Context(), userID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return rootOrphaned
+		}
+		// A transient store failure says nothing about the account: keep the
+		// session rather than clearing a valid cookie and logging the user out.
+		slog.WarnContext(r.Context(), "root: token user lookup failed; keeping session", "user_id", userID, "error", err)
+		return rootSignedIn
+	}
+	return rootSignedIn
+}
+
+// clearAccessTokenCookie expires a stale access_token cookie.
+func clearAccessTokenCookie(w http.ResponseWriter, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "access_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
+}
+
 func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux := http.NewServeMux()
 
@@ -97,15 +148,25 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		// Only send the user to the dashboard if they present a genuinely valid
-		// access token; a stale or malformed cookie should land on /login rather
-		// than bouncing through a protected route.
+		// access token for an account that still exists; a stale, malformed or
+		// orphaned cookie on exactly "/" should land on the landing page rather
+		// than bouncing through a protected route to /login.
 		if cookie, err := r.Cookie("access_token"); err == nil && cookie.Value != "" {
-			if _, vErr := auth.ValidateAccessToken(cookie.Value, cfg.JWTSecret); vErr == nil {
+			switch classifyRootToken(r, cfg, cookie.Value) {
+			case rootSignedIn:
 				http.Redirect(w, r, "/dashboard", http.StatusFound)
 				return
+			case rootOrphaned:
+				if r.URL.Path == "/" {
+					clearAccessTokenCookie(w, cfg.Secure)
+				}
 			}
 		}
-		http.Redirect(w, r, "/login", http.StatusFound)
+		if r.URL.Path != "/" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		cfg.Renderer.Page(w, http.StatusOK, "landing.html", nil)
 	})
 	mux.HandleFunc("GET /login", authH.LoginPage)
 	mux.HandleFunc("GET /register", authH.RegisterPage)

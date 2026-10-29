@@ -1,0 +1,83 @@
+{{define "main-class"}}max-w-6xl{{end}}
+
+{{define "brand"}}<span class="text-xl font-bold">PixelPace</span>{{end}}
+
+{{define "nav-actions"}}
+<div class="flex items-center gap-2">
+  <a href="/login" class="btn btn-ghost btn-sm">Sign in</a>
+  <a href="/register" class="btn btn-primary btn-sm">Sign up</a>
+</div>
+{{end}}
+
+{{define "content"}}
+<div class="space-y-12">
+  <!-- Hero Section -->
+  <section class="hero py-12 bg-base-100 rounded-box shadow-xl">
+    <div class="hero-content text-center max-w-2xl mx-auto px-4">
+      <div class="space-y-6">
+        <h1 class="text-4xl sm:text-5xl font-extrabold tracking-tight">
+          Real-Time Rowing Races on <span class="text-primary">PixelPace</span>
+        </h1>
+        <p class="text-lg text-base-content/80 leading-relaxed">
+          PixelPace is real-time rowing races on a connected rowing machine.
+          Experience competitive multiplayer rowing from home by connecting a Concept2 PM5 over Bluetooth.
+        </p>
+        <div class="flex flex-wrap justify-center items-center gap-4 pt-2">
+          <a href="/register" class="btn btn-primary btn-md sm:btn-lg">Sign up</a>
+          <a href="/login" class="btn btn-outline btn-md sm:btn-lg">Sign in</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Features Section -->
+  <section class="space-y-6">
+    <div class="text-center">
+      <h2 class="text-2xl sm:text-3xl font-bold">Race Features</h2>
+      <p class="text-base-content/70 mt-1">Everything you need to compete and track your progress</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <!-- Feature 1: Race Friends -->
+      <div class="card bg-base-100 shadow-lg border border-base-300">
+        <div class="card-body">
+          <h3 class="card-title text-xl font-semibold">Race Your Friends</h3>
+          <p class="text-base-content/80">
+            Create custom rooms, share join codes instantly, and send direct friend invites to line up side-by-side at the start line.
+          </p>
+        </div>
+      </div>
+
+      <!-- Feature 2: Race Strangers -->
+      <div class="card bg-base-100 shadow-lg border border-base-300">
+        <div class="card-body">
+          <h3 class="card-title text-xl font-semibold">Race Strangers</h3>
+          <p class="text-base-content/80">
+            Jump into the action immediately with Quick Match and test your mettle against rowers around the world.
+          </p>
+        </div>
+      </div>
+
+      <!-- Feature 3: Badges & Achievements -->
+      <div class="card bg-base-100 shadow-lg border border-base-300">
+        <div class="card-body">
+          <h3 class="card-title text-xl font-semibold">Badges and Achievements</h3>
+          <p class="text-base-content/80">
+            Earn prestigious badges and achievements as you log split personal bests, rack up distance, and win head-to-head sprints.
+          </p>
+        </div>
+      </div>
+
+      <!-- Feature 4: Logbook Sync -->
+      <div class="card bg-base-100 shadow-lg border border-base-300">
+        <div class="card-body">
+          <h3 class="card-title text-xl font-semibold">Concept2 Logbook Sync</h3>
+          <p class="text-base-content/80">
+            Automatically sync with Concept2 Logbook and ergdata so your verified race workouts count toward your season totals.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+{{end}}

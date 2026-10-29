@@ -37,7 +37,16 @@ type raceBeginner interface {
 	Run(ctx context.Context, raceID uuid.UUID) error
 }
 
-var _ raceBeginner = (*app.RaceService)(nil)
+// raceResumer lists races left unfinished, e.g. by a restart, so their Run
+// can be relaunched.
+type raceResumer interface {
+	UnfinishedRaces(ctx context.Context) ([]uuid.UUID, error)
+}
+
+var (
+	_ raceBeginner = (*app.RaceService)(nil)
+	_ raceResumer  = (*app.RaceService)(nil)
+)
 
 // roomUpdatedEvent is the HX-Trigger event that refreshes an open lobby.
 const roomUpdatedEvent = "room-updated"
@@ -69,6 +78,28 @@ func NewRoomHandler(ctx context.Context, roomSvc roomServicer, beginner raceBegi
 // Wait blocks until every race begin launched by Start has finished.
 func (h *RoomHandler) Wait() {
 	h.background.Wait()
+}
+
+// ResumeRaces relaunches Run, on the handler's lifetime, for every race left
+// in progress when the server last stopped, so those races still finalize.
+// It does nothing when the beginner cannot list unfinished races.
+func (h *RoomHandler) ResumeRaces() error {
+	resumer, ok := h.beginner.(raceResumer)
+	if !ok {
+		return nil
+	}
+	ids, err := resumer.UnfinishedRaces(h.ctx)
+	if err != nil {
+		return err
+	}
+	for _, raceID := range ids {
+		h.background.Add(1)
+		go func() {
+			defer h.background.Done()
+			h.runRace(h.ctx, uuid.Nil, raceID)
+		}()
+	}
+	return nil
 }
 
 func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -262,9 +293,14 @@ func (h *RoomHandler) beginRace(ctx context.Context, roomID uuid.UUID) {
 		}
 		return
 	}
-	if err := h.beginner.Run(ctx, race.ID); err != nil {
+	h.runRace(ctx, roomID, race.ID)
+}
+
+// runRace watches a race until it is finalized or ctx ends.
+func (h *RoomHandler) runRace(ctx context.Context, roomID, raceID uuid.UUID) {
+	if err := h.beginner.Run(ctx, raceID); err != nil {
 		if !errors.Is(err, context.Canceled) {
-			slog.ErrorContext(ctx, "race run failed", "room_id", roomID, "race_id", race.ID, "error", err)
+			slog.ErrorContext(ctx, "race run failed", "room_id", roomID, "race_id", raceID, "error", err)
 		}
 	}
 }

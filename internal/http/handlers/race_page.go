@@ -155,11 +155,24 @@ func (h *RacePageHandler) roomRace(w http.ResponseWriter, r *http.Request, toLob
 			http.Redirect(w, r, lobbyPath(roomID), http.StatusSeeOther)
 			return uuid.Nil, app.RoomRace{}, false
 		}
+		if toLobby && errors.Is(err, app.ErrParticipantNotFound) {
+			// A racer dropped before the start has no participant row, so
+			// race.mjs never runs for them: tell them on the page itself.
+			h.renderer.Page(w, http.StatusNotFound, "room-unavailable.html", map[string]any{
+				"User": user, "Message": removedFromRaceMessage,
+			})
+			return uuid.Nil, app.RoomRace{}, false
+		}
 		writeRaceError(w, r, err)
 		return uuid.Nil, app.RoomRace{}, false
 	}
 	return user.ID, race, true
 }
+
+// removedFromRaceMessage is what the race page shows someone who is not in
+// the race. RoomRace cannot tell a racer dropped before the start apart from
+// someone who never joined, so it covers both without saying more.
+const removedFromRaceMessage = "You're not in this race. If your rowing machine wasn't connected in time, you were removed from it before the start."
 
 func writeRaceError(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError

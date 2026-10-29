@@ -819,3 +819,71 @@ func TestRoomStartRunCancelErrorDoesNotLog(t *testing.T) {
 		}
 	}
 }
+
+// resumingBeginner lists races left unfinished by an earlier server run.
+type resumingBeginner struct {
+	fakeBeginner
+	unfinished []uuid.UUID
+	listErr    error
+}
+
+func (b *resumingBeginner) UnfinishedRaces(context.Context) ([]uuid.UUID, error) {
+	return b.unfinished, b.listErr
+}
+
+// At startup every race left in progress is watched again, on the handler's
+// lifetime, so it still finalizes; nothing is begun again.
+func TestRoomResumeRacesRunsEveryUnfinishedRace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first, second := uuid.New(), uuid.New()
+	beginner := &resumingBeginner{unfinished: []uuid.UUID{first, second}}
+	h := handlers.NewRoomHandler(ctx, recordingRoomService(func(roomCall) error { return nil }), beginner, nil, false)
+
+	if err := h.ResumeRaces(); err != nil {
+		t.Fatal(err)
+	}
+	h.Wait()
+
+	got := map[uuid.UUID]bool{}
+	for _, id := range beginner.runs {
+		got[id] = true
+	}
+	if len(beginner.runs) != 2 || !got[first] || !got[second] {
+		t.Fatalf("runs = %v, want %s and %s", beginner.runs, first, second)
+	}
+	if len(beginner.rooms) != 0 {
+		t.Fatalf("begins = %v, want none", beginner.rooms)
+	}
+}
+
+// Resumed runs end with the handler's lifetime, so Wait returns on shutdown.
+func TestRoomResumeRacesStopsWithTheHandlerLifetime(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	beginner := &resumingBeginner{unfinished: []uuid.UUID{uuid.New()}}
+	beginner.runBlock = true
+	beginner.runStarted = started
+	h := handlers.NewRoomHandler(ctx, recordingRoomService(func(roomCall) error { return nil }), beginner, nil, false)
+
+	if err := h.ResumeRaces(); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	cancel()
+	h.Wait()
+}
+
+func TestRoomResumeRacesReportsAListError(t *testing.T) {
+	listErr := errors.New("db down")
+	beginner := &resumingBeginner{listErr: listErr}
+	h := handlers.NewRoomHandler(context.Background(), recordingRoomService(func(roomCall) error { return nil }), beginner, nil, false)
+
+	if err := h.ResumeRaces(); !errors.Is(err, listErr) {
+		t.Fatalf("err = %v, want %v", err, listErr)
+	}
+	h.Wait()
+	if len(beginner.runs) != 0 {
+		t.Fatalf("runs = %v, want none", beginner.runs)
+	}
+}

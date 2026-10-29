@@ -347,3 +347,29 @@ func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 		t.Errorf("results leaked an email: %s", rr.Body.String())
 	}
 }
+
+// A racer dropped before the start has no participant row, so race.mjs would
+// never run to tell them; the page itself says they are not in the race,
+// keeps the 404 status and leaks nothing about the race.
+func TestRacePageTellsADroppedRacerTheyWereRemoved(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID := uuid.New()
+	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{}, fmt.Errorf("room race: %w", app.ErrParticipantNotFound)
+	}}
+
+	rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{"removed from it before the start", `href="/dashboard"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page missing %q; body=%q", want, body)
+		}
+	}
+	if strings.Contains(body, "race-finish-modal") || strings.Contains(body, user.Email) {
+		t.Errorf("removed racer's page shows the race or an email: %q", body)
+	}
+}

@@ -298,3 +298,70 @@ test('finishing your own row says you are waiting for the others', async functio
   assert.match(page.status.textContent, /waiting for the other rowers/i);
   assert.equal(page.parts.modal.open, false, 'the modal waits for the race to end');
 });
+
+// Starts a race whose countdown has already passed, so the view is racing and
+// streaming. after(n) answers the n-th status call made once racing began.
+async function startRacing(after, extra) {
+  var statusCalls = 0;
+  var page = setupPage({
+    finished: false,
+    responses: Object.assign({
+      '/rooms/r1/race/status': function () {
+        statusCalls++;
+        if (statusCalls === 1) {
+          return jsonResponse(200, { race_id: 'race-1', race_starts_at: new Date(Date.now() - 1000).toISOString(), server_time: new Date().toISOString(), racers: [] });
+        }
+        return after(statusCalls - 1);
+      }
+    }, extra || {})
+  });
+  page.track.dataset.finishPollMs = '1';
+  globalThis.window.startRaceStream = function () {};
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await settle();
+  pixi.ticks[0]({ deltaTime: 1 }); // GO!: streaming starts, and so does the finish check
+  return page;
+}
+
+function statusCount(page) {
+  return page.calls.filter(function (u) { return u === '/rooms/r1/race/status'; }).length;
+}
+
+async function waitFor(check) {
+  for (var i = 0; i < 50 && !check(); i++) await new Promise(function (resolve) { setTimeout(resolve, 2); });
+}
+
+test('while racing, a status check reporting finished opens the modal once, even with no finished frame', async function () {
+  var page = await startRacing(function (n) {
+    if (n === 1) return Promise.reject(new Error('offline')); // ignored; the check goes on
+    return jsonResponse(200, { finished: n >= 3, racers: [] });
+  }, { '/rooms/r1/race/results': function () { return jsonResponse(200, RESULTS); } });
+  await waitFor(function () { return page.parts.modal.open; });
+  assert.equal(page.parts.modal.open, true);
+  var checks = statusCount(page);
+  await new Promise(function (resolve) { setTimeout(resolve, 20); });
+  assert.equal(statusCount(page), checks, 'the check stops once the modal opens');
+  assert.equal(page.calls.filter(function (u) { return u === '/rooms/r1/race/results'; }).length, 1, 'results load once');
+});
+
+test('a finished frame and then a finished status check open the modal only once', async function () {
+  var page = await startRacing(function () { return jsonResponse(200, { finished: true, racers: [] }); },
+    { '/rooms/r1/race/results': function () { return jsonResponse(200, RESULTS); } });
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+  await new Promise(function (resolve) { setTimeout(resolve, 20); });
+  assert.equal(page.parts.modal.open, true);
+  assert.equal(page.calls.filter(function (u) { return u === '/rooms/r1/race/results'; }).length, 1, 'results load once');
+  assert.equal(statusCount(page), 1, 'no finish check runs after the frame opened the modal');
+});
+
+test('while racing, a 404 status check shows the removal notice and stops checking', async function () {
+  var page = await startRacing(function () { return jsonResponse(404, null); });
+  await waitFor(function () { return page.status.textContent === REMOVED; });
+  assert.equal(page.status.textContent, REMOVED);
+  var checks = statusCount(page);
+  await new Promise(function (resolve) { setTimeout(resolve, 20); });
+  assert.equal(statusCount(page), checks, 'no more checks after removal');
+  assert.equal(page.parts.modal.open, false);
+});

@@ -21,6 +21,7 @@ var BOAT_WIDTH = 16;
 var BOAT_LENGTH = 44;
 var CHECKER_SIZE = 8;
 var POLL_INTERVAL_MS = 500;
+var FINISH_POLL_MS = 5000; // while racing, how often to check whether the race has ended
 var READY_RETRY_MS = 2000;
 var UNREADY_ALPHA = 0.35; // rivals still connecting their equipment are dimmed
 var EASE_PER_FRAME = 0.15; // share of the remaining gap a rower closes each 60fps frame
@@ -48,6 +49,7 @@ export async function startRaceView(trackEl, PIXI) {
   var resultsUrl = trackEl.dataset.resultsUrl;
   var dashboardUrl = trackEl.dataset.dashboardUrl || '/dashboard';
   var finishedOnLoad = trackEl.dataset.finished === 'true';
+  var finishPollMs = trackEl.dataset.finishPollMs ? Number(trackEl.dataset.finishPollMs) : FINISH_POLL_MS;
   var statusEl = document.getElementById('race-status');
   var modalEl = document.getElementById('race-finish-modal');
   var lanes = Array.from(document.querySelectorAll('#race-lanes [data-user-id]'), function (el) {
@@ -249,6 +251,24 @@ export async function startRaceView(trackEl, PIXI) {
     if (streaming) return;
     streaming = true;
     if (typeof window.startRaceStream === 'function') window.startRaceStream(raceId);
+    watchForFinish();
+  }
+
+  // The finished frame is sent once; a socket that is down at that moment, or
+  // a publish that fails, would leave this racer on the track. So while
+  // racing, the status endpoint is checked too, and finished:true opens the
+  // modal the same way the frame does.
+  async function watchForFinish() {
+    while (!modalOpened && !removed) {
+      await new Promise(function (resolve) { setTimeout(resolve, finishPollMs); });
+      if (modalOpened || removed) return;
+      var res = await request(statusUrl, { headers: { Accept: 'application/json' } });
+      if (modalOpened || removed) return;
+      if (res && res.status === 404) return dropped();
+      if (!res || !res.ok) continue;
+      var body = await res.json().catch(function () { return null; });
+      if (body && body.finished === true) return openFinishModal();
+    }
   }
 
   function dropped() {

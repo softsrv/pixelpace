@@ -50,6 +50,15 @@ func (r *Router) Wait() {
 	}
 }
 
+// ResumeRaces relaunches end-of-race watching for every race left in
+// progress by a previous run of the server. Call it once at startup.
+func (r *Router) ResumeRaces() error {
+	if r.roomH == nil {
+		return nil
+	}
+	return r.roomH.ResumeRaces()
+}
+
 // NewRouter builds and returns the main http.Handler with all routes and middleware.
 // ctx controls the lifetime of background goroutines (rate-limiter sweepers and race begins); it
 // should be cancelled during application shutdown after the HTTP server drains.

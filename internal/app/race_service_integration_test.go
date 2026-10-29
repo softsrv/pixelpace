@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -861,5 +862,25 @@ func TestRaceServiceResultsSingleFinisherIsRankOne(t *testing.T) {
 	}
 	if len(got.Results) != 1 || got.Results[0].Rank == nil || *got.Results[0].Rank != 1 || got.Results[0].Status != "finished" {
 		t.Fatalf("single racer results=%+v", got.Results)
+	}
+}
+
+// A begun race whose room is still in_progress is listed for resuming; once
+// it finalizes it is not.
+func TestRaceServiceUnfinishedRaces(t *testing.T) {
+	const target = 500000
+	f := seedRaceRoom(t, 1, target, time.Minute)
+	f.begin(t)
+	ctx := context.Background()
+	if ids, err := f.svc.UnfinishedRaces(ctx); err != nil || !slices.Contains(ids, f.race.ID) {
+		t.Fatalf("unfinished=%v err=%v, want it to include %s", ids, err, f.race.ID)
+	}
+	f.now = f.race.StartedAt.Time.Add(2 * time.Minute)
+	f.ingest(t, 0, 100000, target, f.race.StartedAt.Time.Add(100*time.Second))
+	if err := f.svc.Run(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ids, err := f.svc.UnfinishedRaces(ctx); err != nil || slices.Contains(ids, f.race.ID) {
+		t.Fatalf("unfinished=%v err=%v, want it without the finished race %s", ids, err, f.race.ID)
 	}
 }

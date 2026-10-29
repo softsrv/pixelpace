@@ -67,6 +67,13 @@ UPDATE races SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL;
 -- name: FinishRaceRoom :exec
 UPDATE rooms SET status = 'finished' WHERE id = $1 AND status = 'in_progress';
 
+-- Begun races not yet finalized whose room is still racing, for resuming Run.
+-- name: ListUnfinishedRaces :many
+SELECT r.id
+FROM races r JOIN rooms ro ON ro.id = r.room_id
+WHERE r.finished_at IS NULL AND ro.status = 'in_progress'
+ORDER BY r.id;
+
 -- Every participant with their public name, recorded finish and latest sample.
 -- name: ListRaceResults :many
 SELECT p.user_id, u.display_name, p.status,

@@ -85,6 +85,8 @@ type Querier interface {
 	// Lanes follow the same order Begin seeds race participants in.
 	ListRoomLineup(ctx context.Context, roomID uuid.UUID) ([]ListRoomLineupRow, error)
 	ListRoomRoster(ctx context.Context, roomID uuid.UUID) ([]ListRoomRosterRow, error)
+	// Begun races not yet finalized whose room is still racing, for resuming Run.
+	ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error)
 	ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)

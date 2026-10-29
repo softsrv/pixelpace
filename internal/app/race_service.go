@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"time"
@@ -621,16 +622,50 @@ type raceFinishedFrame struct {
 // the staleness threshold, so a race where everyone is DNF also ends. A race
 // that is already finalized returns nil without publishing again. Run polls
 // every RacePollInterval and returns the wrapped context error when cancelled.
+// A failed check is logged and retried with a backoff of up to
+// maxRaceRetryInterval, so one transient database error never strands a race.
+// A publish failure after the finalize commit is returned: the race is final,
+// and clients learn it from the race status endpoint.
 func (s *RaceService) Run(ctx context.Context, raceID uuid.UUID) error {
+	wait := s.cfg.RacePollInterval
 	for {
 		done, err := s.finishIfOver(ctx, raceID)
-		if err != nil || done {
+		if done {
 			return err
 		}
-		if err := s.cfg.Sleep(ctx, s.cfg.RacePollInterval); err != nil {
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return fmt.Errorf("race run: %w", ctxErr)
+			}
+			if errors.Is(err, pgx.ErrNoRows) {
+				// The race does not exist; retrying cannot change that.
+				return err
+			}
+			slog.ErrorContext(ctx, "race run check failed; retrying", "race_id", raceID, "retry_in", wait, "error", err)
+		}
+		if err := s.cfg.Sleep(ctx, wait); err != nil {
 			return fmt.Errorf("race run: %w", err)
 		}
+		if err != nil {
+			wait = min(wait*2, max(maxRaceRetryInterval, s.cfg.RacePollInterval))
+		} else {
+			wait = s.cfg.RacePollInterval
+		}
 	}
+}
+
+// maxRaceRetryInterval caps Run's backoff after failed end-of-race checks.
+const maxRaceRetryInterval = 30 * time.Second
+
+// UnfinishedRaces lists races still in progress: begun, not finalized, with
+// their room in_progress. Callers run Run for each to resume finalization
+// after a restart.
+func (s *RaceService) UnfinishedRaces(ctx context.Context) ([]uuid.UUID, error) {
+	ids, err := s.q.ListUnfinishedRaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list unfinished races: %w", err)
+	}
+	return ids, nil
 }
 
 // finishIfOver finalizes the race in one locked transaction when it is over.

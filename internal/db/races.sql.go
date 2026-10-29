@@ -444,6 +444,34 @@ func (q *Queries) ListRoomLineup(ctx context.Context, roomID uuid.UUID) ([]ListR
 	return items, nil
 }
 
+const listUnfinishedRaces = `-- name: ListUnfinishedRaces :many
+SELECT r.id
+FROM races r JOIN rooms ro ON ro.id = r.room_id
+WHERE r.finished_at IS NULL AND ro.status = 'in_progress'
+ORDER BY r.id
+`
+
+// Begun races not yet finalized whose room is still racing, for resuming Run.
+func (q *Queries) ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listUnfinishedRaces)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockRace = `-- name: LockRace :one
 SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, rt.kind, rt.target_value
 FROM races r JOIN race_types rt ON rt.id = r.race_type_id

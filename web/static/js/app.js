@@ -80,6 +80,8 @@ document.body.addEventListener('token-expired', async function () {
 
   var rowingMachineCard = document.getElementById('rowing-machine-card');
   var devMode = rowingMachineCard && rowingMachineCard.getAttribute('data-dev-mode') === 'true';
+  // Only the race page renders #race-track; the dev mock PM5 runs there only.
+  var racePage = !!document.getElementById('race-track');
   var connectionInfo = document.getElementById('bt-connection-info');
   var metricsRegion = document.getElementById('bt-metrics');
   var rowerCanvas = document.getElementById('bt-rower-canvas');
@@ -794,6 +796,7 @@ document.body.addEventListener('token-expired', async function () {
 
   function startMockPm5() {
     if (!devMode) return;
+    if (!racePage) return;
     revealRowerCanvas();
     showZeroMetrics();
     showConnectionInfo('Development mock PM5 — streaming synthetic rowing metrics.');
@@ -806,7 +809,7 @@ document.body.addEventListener('token-expired', async function () {
     emitMockPm5Status();
   }
 
-  if (devMode) startMockPm5();
+  if (devMode && racePage) startMockPm5();
   // DEV_MOCK_PM5_END
 
   function decodePm5Notification(uuid, dv) {

@@ -20,7 +20,9 @@ function metricElement() {
   };
 }
 
-function runDashboardApp(devMode = true, protocol = 'https:') {
+// options.race renders the race page: #race-track plus the dev simulator panel
+// race.html carries. Without it the harness is the dashboard, which has neither.
+function runDashboardApp(devMode = true, protocol = 'https:', options = {}) {
   var metricEls = {};
   ['elapsedTime', 'distance', 'pace', 'strokeRate', 'power', 'strokeCount', 'calories', 'heartRate'].forEach(function (key) {
     metricEls[key] = metricElement();
@@ -61,13 +63,16 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
     'rowing-machine-card': rowingMachineCard,
     'bt-connection-info': metricElement(),
     'bt-metrics': metricsRegion,
-    'bt-rower-canvas': rowerCanvas,
-    // The development-mode simulator panel dashboard.html and race.html render.
-    'sim-panel': metricElement(),
-    'sim-spm': Object.assign(metricElement(), { value: '26' }),
-    'sim-pace': Object.assign(metricElement(), { value: '2:12' }),
-    'sim-start': Object.assign(metricElement(), { textContent: 'Stop rowing' })
+    'bt-rower-canvas': rowerCanvas
   };
+  if (options.race) {
+    byID['race-track'] = metricElement();
+    // The development-mode simulator panel race.html renders.
+    byID['sim-panel'] = metricElement();
+    byID['sim-spm'] = Object.assign(metricElement(), { value: '26' });
+    byID['sim-pace'] = Object.assign(metricElement(), { value: '2:12' });
+    byID['sim-start'] = Object.assign(metricElement(), { textContent: 'Stop rowing' });
+  }
   var sockets = [];
   var constructorFails = false;
   class MockWebSocket {
@@ -228,7 +233,7 @@ function runDashboardApp(devMode = true, protocol = 'https:') {
 }
 
 test('open race socket sends one converted sample per notification while retaining local rendering and animation', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   assert.equal(app.sockets.length, 0, 'no streaming until a race is active');
   app.tick();
   assert.equal(app.dateReads(), 0);
@@ -291,7 +296,7 @@ test('every real PM5 notification renders and streams a complete latest-reading 
 });
 
 test('connecting, closing, and closed sockets buffer each emission with its own timestamp', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   var timestamps = ['2026-10-08T12:00:01.000Z', '2026-10-08T12:00:02.000Z', '2026-10-08T12:00:03.000Z'];
   timestamps.forEach(function (timestamp, index) {
@@ -310,7 +315,7 @@ test('connecting, closing, and closed sockets buffer each emission with its own 
 });
 
 test('reconnect alone synchronously replays the whole ordered batch with original timestamps and clears it', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   var firstSocket = stream.socket;
   firstSocket.open();
@@ -371,7 +376,7 @@ test('real BLE samples also buffer while disconnected and retain their original 
 });
 
 test('a send failure retains only the unsent suffix for the next reconnect without interrupting rendering', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   app.tick();
   app.tick();
@@ -394,7 +399,7 @@ test('a send failure retains only the unsent suffix for the next reconnect witho
 });
 
 test('socket errors retry with bounded backoff, reset on open, and stop cancels reconnection', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   stream.socket.onerror();
   assert.equal(stream.socket.readyState, 2);
@@ -420,7 +425,7 @@ test('socket errors retry with bounded backoff, reset on open, and stop cancels 
 });
 
 test('samples buffer even when socket construction fails before a socket exists', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   app.failConstruction(true);
   var stream = app.start('race-one');
   assert.equal(stream.socket, null);
@@ -439,7 +444,7 @@ test('samples buffer even when socket construction fails before a socket exists'
 });
 
 test('starting the same race is idempotent and switching races cannot replay an old race buffer', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   assert.throws(function () { app.start(''); }, /race id/);
   assert.equal(app.sockets.length, 0);
   var first = app.start('race-one');
@@ -465,7 +470,7 @@ function rosterFrame(players) {
 }
 
 test('a roster frame populates stream.roster, nameFor and the rendered roster; reconnect replaces it', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   var first = stream.socket;
   first.open();
@@ -491,7 +496,7 @@ test('a roster frame populates stream.roster, nameFor and the rendered roster; r
 });
 
 test('a roster id of __proto__ is an own key and cannot reach the prototype', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   stream.socket.open();
   stream.socket.onmessage(rosterFrame([{ user_id: '__proto__', name: 'Eve' }]));
@@ -501,7 +506,7 @@ test('a roster id of __proto__ is an own key and cannot reach the prototype', fu
 });
 
 test('inbound telemetry is recorded on stream.racers labelled with the roster name only', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   var socket = stream.socket;
   socket.open();
@@ -516,7 +521,7 @@ test('inbound telemetry is recorded on stream.racers labelled with the roster na
 });
 
 test('malformed inbound frames are ignored and leave buffering and replay unaffected', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   var socket = stream.socket;
   socket.open();
@@ -538,7 +543,7 @@ test('malformed inbound frames are ignored and leave buffering and replay unaffe
 });
 
 test('broadcast frames from the current socket are re-dispatched as race telemetry', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   var firstSocket = stream.socket;
   firstSocket.open();
@@ -590,7 +595,7 @@ test('a finished frame dispatches pixelpace:race-finished and no telemetry, and 
 });
 
 test('each streamed sample is also dispatched locally, only while a race is active', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   app.tick();
   assert.equal(app.events('pixelpace:local-telemetry').length, 0, 'no local race telemetry before a race');
   var stream = app.start('race-one');
@@ -604,7 +609,7 @@ test('each streamed sample is also dispatched locally, only while a race is acti
 });
 
 test('the race-started event measures streamed samples from the race start', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   app.tick();
   app.tick();
   var stream = app.start('race-one');
@@ -620,7 +625,7 @@ test('the race-started event measures streamed samples from the race start', fun
 });
 
 test('simulated race samples carry the simulator state decoded at 0.01 s and 0.1 m', function () {
-  var app = runDashboardApp();
+  var app = runDashboardApp(true, 'https:', { race: true });
   var stream = app.start('race-one');
   stream.socket.open();
   var n = 25;
@@ -641,10 +646,13 @@ test('simulated race samples carry the simulator state decoded at 0.01 s and 0.1
   assert.equal(app.metricEls.power.textContent, Math.round(watts) + ' W');
 });
 
-test('the dev mock reports a connected rowing machine', function () {
-  var app = runDashboardApp();
-  assert.deepEqual(JSON.parse(JSON.stringify(app.events('pixelpace:pm5-status'))), [{ connected: true }]);
-  assert.equal(app.window.isPm5Connected(), true);
+test('the dev mock reports a connected rowing machine on the race page only', function () {
+  var race = runDashboardApp(true, 'https:', { race: true });
+  assert.deepEqual(JSON.parse(JSON.stringify(race.events('pixelpace:pm5-status'))), [{ connected: true }]);
+  assert.equal(race.window.isPm5Connected(), true);
+  var dashboard = runDashboardApp(true);
+  assert.equal(dashboard.events('pixelpace:pm5-status').length, 0, 'the dev dashboard runs no mock');
+  assert.equal(dashboard.window.isPm5Connected(), false);
   var real = runDashboardApp(false);
   assert.equal(real.events('pixelpace:pm5-status').length, 0);
   assert.equal(real.window.isPm5Connected(), false);

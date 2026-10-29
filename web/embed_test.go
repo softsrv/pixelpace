@@ -501,25 +501,27 @@ func TestRacePageRendersFinishModal(t *testing.T) {
 }
 
 // TestSimulatorPanelRendersOnlyInDevMode renders the REAL dashboard and race
-// pages and asserts the PM5 simulator panel (with its controls and defaults)
-// appears right after #bt-connection-info in development mode, before the
-// race page's #bt-metrics, and is absent in production.
+// pages. In development the race page shows the PM5 simulator panel (with its
+// controls and defaults) right after #bt-connection-info and before
+// #bt-metrics, while the dashboard shows no simulator element at all but still
+// marks the card data-dev-mode="true". In production neither page renders it.
 func TestSimulatorPanelRendersOnlyInDevMode(t *testing.T) {
 	raceID := uuid.MustParse("01950000-0000-7000-8000-0000000000aa")
 	selfID := uuid.MustParse("01950000-0000-7000-8000-0000000000bb")
 	roomID := uuid.MustParse("01950000-0000-7000-8000-0000000000dd")
 	pages := []struct {
-		name string
-		page string
-		data func(devMode bool) map[string]any
+		name     string
+		page     string
+		simPanel bool
+		data     func(devMode bool) map[string]any
 	}{
-		{name: "dashboard", page: "templates/dashboard.html", data: func(devMode bool) map[string]any {
+		{name: "dashboard", page: "templates/dashboard.html", simPanel: false, data: func(devMode bool) map[string]any {
 			return map[string]any{
 				"User":    map[string]any{"Email": "rower@example.com", "EmailVerified": true},
 				"DevMode": devMode,
 			}
 		}},
-		{name: "race", page: "templates/race.html", data: func(devMode bool) map[string]any {
+		{name: "race", page: "templates/race.html", simPanel: true, data: func(devMode bool) map[string]any {
 			return map[string]any{
 				"User":    map[string]any{"ID": selfID, "Email": "rower@example.com"},
 				"DevMode": devMode,
@@ -544,35 +546,47 @@ func TestSimulatorPanelRendersOnlyInDevMode(t *testing.T) {
 			}
 
 			dev := render(true)
-			for _, want := range []string{
-				`id="sim-panel"`,
-				`data-sim-control="panel"`,
-				`id="sim-spm" type="number" min="0" max="60" step="1" value="26"`,
-				`data-sim-control="spm"`,
-				`id="sim-pace" type="text" value="2:12"`,
-				`data-sim-control="pace"`,
-				`data-sim-control="start">Stop rowing</button>`,
-				`id="sim-start"`,
-			} {
-				if !strings.Contains(dev, want) {
-					t.Errorf("dev-mode %s page missing %q", tc.name, want)
+			if !tc.simPanel {
+				if !strings.Contains(dev, `data-dev-mode="true"`) {
+					t.Errorf("dev-mode %s page should mark the card data-dev-mode=true", tc.name)
 				}
-			}
-			info := strings.Index(dev, `id="bt-connection-info"`)
-			panel := strings.Index(dev, `id="sim-panel"`)
-			metrics := strings.Index(dev, `id="bt-metrics"`)
-			if info == -1 || panel <= info {
-				t.Errorf("%s: #sim-panel should follow #bt-connection-info (info=%d panel=%d)", tc.name, info, panel)
-			}
-			if metrics == -1 || metrics <= panel {
-				t.Errorf("%s: #sim-panel should precede #bt-metrics (panel=%d metrics=%d)", tc.name, panel, metrics)
+				for _, banned := range []string{"Simulator (development only)", "sim-panel", "sim-spm", "sim-pace", "sim-start", "data-sim-control"} {
+					if strings.Contains(dev, banned) {
+						t.Errorf("dev-mode %s page renders %q", tc.name, banned)
+					}
+				}
+			} else {
+				for _, want := range []string{
+					`Simulator (development only)`,
+					`id="sim-panel"`,
+					`data-sim-control="panel"`,
+					`id="sim-spm" type="number" min="0" max="60" step="1" value="26"`,
+					`data-sim-control="spm"`,
+					`id="sim-pace" type="text" value="2:12"`,
+					`data-sim-control="pace"`,
+					`data-sim-control="start">Stop rowing</button>`,
+					`id="sim-start"`,
+				} {
+					if !strings.Contains(dev, want) {
+						t.Errorf("dev-mode %s page missing %q", tc.name, want)
+					}
+				}
+				info := strings.Index(dev, `id="bt-connection-info"`)
+				panel := strings.Index(dev, `id="sim-panel"`)
+				metrics := strings.Index(dev, `id="bt-metrics"`)
+				if info == -1 || panel <= info {
+					t.Errorf("%s: #sim-panel should follow #bt-connection-info (info=%d panel=%d)", tc.name, info, panel)
+				}
+				if metrics == -1 || metrics <= panel {
+					t.Errorf("%s: #sim-panel should precede #bt-metrics (panel=%d metrics=%d)", tc.name, panel, metrics)
+				}
 			}
 
 			prod := render(false)
 			if !strings.Contains(prod, `data-dev-mode="false"`) {
 				t.Errorf("production %s page should mark the card data-dev-mode=false", tc.name)
 			}
-			for _, banned := range []string{"sim-panel", "sim-spm", "sim-pace", "sim-start", "data-sim-control"} {
+			for _, banned := range []string{"Simulator (development only)", "sim-panel", "sim-spm", "sim-pace", "sim-start", "data-sim-control"} {
 				if strings.Contains(prod, banned) {
 					t.Errorf("production %s page renders %q", tc.name, banned)
 				}

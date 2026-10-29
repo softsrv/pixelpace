@@ -11,6 +11,9 @@ on:
 env:
   IMAGE: trriplejay/pixelpace
 
+permissions:
+  contents: read
+
 jobs:
   image:
     runs-on: ubuntu-latest

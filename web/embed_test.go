@@ -165,6 +165,7 @@ func TestEveryPageHasFooter(t *testing.T) {
 		name     string
 		pagePath string
 	}{
+		{name: "landing", pagePath: "templates/landing.html"},
 		{name: "login", pagePath: "templates/auth/login.html"},
 		{name: "register", pagePath: "templates/auth/register.html"},
 		{name: "forgot-password", pagePath: "templates/auth/forgot-password.html"},
@@ -247,6 +248,170 @@ func TestEveryPageHasFooter(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLandingPageRender renders base.html + partials + templates/landing.html
+// without a user and verifies all constraints in CLM-5, CLM-6, CLM-7, CLM-8, and CLM-9.
+func TestLandingPageRender(t *testing.T) {
+	base, err := template.ParseFS(FS, "templates/base.html")
+	if err != nil {
+		t.Fatalf("parse base.html: %v", err)
+	}
+	if _, err := base.ParseFS(FS, "templates/partials/*.html"); err != nil {
+		t.Fatalf("parse partials: %v", err)
+	}
+	if _, err := base.ParseFS(FS, "templates/landing.html"); err != nil {
+		t.Fatalf("parse templates/landing.html: %v", err)
+	}
+
+	var buf strings.Builder
+	if err := base.ExecuteTemplate(&buf, "base.html", nil); err != nil {
+		t.Fatalf("execute base.html with landing.html: %v", err)
+	}
+	out := buf.String()
+
+	// CLM-8: Every page's <title> default and navbar brand read 'PixelPace' instead of 'App',
+	// and pages render under data-theme="dracula".
+	if !strings.Contains(out, `<title>PixelPace</title>`) {
+		t.Errorf("rendered output missing <title>PixelPace</title>")
+	}
+	if strings.Contains(out, `<title>App</title>`) {
+		t.Errorf("rendered output contains forbidden <title>App</title>")
+	}
+	if !strings.Contains(out, `data-theme="dracula"`) {
+		t.Errorf("rendered output missing data-theme=\"dracula\"")
+	}
+	if !strings.Contains(out, `<span class="text-xl font-bold">PixelPace</span>`) {
+		t.Errorf("rendered output missing PixelPace navbar brand (plain text on the landing page)")
+	}
+	if strings.Contains(out, `<a href="/" class="text-xl font-bold">`) {
+		t.Errorf("landing page navbar brand must not be a link")
+	}
+	if strings.Contains(out, `font-bold">App<`) {
+		t.Errorf("rendered output contains forbidden App navbar brand")
+	}
+
+	// The only links on the whole rendered page are Sign up (/register) and Sign in (/login).
+	pageHrefs := regexp.MustCompile(`<a\b[^>]*\bhref="([^"]*)"`).FindAllStringSubmatch(out, -1)
+	sawRegister, sawLogin := false, false
+	for _, m := range pageHrefs {
+		switch m[1] {
+		case "/register":
+			sawRegister = true
+		case "/login":
+			sawLogin = true
+		default:
+			t.Errorf("forbidden link on landing page: href=%q (only /register and /login allowed)", m[1])
+		}
+	}
+	if !sawRegister || !sawLogin {
+		t.Errorf("landing page links: register=%v login=%v, want both", sawRegister, sawLogin)
+	}
+
+	// CLM-5: Shows a 'Sign up' link to /register and a 'Sign in' link to /login,
+	// in page content and in nav-actions area.
+	// Feature descriptions contain no <a> elements, and these are the only links in landing content.
+	mainStart := strings.Index(out, "<main")
+	mainEnd := strings.Index(out, "</main>")
+	if mainStart == -1 || mainEnd == -1 || mainStart >= mainEnd {
+		t.Fatalf("could not locate <main>...</main> in rendered output")
+	}
+	mainContent := out[mainStart:mainEnd]
+
+	// Check nav-actions area (outside <main>) has Sign in and Sign up links
+	navStart := strings.Index(out, "<nav")
+	navEnd := strings.Index(out, "</nav>")
+	if navStart == -1 || navEnd == -1 || navStart >= navEnd {
+		t.Fatalf("could not locate <nav>...</nav> in rendered output")
+	}
+	navContent := out[navStart:navEnd]
+	if !strings.Contains(navContent, `href="/login"`) || !strings.Contains(navContent, "Sign in") {
+		t.Errorf("nav-actions missing 'Sign in' link to /login")
+	}
+	if !strings.Contains(navContent, `href="/register"`) || !strings.Contains(navContent, "Sign up") {
+		t.Errorf("nav-actions missing 'Sign up' link to /register")
+	}
+
+	// Check main content has Sign in and Sign up links
+	if !strings.Contains(mainContent, `href="/login"`) || !strings.Contains(mainContent, "Sign in") {
+		t.Errorf("main content missing 'Sign in' link to /login")
+	}
+	if !strings.Contains(mainContent, `href="/register"`) || !strings.Contains(mainContent, "Sign up") {
+		t.Errorf("main content missing 'Sign up' link to /register")
+	}
+
+	// Assert every href inside landing content is strictly /register or /login
+	hrefRe := regexp.MustCompile(`href="([^"]*)"`)
+	matches := hrefRe.FindAllStringSubmatch(mainContent, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no href attributes found in main content")
+	}
+	for _, m := range matches {
+		href := m[1]
+		if href != "/register" && href != "/login" {
+			t.Errorf("forbidden href in landing content: %q (only /register and /login allowed)", href)
+		}
+	}
+
+	// CLM-6: PixelPace is real-time rowing races on a connected rowing machine,
+	// connecting a Concept2 PM5 over Bluetooth, and four feature sections:
+	// race friends (rooms, join codes, friend invites), race strangers (Quick Match),
+	// badges and achievements, sync with Concept2 Logbook / ergdata.
+	requiredWords := []string{
+		"PixelPace",
+		"rowing",
+		"PM5",
+		"Bluetooth",
+		"Concept2",
+		"Quick Match",
+		"join code",
+		"friend",
+		"badge",
+		"achievement",
+		"Logbook",
+	}
+	for _, word := range requiredWords {
+		if !strings.Contains(strings.ToLower(out), strings.ToLower(word)) {
+			t.Errorf("landing page missing required word/phrase %q", word)
+		}
+	}
+
+	// CLM-7: The rendered landing page contains no 'Coming soon' text in any casing;
+	// every feature is presented as live.
+	if strings.Contains(strings.ToLower(out), "coming soon") {
+		t.Errorf("landing page contains forbidden 'coming soon' text")
+	}
+
+	// CLM-9: <main> uses a wide container (no max-w-md, never max-w-4xl) while keeping
+	// 'flex-1 container mx-auto px-4 py-8'; landing content stacks in 1 col on phones and multi-col on desktop.
+	mainTokens, ok := extractTagClassTokens(out, "main")
+	if !ok {
+		t.Fatalf("<main> tag or class attribute not found in rendered landing output")
+	}
+	for _, required := range []string{"flex-1", "container", "mx-auto", "px-4", "py-8"} {
+		if !containsToken(mainTokens, required) {
+			t.Errorf("<main> missing required base class %q; tokens: %v", required, mainTokens)
+		}
+	}
+	if containsToken(mainTokens, "max-w-md") {
+		t.Errorf("<main> still contains max-w-md in landing page; should be wide")
+	}
+	if containsToken(mainTokens, "max-w-4xl") || strings.Contains(out, "max-w-4xl") {
+		t.Errorf("<main> or rendered landing contains forbidden max-w-4xl")
+	}
+
+	// Check responsive grid in landing content
+	landingData, err := fs.ReadFile(FS, "templates/landing.html")
+	if err != nil {
+		t.Fatalf("read templates/landing.html: %v", err)
+	}
+	landingSrc := string(landingData)
+	if !strings.Contains(landingSrc, "grid-cols-1") {
+		t.Errorf("templates/landing.html missing 'grid-cols-1' for mobile stacking")
+	}
+	if !regexp.MustCompile(`md:grid-cols-\d+`).MatchString(landingSrc) {
+		t.Errorf("templates/landing.html missing 'md:grid-cols-' multi-column class for desktop")
 	}
 }
 

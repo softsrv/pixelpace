@@ -9,7 +9,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{block "title" .}}App{{end}}</title>
+  <title>{{block "title" .}}PixelPace{{end}}</title>
   <link rel="stylesheet" href="/static/css/dist/app.css" />
   <script src="/static/js/htmx.min.js"></script>
   <script src="/static/js/app.js" defer></script>
@@ -18,7 +18,7 @@
 <body class="flex min-h-screen flex-col bg-base-200">
   <nav class="navbar bg-base-100 shadow-sm px-4">
     <div class="flex-1">
-      <a href="/" class="text-xl font-bold">App</a>
+      {{block "brand" .}}<a href="/" class="text-xl font-bold">PixelPace</a>{{end}}
     </div>
     <div class="flex-none gap-2">
       {{if .User}}
@@ -44,7 +44,7 @@
     </div>
   </nav>
 
-  <main class="flex-1 container mx-auto px-4 py-8 max-w-md">
+  <main class="flex-1 container mx-auto px-4 py-8 {{block "main-class" .}}max-w-md{{end}}">
     {{block "content" .}}{{end}}
   </main>
 

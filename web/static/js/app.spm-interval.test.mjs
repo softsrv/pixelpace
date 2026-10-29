@@ -74,8 +74,12 @@ function u24(dv, offset) {
   return dv.getUint8(offset) | (dv.getUint8(offset + 1) << 8) | (dv.getUint8(offset + 2) << 16);
 }
 
+// options.race renders the race page (#race-track and the dev simulator panel);
+// options.panel === false is the race page without the panel controls. With
+// neither, the harness is the dashboard: no #race-track and no sim-* controls.
 function runDashboardApp(devMode, options) {
-  var withPanel = !(options && options.panel === false);
+  var withPanel = !!(options && options.race) && !(options && options.panel === false);
+  var racePage = !!(options && (options.race || options.panel === false));
   var probe = { notifications: [], renders: [], depth: 0 };
   var metricEls = {};
   ['elapsedTime', 'distance', 'pace', 'strokeRate', 'power', 'strokeCount', 'calories', 'heartRate'].forEach(function (key) {
@@ -104,6 +108,12 @@ function runDashboardApp(devMode, options) {
     return name === 'data-dev-mode' && devMode ? 'true' : 'false';
   };
   var rowerCanvas = metricElement();
+  var canvasHidden = true;
+  rowerCanvas.classList = {
+    add: function (name) { if (name === 'hidden') canvasHidden = true; },
+    remove: function (name) { if (name === 'hidden') canvasHidden = false; },
+    toggle: function () {}
+  };
   rowerCanvas.width = 320;
   rowerCanvas.height = 180;
   rowerCanvas.getContext = function () {
@@ -124,7 +134,7 @@ function runDashboardApp(devMode, options) {
     };
   };
 
-  // The same markup dashboard.html and race.html render in dev mode.
+  // The simulator panel markup race.html renders in dev mode (dashboard.html has none).
   var sim = {
     panel: simElement(),
     spm: simElement('26'),
@@ -138,6 +148,7 @@ function runDashboardApp(devMode, options) {
     'bt-metrics': metricsRegion,
     'bt-rower-canvas': rowerCanvas
   };
+  if (racePage) byID['race-track'] = metricElement();
   if (withPanel) {
     byID['sim-panel'] = sim.panel;
     byID['sim-spm'] = sim.spm;
@@ -194,6 +205,7 @@ function runDashboardApp(devMode, options) {
       return null;
     },
     connectionInfo: connectionInfo,
+    canvasRevealed: function () { return !canvasHidden; },
     timers: timers,
     documentListeners: documentListeners,
     sim: sim,
@@ -269,7 +281,7 @@ test('disconnect hides the canvas and clears the timer', function () {
 });
 
 test('dev-mode simulator auto-starts at 26 spm and 2:12 with no Bluetooth present', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
 
   assert.equal(result.metricEls.strokeRate.textContent, '26 spm');
   assert.equal(result.metricEls.pace.textContent, '2:12 /500m');
@@ -281,21 +293,36 @@ test('dev-mode simulator auto-starts at 26 spm and 2:12 with no Bluetooth presen
   assert.equal(result.sim.start.textContent, 'Stop rowing');
 });
 
-test('dashboard and race pages wrap the simulator panel in the development-mode flag', function () {
-  [['dashboard', dashboardHtml], ['race', raceHtml]].forEach(function (page) {
-    var html = page[1];
-    var panel = html.match(/{{if \.DevMode}}\s*<div id="sim-panel"[^>]*data-sim-control="panel"[\s\S]*?{{end}}/);
-    assert.ok(panel, page[0] + ' wraps #sim-panel in {{if .DevMode}}');
-    assert.match(panel[0], /<input id="sim-spm" type="number" min="0" max="60" step="1" value="26"[^>]*data-sim-control="spm"/);
-    assert.match(panel[0], /<input id="sim-pace" type="text" value="2:12"[^>]*data-sim-control="pace"/);
-    assert.match(panel[0], /<button id="sim-start" type="button"[^>]*data-sim-control="start">Stop rowing<\/button>/);
-    assert.ok(html.indexOf('id="bt-connection-info"') < html.indexOf('id="sim-panel"'), page[0] + ' places the panel after #bt-connection-info');
+test('development dashboard (no #race-track) starts no simulator: no timers, no pm5-status, empty tiles, hidden canvas', function () {
+  var result = runDashboardApp(true);
+
+  assert.equal(result.timers.length, 0, 'no simulator or animation timers');
+  assert.equal(result.events('pixelpace:pm5-status').length, 0, 'no pm5-status event');
+  assert.equal(result.window.isPm5Connected(), false);
+  renderedTiles(result).forEach(function (text) { assert.equal(text, '', 'tiles stay empty'); });
+  assert.equal(result.probe.renders.length, 0, 'showZeroMetrics never ran');
+  assert.equal(result.connectionInfo.textContent, '', 'no mock connection message');
+  assert.equal(result.canvasRevealed(), false, 'the rower canvas stays hidden');
+  ['panel', 'spm', 'pace', 'start'].forEach(function (control) {
+    assert.deepEqual(result.sim[control].listeners, {}, 'no sim-' + control + ' listeners');
   });
+});
+
+test('race page wraps the simulator panel in the development-mode flag; dashboard has none', function () {
+  var panel = raceHtml.match(/{{if \.DevMode}}\s*<div id="sim-panel"[^>]*data-sim-control="panel"[\s\S]*?{{end}}/);
+  assert.ok(panel, 'race wraps #sim-panel in {{if .DevMode}}');
+  assert.match(panel[0], /<input id="sim-spm" type="number" min="0" max="60" step="1" value="26"[^>]*data-sim-control="spm"/);
+  assert.match(panel[0], /<input id="sim-pace" type="text" value="2:12"[^>]*data-sim-control="pace"/);
+  assert.match(panel[0], /<button id="sim-start" type="button"[^>]*data-sim-control="start">Stop rowing<\/button>/);
+  assert.ok(raceHtml.indexOf('id="bt-connection-info"') < raceHtml.indexOf('id="sim-panel"'), 'race places the panel after #bt-connection-info');
   assert.ok(raceHtml.indexOf('id="sim-panel"') < raceHtml.indexOf('id="bt-metrics"'), 'race panel sits before #bt-metrics');
+  ['sim-panel', 'sim-spm', 'sim-pace', 'sim-start', 'data-sim-control', 'Simulator (development only)'].forEach(function (banned) {
+    assert.equal(dashboardHtml.indexOf(banned), -1, 'dashboard.html has no ' + banned);
+  });
 });
 
 test('dev mode wires the panel controls and registers no document keydown listener', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
 
   assert.equal(result.sim.spm.listeners.input.length, 1);
   assert.equal(result.sim.spm.listeners.change.length, 1);
@@ -307,7 +334,7 @@ test('dev mode wires the panel controls and registers no document keydown listen
 
 test('the simulator streams and renders without the panel on the page', function () {
   var result;
-  assert.doesNotThrow(function () { result = runDashboardApp(true, { panel: false }); });
+  assert.doesNotThrow(function () { result = runDashboardApp(true, { race: true, panel: false }); });
 
   result.statusTicks(4);
 
@@ -317,7 +344,7 @@ test('the simulator streams and renders without the panel on the page', function
 });
 
 test('distance grows at 500/pace m/s and distance and elapsed never go backwards', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   var stream = result.window.startRaceStream('race-one');
   result.set('pace', '2:00');
   var n = 12;
@@ -337,7 +364,7 @@ test('distance grows at 500/pace m/s and distance and elapsed never go backwards
 });
 
 test('a stroke rate or pace change shows within one status tick and persists', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   var stream = result.window.startRaceStream('race-one');
   result.set('spm', '30', 'input');
   result.set('pace', '1:50', 'input');
@@ -355,7 +382,7 @@ test('a stroke rate or pace change shows within one status tick and persists', f
 });
 
 test('simulated readings fill the dashboard tiles and drive the rower animation through onNotify', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
 
   result.statusTicks(4);
   result.strokeTick();
@@ -382,7 +409,7 @@ test('stopped or at SPM 0 the simulator rests: no distance, no strokes, zero rat
     assert.equal(result.metricEls.elapsedTime.textContent, '0:04', label + ': elapsed keeps counting');
   }
 
-  var stopped = runDashboardApp(true);
+  var stopped = runDashboardApp(true, { race: true });
   stopped.statusTicks(4);
   stopped.strokeTick();
   assert.notEqual(stopped.metricEls.power.textContent, '0 W');
@@ -395,7 +422,7 @@ test('stopped or at SPM 0 the simulator rests: no distance, no strokes, zero rat
   assert.equal(stopped.metricEls.distance.textContent, '11 m', 'rowing resumes gaining distance');
   assert.ok(stopped.strokeTimer(), 'strokes resume');
 
-  var spmZero = runDashboardApp(true);
+  var spmZero = runDashboardApp(true, { race: true });
   spmZero.statusTicks(4);
   spmZero.strokeTick();
   spmZero.set('spm', '0');
@@ -403,7 +430,7 @@ test('stopped or at SPM 0 the simulator rests: no distance, no strokes, zero rat
 });
 
 test('panel settings are clamped or refused and never render NaN or a negative', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   var stream = result.window.startRaceStream('race-one');
   [['0', '0'], ['-5', '0'], ['99', '60'], ['abc', '60'], ['NaN', '60']].forEach(function (pair) {
     result.set('spm', pair[0]);
@@ -433,18 +460,21 @@ test('panel settings are clamped or refused and never render NaN or a negative',
   }
 });
 
-test('production dashboard does not start the simulator or wire the panel', function () {
-  var result = runDashboardApp(false);
+test('production dashboard and race page do not start the simulator or wire the panel', function () {
+  [{}, { race: true }].forEach(function (page) {
+    var label = page.race ? 'race' : 'dashboard';
+    var result = runDashboardApp(false, page);
 
-  assert.equal(result.metricEls.strokeRate.textContent, '');
-  assert.equal(result.metricEls.pace.textContent, '');
-  assert.equal(result.connectionInfo.textContent, '');
-  assert.equal(result.timers.length, 0, 'no simulator timers');
-  assert.equal(result.events('pixelpace:pm5-status').length, 0);
-  ['panel', 'spm', 'pace', 'start'].forEach(function (control) {
-    assert.deepEqual(result.sim[control].listeners, {}, 'production registers no sim-' + control + ' listeners');
+    assert.equal(result.metricEls.strokeRate.textContent, '', label);
+    assert.equal(result.metricEls.pace.textContent, '', label);
+    assert.equal(result.connectionInfo.textContent, '', label);
+    assert.equal(result.timers.length, 0, label + ': no simulator timers');
+    assert.equal(result.events('pixelpace:pm5-status').length, 0, label);
+    ['panel', 'spm', 'pace', 'start'].forEach(function (control) {
+      assert.deepEqual(result.sim[control].listeners, {}, label + ': production registers no sim-' + control + ' listeners');
+    });
+    assert.equal(result.documentListeners.keydown, undefined, label);
   });
-  assert.equal(result.documentListeners.keydown, undefined);
 });
 
 test('dashboard exposes server-derived development mode to app.js', function () {
@@ -452,9 +482,10 @@ test('dashboard exposes server-derived development mode to app.js', function () 
   assert.match(appJs, /var rowingMachineCard = document\.getElementById\('rowing-machine-card'\);\n  var devMode = rowingMachineCard && rowingMachineCard\.getAttribute\('data-dev-mode'\) === 'true';/);
 });
 
-test('mock PM5 activation is gated on the development-mode flag', function () {
-  assert.match(appJs, /function startMockPm5\(\) \{\n    if \(!devMode\) return;/);
-  assert.match(appJs, /if \(devMode\) startMockPm5\(\);/);
+test('mock PM5 activation is gated on the development-mode flag and the race page', function () {
+  assert.match(appJs, /function startMockPm5\(\) \{\n    if \(!devMode\) return;\n    if \(!racePage\) return;/);
+  assert.match(appJs, /var racePage = !!document\.getElementById\('race-track'\);/);
+  assert.match(appJs, /if \(devMode && racePage\) startMockPm5\(\);/);
   assert.doesNotMatch(appJs, /(^|[^\w])startMockPm5\(\);(?![\s\S]*DEV_MOCK_PM5_END)/);
 });
 
@@ -483,7 +514,7 @@ function tileText(key, value) {
 }
 
 test('every simulator reading reaches the tiles only from a ce06003x DataView notification through onNotify', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   result.statusTicks(6);
   result.strokeTick();
   result.set('spm', '31', 'input');
@@ -510,7 +541,7 @@ test('every simulator reading reaches the tiles only from a ce06003x DataView no
 });
 
 test('each simulator payload decodes to the simulator state at PM5 resolution and renders it', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   var n = 1200; // 10 minutes at 26 spm and 2:12
   var strokes = 5;
   result.statusTicks(n);
@@ -546,7 +577,7 @@ test('each simulator payload decodes to the simulator state at PM5 resolution an
 });
 
 test('simulator payloads are full Concept2 layouts with the just-row defaults at their spec offsets', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
 
   // At start-up nothing has been rowed: average pace is 0, not a division by zero.
   assert.equal(result.last('32').value.getUint16(9, true), 0, '0x32 average pace at distance 0');
@@ -632,7 +663,7 @@ test('a real PM5 Stroke Data notification takes stroke count from bytes 18-19, n
 });
 
 test('simulated distance, power and calories follow the PM5 model and rest at SPM 0', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   result.set('pace', '1:45');
   result.statusTicks(10);
   var before = result.last('31').decoded;
@@ -663,7 +694,7 @@ test('simulated distance, power and calories follow the PM5 model and rest at SP
 });
 
 test('encoded fields are clamped to their width and never decode to NaN or a negative', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   function assertSane(from) {
     result.probe.notifications.slice(from).forEach(function (n) {
       Object.keys(n.decoded).forEach(function (key) {
@@ -715,7 +746,7 @@ test('encoded fields are clamped to their width and never decode to NaN or a neg
 });
 
 test('status characteristics notify every 500 ms and stroke characteristics once per stroke at 60000/SPM', function () {
-  var result = runDashboardApp(true);
+  var result = runDashboardApp(true, { race: true });
   var mockTimers = function () {
     return result.timers.filter(function (t) { return t.active && /^mockPm5/.test(t.fn.name); });
   };

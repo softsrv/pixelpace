@@ -28,16 +28,28 @@ var WATER_COLOR = 0x1e63c9;
 var SELF_COLOR = 0xfacc15;
 var RIVAL_COLOR = 0xe5e7eb;
 
-var trackEl = document.getElementById('race-track');
+var REMOVED_MESSAGE = 'You were removed from this race because your rowing machine was not connected in time.';
+var RESULTS_ERROR_MESSAGE = 'We couldn\u2019t load the results. You can still head back to the dashboard.';
+
+// Guarded so node tests can import this module without a DOM.
+var trackEl = typeof document !== 'undefined' ? document.getElementById('race-track') : null;
 if (trackEl && window.PIXI) startRaceView(trackEl, window.PIXI);
 
-async function startRaceView(trackEl, PIXI) {
+// Once the race is over, the server sends a finished frame (app.js turns it
+// into `pixelpace:race-finished`) or, on a reload, renders data-finished="true".
+// Either way the FINISH! modal opens with the results, unless this racer was
+// removed before the start.
+export async function startRaceView(trackEl, PIXI) {
   var selfId = trackEl.dataset.selfId;
   var targetMillimeters = Number(trackEl.dataset.targetMm);
   var statusUrl = trackEl.dataset.statusUrl;
   var readyUrl = trackEl.dataset.readyUrl;
   var lobbyUrl = trackEl.dataset.lobbyUrl;
+  var resultsUrl = trackEl.dataset.resultsUrl;
+  var dashboardUrl = trackEl.dataset.dashboardUrl || '/dashboard';
+  var finishedOnLoad = trackEl.dataset.finished === 'true';
   var statusEl = document.getElementById('race-status');
+  var modalEl = document.getElementById('race-finish-modal');
   var lanes = Array.from(document.querySelectorAll('#race-lanes [data-user-id]'), function (el) {
     return {
       userId: el.dataset.userId,
@@ -59,6 +71,21 @@ async function startRaceView(trackEl, PIXI) {
   var stopped = false;
   var racing = false;
   var finished = false;
+  var removed = false; // dropped before the start: never shown the results
+  var modalOpened = false;
+  var checkingRemoval = false; // a finished reload's status check is in flight
+  var countdownText = null; // assigned once the canvas has initialised
+
+  document.addEventListener('pixelpace:race-finished', openFinishModal);
+  var doneBtn = modalEl ? modalEl.querySelector('button.btn-primary') : null;
+  if (doneBtn) doneBtn.addEventListener('click', leaveRace);
+  // Escape would close the dialog and strand the racer on a finished track;
+  // the way out is Done.
+  if (modalEl) modalEl.addEventListener('cancel', function (evt) { evt.preventDefault(); });
+  // A reload after the race ended: check this racer is still in the race
+  // before showing the results. Starts before the canvas initialises, so a
+  // removal can be reported while it is still loading.
+  if (finishedOnLoad) checkFinishedOnLoad();
 
   var app = new PIXI.Application();
   await app.init({
@@ -73,7 +100,7 @@ async function startRaceView(trackEl, PIXI) {
   var course = new PIXI.Graphics();
   var startText = courseLabel(PIXI, 'START');
   var finishText = courseLabel(PIXI, 'FINISH');
-  var countdownText = new PIXI.Text({
+  countdownText = new PIXI.Text({
     text: '',
     style: { fill: 0xffffff, fontSize: 120, fontFamily: 'sans-serif', fontWeight: 'bold', stroke: { color: 0x111827, width: 8 } }
   });
@@ -116,7 +143,7 @@ async function startRaceView(trackEl, PIXI) {
     self.distanceMillimeters = evt.detail.distance_millimeters;
     if (!finished && progressFraction(self.distanceMillimeters, targetMillimeters) >= 1) {
       finished = true;
-      setStatus('Finished!');
+      if (!modalOpened) setStatus('Finished! Waiting for the other rowers to finish\u2026');
     }
   });
 
@@ -131,8 +158,10 @@ async function startRaceView(trackEl, PIXI) {
   // The view is drawn; the racer is ready once their rowing machine is too.
   document.addEventListener('pixelpace:pm5-status', function (evt) {
     if (evt.detail && evt.detail.connected) reportReady();
-    else if (!racing) setStatus('Your rowing machine disconnected. Reconnect it to make the start.');
+    else if (!racing && !stopped) setStatus('Your rowing machine disconnected. Reconnect it to make the start.');
   });
+  // A finished race has nothing left to join or poll for.
+  if (finishedOnLoad) return;
   reportReady();
   if (!reported) setStatus('Connect your rowing machine to take your place at the start.');
   pollStatus();
@@ -143,6 +172,7 @@ async function startRaceView(trackEl, PIXI) {
     reported = true;
     setStatus('Ready! Waiting for the other rowers…');
     var res = await request(readyUrl, { method: 'POST' });
+    if (stopped) return;
     if (res && res.ok) return;
     if (res && res.status === 404) return dropped();
     if (res && res.status === 409) return backToLobby();
@@ -155,6 +185,7 @@ async function startRaceView(trackEl, PIXI) {
     while (!stopped && !streaming) {
       var sentAt = Date.now();
       var res = await request(statusUrl, { headers: { Accept: 'application/json' } });
+      if (stopped) return;
       if (res && res.status === 404) return dropped();
       if (res && res.status === 409) return backToLobby();
       if (res && res.ok) {
@@ -222,8 +253,95 @@ async function startRaceView(trackEl, PIXI) {
 
   function dropped() {
     stopped = true;
-    countdownText.text = '';
-    setStatus('You were removed from this race because your rowing machine was not connected in time.');
+    removed = true;
+    document.removeEventListener('pixelpace:race-finished', openFinishModal);
+    // A 404 can arrive before the canvas (and its countdown text) exists.
+    if (countdownText) countdownText.text = '';
+    setStatus(REMOVED_MESSAGE);
+  }
+
+  // On a reload of a finished race, the status check tells a removed racer
+  // (404) apart from one who raced, before the modal may open.
+  async function checkFinishedOnLoad() {
+    stopped = true;
+    checkingRemoval = true;
+    setStatus('The race is over.');
+    var res = await request(statusUrl, { headers: { Accept: 'application/json' } });
+    checkingRemoval = false;
+    if (res && res.status === 404) return dropped();
+    if (res && res.status === 409) return backToLobby();
+    openFinishModal();
+  }
+
+  // Opens the FINISH! modal once, stops following the race and loads the results.
+  function openFinishModal() {
+    if (removed || checkingRemoval || modalOpened || !modalEl) return;
+    modalOpened = true;
+    stopped = true;
+    if (typeof modalEl.showModal === 'function') modalEl.showModal();
+    else modalEl.setAttribute('open', '');
+    loadResults();
+  }
+
+  async function loadResults() {
+    var res = resultsUrl ? await request(resultsUrl, { headers: { Accept: 'application/json' } }) : null;
+    var body = res && res.ok ? await res.json().catch(function () { return null; }) : null;
+    if (!body) return showResultsError();
+    try {
+      var helpers = await import('./race-results.mjs');
+      renderResults(helpers.resultRows(body, selfId));
+    } catch (_) {
+      showResultsError();
+    }
+  }
+
+  function renderResults(result) {
+    var rows = Array.isArray(result) ? result : (result && result.rows) || [];
+    var message = result && (result.message || result.emptyMessage);
+    var tbody = modalEl.querySelector('tbody');
+    if (!tbody) return showResultsError();
+    tbody.textContent = '';
+    if (message) {
+      var messageRow = document.createElement('tr');
+      var messageCell = document.createElement('td');
+      messageCell.colSpan = 5;
+      messageCell.textContent = message;
+      messageRow.appendChild(messageCell);
+      tbody.appendChild(messageRow);
+    }
+    rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      if (row.isSelf) tr.classList.add('font-bold');
+      var isDnf = String(row.status || '').toLowerCase() === 'dnf';
+      [row.rank || (isDnf ? 'DNF' : ''), row.name, row.time, row.distance, row.pace].forEach(function (text) {
+        var td = document.createElement('td');
+        td.textContent = text == null ? '' : String(text);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    setHidden(modalEl.querySelector('table'), false);
+    setHidden(modalEl.querySelector('.text-error'), true);
+  }
+
+  // The error takes the table's place; Done still works.
+  function showResultsError() {
+    setHidden(modalEl.querySelector('table'), true);
+    var errorEl = modalEl.querySelector('.text-error');
+    if (errorEl) {
+      errorEl.textContent = RESULTS_ERROR_MESSAGE;
+      setHidden(errorEl, false);
+    }
+  }
+
+  // Done closes the race connection and goes to the dashboard, whether or
+  // not the results loaded.
+  function leaveRace() {
+    stopped = true;
+    if (typeof window.stopRaceStream === 'function') {
+      try { window.stopRaceStream(); } catch (_) { /* leave regardless */ }
+    }
+    window.location.assign(dashboardUrl);
   }
 
   function backToLobby() {
@@ -238,6 +356,12 @@ async function startRaceView(trackEl, PIXI) {
 
 function pm5Connected() {
   return typeof window.isPm5Connected === 'function' && window.isPm5Connected();
+}
+
+function setHidden(el, hidden) {
+  if (!el) return;
+  if (hidden) el.classList.add('hidden');
+  else el.classList.remove('hidden');
 }
 
 // fetch that silently refreshes the short-lived access token once on 401.

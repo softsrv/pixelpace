@@ -160,6 +160,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux.Handle("GET /rooms/{id}/race", verifiedMW(http.HandlerFunc(racePageH.Page)))
 	mux.Handle("GET /rooms/{id}/race/status", verifiedMW(http.HandlerFunc(racePageH.Status)))
 	mux.Handle("POST /rooms/{id}/race/ready", verifiedMW(http.HandlerFunc(racePageH.Ready)))
+	mux.Handle("GET /rooms/{id}/race/results", verifiedMW(http.HandlerFunc(racePageH.Results)))
 	mux.Handle("GET /join/{code}", verifiedMW(http.HandlerFunc(lobbyH.JoinLink)))
 	mux.Handle("GET /dashboard/race-card", verifiedMW(http.HandlerFunc(lobbyH.RaceCard)))
 	mux.Handle("GET /invites", verifiedMW(http.HandlerFunc(lobbyH.Invites)))

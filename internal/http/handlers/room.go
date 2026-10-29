@@ -34,6 +34,7 @@ var _ roomServicer = (*app.RoomService)(nil)
 // raceBeginner runs a started room's countdown and creates its race.
 type raceBeginner interface {
 	Begin(ctx context.Context, roomID uuid.UUID) (db.Race, error)
+	Run(ctx context.Context, raceID uuid.UUID) error
 }
 
 var _ raceBeginner = (*app.RaceService)(nil)
@@ -246,7 +247,8 @@ func (h *RoomHandler) Start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RoomHandler) beginRace(ctx context.Context, roomID uuid.UUID) {
-	if _, err := h.beginner.Begin(ctx, roomID); err != nil {
+	race, err := h.beginner.Begin(ctx, roomID)
+	if err != nil {
 		if errors.Is(err, app.ErrNoRacersReady) {
 			// Begin dissolved the room; there is no lobby to return to.
 			slog.InfoContext(ctx, "race abandoned: no racer was ready", "room_id", roomID)
@@ -257,6 +259,12 @@ func (h *RoomHandler) beginRace(ctx context.Context, roomID uuid.UUID) {
 		defer cancel()
 		if err := h.room.ResetCountdown(resetCtx, roomID); err != nil {
 			slog.ErrorContext(resetCtx, "room countdown reset failed", "room_id", roomID, "error", err)
+		}
+		return
+	}
+	if err := h.beginner.Run(ctx, race.ID); err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.ErrorContext(ctx, "race run failed", "room_id", roomID, "race_id", race.ID, "error", err)
 		}
 	}
 }

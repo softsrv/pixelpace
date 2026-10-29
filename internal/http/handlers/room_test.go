@@ -42,12 +42,18 @@ func (s *stubRoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) 
 
 // fakeBeginner records each race begin and returns err.
 type fakeBeginner struct {
-	mu      sync.Mutex
-	rooms   []uuid.UUID
-	ctxs    []context.Context
-	err     error
-	block   bool
-	started chan struct{}
+	mu         sync.Mutex
+	rooms      []uuid.UUID
+	ctxs       []context.Context
+	err        error
+	block      bool
+	started    chan struct{}
+	raceID     uuid.UUID
+	runs       []uuid.UUID
+	runCtxs    []context.Context
+	runErr     error
+	runBlock   bool
+	runStarted chan struct{}
 }
 
 func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, error) {
@@ -57,6 +63,7 @@ func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, er
 	block := b.block
 	started := b.started
 	err := b.err
+	raceID := b.raceID
 	b.mu.Unlock()
 	if started != nil {
 		close(started)
@@ -68,7 +75,28 @@ func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, er
 	if err != nil {
 		return db.Race{}, err
 	}
+	if raceID != uuid.Nil {
+		return db.Race{ID: raceID, RoomID: roomID}, nil
+	}
 	return db.Race{ID: uuid.New(), RoomID: roomID}, nil
+}
+
+func (b *fakeBeginner) Run(ctx context.Context, raceID uuid.UUID) error {
+	b.mu.Lock()
+	b.runs = append(b.runs, raceID)
+	b.runCtxs = append(b.runCtxs, ctx)
+	block := b.runBlock
+	started := b.runStarted
+	err := b.runErr
+	b.mu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return err
 }
 
 func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
@@ -431,6 +459,12 @@ func TestRoomStartBeginsRaceInBackground(t *testing.T) {
 	if err := beginner.ctxs[0].Err(); err != nil {
 		t.Fatalf("begin context done after the request: %v", err)
 	}
+	if len(beginner.runs) != 1 {
+		t.Fatalf("runs = %v, want 1 run", beginner.runs)
+	}
+	if err := beginner.runCtxs[0].Err(); err != nil {
+		t.Fatalf("run context done after the request: %v", err)
+	}
 }
 
 // A refused start (not host, wrong state, not ready) begins no race.
@@ -495,6 +529,9 @@ func TestRoomStartFailedBeginLogsAndResets(t *testing.T) {
 	}
 	if len(resets) != 1 || resets[0] != roomID {
 		t.Fatalf("resets = %v, want one for %s", resets, roomID)
+	}
+	if len(beginner.runs) != 0 {
+		t.Fatalf("failed begin ran races: %v", beginner.runs)
 	}
 	logged := false
 	for _, r := range logs.records {
@@ -628,5 +665,157 @@ func TestRoomStartNoRacersReadyDoesNotReset(t *testing.T) {
 	h.Wait()
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+	if len(beginner.runs) != 0 {
+		t.Fatalf("no racers ready ran races: %v", beginner.runs)
+	}
+}
+
+// After a successful Begin, the room handler runs Run with the begun race's ID
+// in the same background goroutine. ResetCountdown is never called.
+func TestRoomStartRunsRaceAfterBegin(t *testing.T) {
+	roomID := uuid.New()
+	begunRaceID := uuid.New()
+	beginner := &fakeBeginner{raceID: begunRaceID}
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Fatal("ResetCountdown called after successful Begin")
+		return nil
+	}
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	h.Wait()
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+	if len(beginner.runs) != 1 {
+		t.Fatalf("runs = %v, want exactly 1 run", beginner.runs)
+	}
+	if beginner.runs[0] != begunRaceID {
+		t.Fatalf("run raceID = %s, want %s", beginner.runs[0], begunRaceID)
+	}
+	if len(beginner.rooms) != 1 || beginner.rooms[0] != roomID {
+		t.Fatalf("rooms = %v, want [%s]", beginner.rooms, roomID)
+	}
+	beginCtx := beginner.ctxs[0]
+	if beginner.runCtxs[0] != beginCtx {
+		t.Fatalf("runCtx = %v, want same context as beginCtx = %v", beginner.runCtxs[0], beginCtx)
+	}
+}
+
+// A lifetime cancellation mid-run unblocks h.Wait() and never calls ResetCountdown.
+func TestRoomStartLifetimeCancelDuringRunWaitsAndReturns(t *testing.T) {
+	roomID := uuid.New()
+	runStarted := make(chan struct{})
+	beginner := &fakeBeginner{
+		runBlock:   true,
+		runStarted: runStarted,
+	}
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Fatal("ResetCountdown called after successful Begin")
+		return nil
+	}
+
+	lifetimeCtx, cancelLifetime := context.WithCancel(context.Background())
+	h := handlers.NewRoomHandler(lifetimeCtx, svc, beginner, nil, false)
+
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+
+	// Wait until Run is actively running in background.
+	<-runStarted
+
+	// Cancel the handler's lifetime context while Run is active.
+	cancelLifetime()
+
+	// Wait must return once the background goroutine finishes.
+	waitDone := make(chan struct{})
+	go func() {
+		h.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("h.Wait() timed out after lifetime cancel during Run")
+	}
+
+	if len(beginner.runs) != 1 {
+		t.Fatalf("runs = %v, want 1 run", beginner.runs)
+	}
+}
+
+// A non-cancel error from Run is logged at Error level, and ResetCountdown is not called.
+func TestRoomStartRunErrorLogsAndDoesNotReset(t *testing.T) {
+	logs := &capturedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	roomID := uuid.New()
+	runErr := errors.New("telemetry stream disconnected")
+	beginner := &fakeBeginner{runErr: runErr}
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Fatal("ResetCountdown called after Run error")
+		return nil
+	}
+
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	h.Wait()
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+	if len(beginner.runs) != 1 {
+		t.Fatalf("runs = %v, want 1 run", beginner.runs)
+	}
+
+	logged := false
+	for _, r := range logs.records {
+		if r.Level == slog.LevelError && r.Message == "race run failed" {
+			r.Attrs(func(a slog.Attr) bool {
+				if a.Key == "error" && strings.Contains(fmt.Sprint(a.Value.Any()), runErr.Error()) {
+					logged = true
+				}
+				return true
+			})
+		}
+	}
+	if !logged {
+		t.Fatalf("run error not logged at error level: %+v", logs.records)
+	}
+}
+
+// A context.Canceled error from Run is not logged as an error.
+func TestRoomStartRunCancelErrorDoesNotLog(t *testing.T) {
+	logs := &capturedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	roomID := uuid.New()
+	beginner := &fakeBeginner{runErr: context.Canceled}
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Fatal("ResetCountdown called after Run cancellation")
+		return nil
+	}
+
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	rr := serveRoomRequestWith(t, h, startOperation(roomID), uuid.New(), "", roomID.String(), true)
+	h.Wait()
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rr.Code)
+	}
+
+	for _, r := range logs.records {
+		if r.Level == slog.LevelError && r.Message == "race run failed" {
+			t.Fatalf("cancellation unexpectedly logged as error: %+v", r)
+		}
 	}
 }

@@ -147,6 +147,15 @@ func (q *Queries) FinishRaceParticipant(ctx context.Context, arg FinishRaceParti
 	return err
 }
 
+const finishRaceRoom = `-- name: FinishRaceRoom :exec
+UPDATE rooms SET status = 'finished' WHERE id = $1 AND status = 'in_progress'
+`
+
+func (q *Queries) FinishRaceRoom(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, finishRaceRoom, id)
+	return err
+}
+
 const getRoomRace = `-- name: GetRoomRace :one
 SELECT r.status, r.race_starts_at, rt.kind, rt.target_value, rt.label, races.id AS race_id
 FROM rooms r
@@ -223,6 +232,61 @@ func (q *Queries) IsRaceParticipant(ctx context.Context, arg IsRaceParticipantPa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const listRaceResults = `-- name: ListRaceResults :many
+SELECT p.user_id, u.display_name, p.status,
+       p.elapsed_milliseconds AS finish_elapsed_milliseconds,
+       r.started_at,
+       latest.distance_millimeters, latest.sampled_at
+FROM race_participants p
+JOIN users u ON u.id = p.user_id
+JOIN races r ON r.id = p.race_id
+LEFT JOIN LATERAL (
+    SELECT s.distance_millimeters, s.sampled_at
+    FROM telemetry_samples s WHERE s.race_id = p.race_id AND s.user_id = p.user_id
+    ORDER BY s.sampled_at DESC, s.id DESC LIMIT 1
+) latest ON true
+WHERE p.race_id = $1 ORDER BY p.id
+`
+
+type ListRaceResultsRow struct {
+	UserID                    uuid.UUID          `json:"user_id"`
+	DisplayName               pgtype.Text        `json:"display_name"`
+	Status                    string             `json:"status"`
+	FinishElapsedMilliseconds pgtype.Int4        `json:"finish_elapsed_milliseconds"`
+	StartedAt                 pgtype.Timestamptz `json:"started_at"`
+	DistanceMillimeters       pgtype.Int8        `json:"distance_millimeters"`
+	SampledAt                 pgtype.Timestamptz `json:"sampled_at"`
+}
+
+// Every participant with their public name, recorded finish and latest sample.
+func (q *Queries) ListRaceResults(ctx context.Context, raceID uuid.UUID) ([]ListRaceResultsRow, error) {
+	rows, err := q.db.Query(ctx, listRaceResults, raceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRaceResultsRow{}
+	for rows.Next() {
+		var i ListRaceResultsRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.DisplayName,
+			&i.Status,
+			&i.FinishElapsedMilliseconds,
+			&i.StartedAt,
+			&i.DistanceMillimeters,
+			&i.SampledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRaceRoomParticipants = `-- name: ListRaceRoomParticipants :many

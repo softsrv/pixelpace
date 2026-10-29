@@ -64,6 +64,25 @@ WHERE id = $1 AND status <> 'dnf';
 -- name: FinishRace :exec
 UPDATE races SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL;
 
+-- name: FinishRaceRoom :exec
+UPDATE rooms SET status = 'finished' WHERE id = $1 AND status = 'in_progress';
+
+-- Every participant with their public name, recorded finish and latest sample.
+-- name: ListRaceResults :many
+SELECT p.user_id, u.display_name, p.status,
+       p.elapsed_milliseconds AS finish_elapsed_milliseconds,
+       r.started_at,
+       latest.distance_millimeters, latest.sampled_at
+FROM race_participants p
+JOIN users u ON u.id = p.user_id
+JOIN races r ON r.id = p.race_id
+LEFT JOIN LATERAL (
+    SELECT s.distance_millimeters, s.sampled_at
+    FROM telemetry_samples s WHERE s.race_id = p.race_id AND s.user_id = p.user_id
+    ORDER BY s.sampled_at DESC, s.id DESC LIMIT 1
+) latest ON true
+WHERE p.race_id = $1 ORDER BY p.id;
+
 -- name: GetRoomRace :one
 SELECT r.status, r.race_starts_at, rt.kind, rt.target_value, rt.label, races.id AS race_id
 FROM rooms r

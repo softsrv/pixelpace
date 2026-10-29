@@ -147,6 +147,29 @@ func TestPublicPayloadNoEmailLeak(t *testing.T) {
 
 		assertNoEmail(t, payload, "telemetry frame")
 	})
+
+	t.Run("RaceResultsPayload", func(t *testing.T) {
+		rank, elapsed, pace := 1, int64(400000), int64(100000)
+		results := app.RaceResults{RaceID: uuid.Must(uuid.NewV7()), Finished: true, TargetMillimeters: 2000000, Results: []app.RaceResult{
+			{PublicPlayer: namedPlayer, Rank: &rank, Status: "finished", ElapsedMilliseconds: &elapsed,
+				DistanceMillimeters: 2000000, PaceMillisecondsPer500m: &pace},
+			{PublicPlayer: unnamedPlayer, Status: "dnf", DistanceMillimeters: 500000},
+		}}
+		viewer := &stubRoomRaceViewer{resultsFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RaceResults, error) {
+			return results, nil
+		}}
+		roomID := uuid.Must(uuid.NewV7())
+
+		rr := serveRacePage(t, viewer, namedUser, roomID.String(), raceResultsEndpoint)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("results handler status = %d, want %d", rr.Code, http.StatusOK)
+		}
+		if !strings.Contains(rr.Body.String(), "RowerAlpha") {
+			t.Fatalf("results body missing the named player's public name: %s", rr.Body.String())
+		}
+		assertNoEmail(t, rr.Body.Bytes(), "race results response")
+	})
 }
 
 // inspectForForbiddenUserSerialisation checks an AST file for forbidden serialisation of db.User.

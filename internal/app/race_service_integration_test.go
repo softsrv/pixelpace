@@ -8,6 +8,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,9 @@ type raceFixture struct {
 	users []uuid.UUID
 	race  db.Race
 	now   time.Time
+	// onSleep runs on every injected sleep after the clock advances, so a
+	// test can act between Run's polls.
+	onSleep func()
 }
 
 func seedRaceRoom(t *testing.T, n int, target int64, threshold time.Duration) *raceFixture {
@@ -81,17 +85,87 @@ func seedRaceRoom(t *testing.T, n int, target int64, threshold time.Duration) *r
 		}
 	}
 	f.svc = app.NewRaceService(db.New(f.pool), f.pool, f.fake, app.RaceServiceConfig{
-		CountdownDuration: time.Millisecond, StalenessThreshold: threshold,
+		CountdownDuration: time.Millisecond, StalenessThreshold: threshold, RacePollInterval: time.Millisecond,
 		Now: func() time.Time { return f.now },
-		Sleep: func(_ context.Context, duration time.Duration) error {
+		Sleep: func(ctx context.Context, duration time.Duration) error {
 			if duration != time.Millisecond {
-				t.Fatalf("countdown = %v", duration)
+				t.Fatalf("sleep = %v", duration)
 			}
 			f.now = f.now.Add(duration)
-			return nil
+			if f.onSleep != nil {
+				f.onSleep()
+			}
+			return ctx.Err()
 		},
 	})
 	return f
+}
+
+// roomStatus reads the fixture room's status.
+func (f *raceFixture) roomStatus(t *testing.T) string {
+	t.Helper()
+	var status string
+	if err := f.pool.QueryRow(context.Background(), "SELECT status FROM rooms WHERE id = $1", f.room).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+// participantStatuses reads each fixture user's race status, in user order.
+func (f *raceFixture) participantStatuses(t *testing.T) []string {
+	t.Helper()
+	statuses := make([]string, len(f.users))
+	for i, id := range f.users {
+		if err := f.pool.QueryRow(context.Background(), "SELECT status FROM race_participants WHERE race_id = $1 AND user_id = $2", f.race.ID, id).Scan(&statuses[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return statuses
+}
+
+// raceFinishedAt reads races.finished_at for the fixture race.
+func (f *raceFixture) raceFinishedAt(t *testing.T) pgtype.Timestamptz {
+	t.Helper()
+	var at pgtype.Timestamptz
+	if err := f.pool.QueryRow(context.Background(), "SELECT finished_at FROM races WHERE id = $1", f.race.ID).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+// sampleCount counts every stored sample of the fixture race.
+func (f *raceFixture) sampleCount(t *testing.T) int {
+	t.Helper()
+	var count int
+	if err := f.pool.QueryRow(context.Background(), "SELECT count(*) FROM telemetry_samples WHERE race_id = $1", f.race.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// subscribe listens on the fixture race's channel until the test ends.
+func (f *raceFixture) subscribe(t *testing.T) <-chan []byte {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	sub, err := f.fake.Subscribe(ctx, f.race.ID.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sub
+}
+
+// drain returns every payload already delivered on sub.
+func drain(sub <-chan []byte) [][]byte {
+	var got [][]byte
+	for {
+		select {
+		case payload := <-sub:
+			got = append(got, payload)
+		default:
+			return got
+		}
+	}
 }
 
 func (f *raceFixture) begin(t *testing.T) {
@@ -331,6 +405,10 @@ func TestRaceServiceWinnerAndFinalize(t *testing.T) {
 			if !finished.Equal(f.now) {
 				t.Fatalf("finished_at=%v, want %v", finished, f.now)
 			}
+			// The room leaves in_progress in the same transaction.
+			if status := f.roomStatus(t); status != "finished" {
+				t.Fatalf("room status=%s, want finished", status)
+			}
 			f.now = f.now.Add(time.Hour)
 			again, err := f.svc.Finalize(ctx, f.race.ID)
 			if err != nil || !reflect.DeepEqual(again, got) {
@@ -347,13 +425,14 @@ func TestRaceServiceFinalizeSweepsDNF(t *testing.T) {
 	f.ingest(t, 0, 1000, 500000, f.now.Add(-8*time.Second))
 	f.ingest(t, 1, 2000, 500000, f.now)
 	f.ingest(t, 2, 3000, 499999, f.now)
+	// User 0 reached the target before going silent, so stays a finisher.
 	// User 3 has sent no samples at all; its grace period starts at race start.
 	got, err := f.svc.Finalize(context.Background(), f.race.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertRaceOrder(t, got, f.users[1])
-	for i, want := range []string{"dnf", "finished", "dnf", "dnf"} {
+	assertRaceOrder(t, got, f.users[0], f.users[1])
+	for i, want := range []string{"finished", "finished", "dnf", "dnf"} {
 		var status string
 		if err := f.pool.QueryRow(context.Background(), "SELECT status FROM race_participants WHERE race_id = $1 AND user_id = $2", f.race.ID, f.users[i]).Scan(&status); err != nil {
 			t.Fatal(err)
@@ -377,9 +456,9 @@ func TestRaceServiceDNFExcludesAndRetainsSamples(t *testing.T) {
 			f := seedRaceRoom(t, 3, 500000, threshold)
 			f.begin(t)
 			f.now = f.now.Add(time.Minute)
-			// Stale participant has reached the target; DNF still excludes it.
+			// Stale participant short of the target; DNF excludes it.
 			f.ingest(t, 0, 1000, 200000, f.now.Add(-threshold-2*time.Second))
-			f.ingest(t, 0, 2000, 500000, f.now.Add(-threshold-time.Microsecond))
+			f.ingest(t, 0, 2000, 499999, f.now.Add(-threshold-time.Microsecond))
 			// Exactly at the threshold remains eligible (strictly older is stale).
 			f.ingest(t, 1, 4000, 500000, f.now.Add(-threshold))
 			// A historical stale sample must not disqualify a currently active participant.
@@ -454,6 +533,16 @@ func TestRaceServiceRoomRace(t *testing.T) {
 	if got := racerIDs(view.Racers); !reflect.DeepEqual(got, f.users) {
 		t.Fatalf("racers after begin = %v, want %v", got, f.users)
 	}
+	if view.Finished {
+		t.Fatalf("in-progress view reports Finished")
+	}
+	if _, err := f.pool.Exec(ctx, "UPDATE rooms SET status = 'finished' WHERE id = $1", f.room); err != nil {
+		t.Fatal(err)
+	}
+	view, err = f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil || !view.Finished {
+		t.Fatalf("finished room view = %+v err=%v, want Finished", view, err)
+	}
 
 	if _, err := f.svc.RoomRace(ctx, f.room, uuid.Must(uuid.NewV7())); !errors.Is(err, app.ErrParticipantNotFound) {
 		t.Fatalf("non-participant err = %v, want ErrParticipantNotFound", err)
@@ -475,4 +564,302 @@ func racerIDs(racers []app.RaceRacer) []uuid.UUID {
 		ids[i] = racer.UserID
 	}
 	return ids
+}
+
+// finishedFrames returns the {"type":"finished"} frames among payloads.
+func finishedFrames(t *testing.T, payloads [][]byte) []map[string]any {
+	t.Helper()
+	var frames []map[string]any
+	for _, payload := range payloads {
+		var frame map[string]any
+		if err := json.Unmarshal(payload, &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame["type"] == "finished" {
+			frames = append(frames, frame)
+		}
+	}
+	return frames
+}
+
+func TestRaceServiceRunFinalizesOnceEveryoneIsDone(t *testing.T) {
+	const target = 500000
+	f := seedRaceRoom(t, 3, target, 10*time.Millisecond)
+	f.begin(t)
+	sub := f.subscribe(t)
+	f.ingest(t, 0, 9000, target, f.now)
+	polls := 0
+	f.onSleep = func() {
+		polls++
+		switch {
+		case polls <= 3:
+			// User 1 is fresh and short of the target: the race goes on.
+			f.ingest(t, 1, int64(polls)*1000, target/2, f.now)
+		case polls == 4:
+			f.ingest(t, 1, 12000, target, f.now)
+		}
+		// User 2 never sends anything and goes stale after the threshold.
+	}
+	if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if polls <= 10 {
+		t.Fatalf("Run finished after %d polls, before user 2 went stale", polls)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished", "finished", "dnf"}) {
+		t.Fatalf("statuses=%v", got)
+	}
+	if at := f.raceFinishedAt(t); !at.Valid {
+		t.Fatal("races.finished_at not set")
+	}
+	if status := f.roomStatus(t); status != "finished" {
+		t.Fatalf("room status=%s, want finished", status)
+	}
+	frames := finishedFrames(t, drain(sub))
+	if len(frames) != 1 || frames[0]["race_id"] != f.race.ID.String() {
+		t.Fatalf("finished frames=%v, want one for race %s", frames, f.race.ID)
+	}
+	// An already-finalized race returns at once and never publishes again.
+	f.onSleep = func() { t.Fatal("Run polled a finished race") }
+	if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if extra := drain(sub); len(extra) != 0 {
+		t.Fatalf("second Run published %d frames", len(extra))
+	}
+}
+
+func TestRaceServiceRunFinalizesWhenEveryoneIsDNF(t *testing.T) {
+	f := seedRaceRoom(t, 2, 500000, 5*time.Millisecond)
+	f.begin(t)
+	sub := f.subscribe(t)
+	f.ingest(t, 0, 1000, 1000, f.now)
+	if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"dnf", "dnf"}) {
+		t.Fatalf("statuses=%v", got)
+	}
+	if at := f.raceFinishedAt(t); !at.Valid {
+		t.Fatal("races.finished_at not set")
+	}
+	if status := f.roomStatus(t); status != "finished" {
+		t.Fatalf("room status=%s, want finished", status)
+	}
+	if frames := finishedFrames(t, drain(sub)); len(frames) != 1 {
+		t.Fatalf("finished frames=%v, want one", frames)
+	}
+}
+
+func TestRaceServiceRunKeepsPollingUntilCancelled(t *testing.T) {
+	const target = 500000
+	f := seedRaceRoom(t, 2, target, 5*time.Millisecond)
+	f.begin(t)
+	sub := f.subscribe(t)
+	f.ingest(t, 0, 9000, target, f.now)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	polls := 0
+	f.onSleep = func() {
+		polls++
+		// User 1 keeps rowing short of the target, so never goes stale.
+		f.ingest(t, 1, int64(polls)*1000, target-1, f.now)
+		if polls == 20 {
+			cancel()
+		}
+	}
+	err := f.svc.Run(ctx, f.race.ID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run err=%v, want context.Canceled", err)
+	}
+	if polls != 20 {
+		t.Fatalf("Run polled %d times, want 20", polls)
+	}
+	if at := f.raceFinishedAt(t); at.Valid {
+		t.Fatalf("races.finished_at=%v, want NULL", at.Time)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"racing", "racing"}) {
+		t.Fatalf("statuses=%v", got)
+	}
+	if status := f.roomStatus(t); status != "in_progress" {
+		t.Fatalf("room status=%s, want in_progress", status)
+	}
+	if frames := finishedFrames(t, drain(sub)); len(frames) != 0 {
+		t.Fatalf("finished frames=%v, want none", frames)
+	}
+}
+
+func TestRaceServiceFinisherWhoGoesSilentKeepsFinish(t *testing.T) {
+	const target = 500000
+	threshold := 7 * time.Second
+	f := seedRaceRoom(t, 2, target, threshold)
+	f.begin(t)
+	ctx := context.Background()
+	start := f.race.StartedAt.Time
+	f.now = start.Add(90 * time.Second)
+	f.ingest(t, 0, 90000, target, f.now)
+	// User 0 sends nothing more, well past the threshold, while user 1 rows on.
+	f.now = f.now.Add(threshold + time.Second)
+	f.ingest(t, 1, 98000, target-100000, f.now)
+	live, err := f.svc.LiveRanking(ctx, f.race.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRaceOrder(t, live, f.users[0], f.users[1])
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"racing", "racing"}) {
+		t.Fatalf("statuses after live ranking=%v", got)
+	}
+	// User 1 reaches the target during Run's first wait.
+	reached := false
+	f.onSleep = func() {
+		if !reached {
+			reached = true
+			f.ingest(t, 1, 120000, target, f.now)
+		}
+	}
+	if err := f.svc.Run(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished", "finished"}) {
+		t.Fatalf("statuses=%v", got)
+	}
+	results, err := f.svc.Results(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results.Results) != 2 {
+		t.Fatalf("results=%+v", results)
+	}
+	first, second := results.Results[0], results.Results[1]
+	if first.UserID != f.users[0] || first.Rank == nil || *first.Rank != 1 || first.ElapsedMilliseconds == nil || *first.ElapsedMilliseconds != 90000 {
+		t.Fatalf("first=%+v, want user 0 rank 1 in 90000ms", first)
+	}
+	if second.UserID != f.users[1] || second.Rank == nil || *second.Rank != 2 || second.ElapsedMilliseconds == nil || *second.ElapsedMilliseconds != 120000 {
+		t.Fatalf("second=%+v, want user 1 rank 2 in 120000ms", second)
+	}
+}
+
+func TestRaceServiceIngestAfterFinishIsDropped(t *testing.T) {
+	const target = 500000
+	f := seedRaceRoom(t, 2, target, 5*time.Millisecond)
+	f.begin(t)
+	ctx := context.Background()
+	f.ingest(t, 0, 9000, target, f.now)
+	f.ingest(t, 1, 9000, 1000, f.now)
+	if err := f.svc.Run(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished", "dnf"}) {
+		t.Fatalf("statuses=%v", got)
+	}
+	before, err := f.svc.Results(ctx, f.room, f.users[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples := f.sampleCount(t)
+	sub := f.subscribe(t)
+	// The DNF racer's late sample would reach the target; it is refused
+	// without an error, so the websocket reader keeps the socket open.
+	if err := f.svc.Ingest(ctx, f.race.ID, f.users[1], app.TelemetrySample{
+		ElapsedMilliseconds: 20000, DistanceMillimeters: target, SampledAt: f.now,
+	}); err != nil {
+		t.Fatalf("late ingest err=%v, want nil", err)
+	}
+	if got := f.sampleCount(t); got != samples {
+		t.Fatalf("samples=%d after late ingest, want %d", got, samples)
+	}
+	if published := drain(sub); len(published) != 0 {
+		t.Fatalf("late ingest published %d frames", len(published))
+	}
+	after, err := f.svc.Results(ctx, f.room, f.users[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("results changed by late sample:\nbefore %+v\nafter  %+v", before, after)
+	}
+}
+
+func TestRaceServiceResults(t *testing.T) {
+	const target = 500000
+	f := seedRaceRoom(t, 5, target, time.Minute)
+	ctx := context.Background()
+	names := []string{"ResAlpha", "ResBravo", "", "ResDelta", "ResEcho"}
+	for i, name := range names {
+		if name == "" {
+			continue // user 2 keeps no display name and gets a placeholder.
+		}
+		name += f.users[i].String()[:8]
+		names[i] = name
+		if _, err := f.pool.Exec(ctx, "UPDATE users SET display_name = $1 WHERE id = $2", name, f.users[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.svc.Results(ctx, f.room, f.users[0]); !errors.Is(err, app.ErrRaceNotStarted) {
+		t.Fatalf("results before begin err=%v, want ErrRaceNotStarted", err)
+	}
+	f.begin(t)
+	start := f.race.StartedAt.Time
+	f.now = start.Add(50 * time.Second)
+	f.ingest(t, 0, 20000, target, start.Add(20*time.Second))
+	f.ingest(t, 1, 15000, target+1, start.Add(15*time.Second))
+	f.ingest(t, 2, 30000, 300000, start.Add(30*time.Second))
+	f.ingest(t, 4, 40000, 400000, start.Add(40*time.Second))
+	// User 3 sends nothing.
+	if _, err := f.svc.Finalize(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.Results(ctx, f.room, f.users[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RaceID != f.race.ID || !got.Finished || got.TargetMillimeters != target {
+		t.Fatalf("results header=%+v", got)
+	}
+	ptr := func(v int64) *int64 { return &v }
+	rank := func(v int) *int { return &v }
+	want := []app.RaceResult{
+		{PublicPlayer: app.PublicPlayer{UserID: f.users[1], Name: names[1]}, Rank: rank(1), Status: "finished", ElapsedMilliseconds: ptr(15000), DistanceMillimeters: target, PaceMillisecondsPer500m: ptr(15000)},
+		{PublicPlayer: app.PublicPlayer{UserID: f.users[0], Name: names[0]}, Rank: rank(2), Status: "finished", ElapsedMilliseconds: ptr(20000), DistanceMillimeters: target, PaceMillisecondsPer500m: ptr(20000)},
+		{PublicPlayer: app.PublicPlayer{UserID: f.users[4], Name: names[4]}, Status: "dnf", DistanceMillimeters: 400000, PaceMillisecondsPer500m: ptr(40000 * 500000 / 400000)},
+		{PublicPlayer: app.NewPublicPlayer(f.users[2], pgtype.Text{}), Status: "dnf", DistanceMillimeters: 300000, PaceMillisecondsPer500m: ptr(30000 * 500000 / 300000)},
+		{PublicPlayer: app.PublicPlayer{UserID: f.users[3], Name: names[3]}, Status: "dnf", DistanceMillimeters: 0},
+	}
+	if !reflect.DeepEqual(got.Results, want) {
+		gotJSON, _ := json.Marshal(got.Results)
+		wantJSON, _ := json.Marshal(want)
+		t.Fatalf("results\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+	payload, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "@") {
+		t.Fatalf("results leak an email: %s", payload)
+	}
+	if _, err := f.svc.Results(ctx, f.room, uuid.Must(uuid.NewV7())); !errors.Is(err, app.ErrParticipantNotFound) {
+		t.Fatalf("stranger err=%v, want ErrParticipantNotFound", err)
+	}
+}
+
+func TestRaceServiceResultsSingleFinisherIsRankOne(t *testing.T) {
+	const target = 500000
+	f := seedRaceRoom(t, 1, target, time.Minute)
+	f.begin(t)
+	ctx := context.Background()
+	start := f.race.StartedAt.Time
+	f.now = start.Add(2 * time.Minute)
+	f.ingest(t, 0, 100000, target, start.Add(100*time.Second))
+	// The finisher is still fresh, so reaching the target alone ends the race.
+	f.onSleep = func() { t.Fatal("Run polled once every racer had reached the target") }
+	if err := f.svc.Run(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.Results(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Results) != 1 || got.Results[0].Rank == nil || *got.Results[0].Rank != 1 || got.Results[0].Status != "finished" {
+		t.Fatalf("single racer results=%+v", got.Results)
+	}
 }

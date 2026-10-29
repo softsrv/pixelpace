@@ -440,6 +440,66 @@ func TestRacePageRendersTrackDataAndScripts(t *testing.T) {
 	}
 }
 
+// TestRacePageRendersFinishModal asserts that race.html renders the hidden
+// dialog#race-finish-modal with all required elements and columns, and that
+// #race-track carries data-results-url, data-dashboard-url and data-finished.
+func TestRacePageRendersFinishModal(t *testing.T) {
+	render := func(finished bool) string {
+		t.Helper()
+		tmpl, err := template.ParseFS(FS, "templates/base.html", "templates/race.html")
+		if err != nil {
+			t.Fatalf("parse race page: %v", err)
+		}
+		raceID := uuid.MustParse("01950000-0000-7000-8000-0000000000aa")
+		selfID := uuid.MustParse("01950000-0000-7000-8000-0000000000bb")
+		roomID := uuid.MustParse("01950000-0000-7000-8000-0000000000dd")
+		var buf strings.Builder
+		data := map[string]any{
+			"User":    map[string]any{"ID": selfID, "Email": "rower@example.com"},
+			"DevMode": false,
+			"Race": map[string]any{
+				"RoomID":            roomID,
+				"RaceID":            &raceID,
+				"Finished":          finished,
+				"Label":             "2000m",
+				"TargetMillimeters": int64(2000000),
+			},
+			"Lanes": []map[string]any{
+				{"UserID": selfID, "Label": "Me", "IsSelf": true},
+			},
+		}
+		if err := tmpl.ExecuteTemplate(&buf, "base.html", data); err != nil {
+			t.Fatalf("execute race page: %v", err)
+		}
+		return buf.String()
+	}
+
+	out := render(false)
+	for _, want := range []string{
+		`<dialog id="race-finish-modal" class="modal">`,
+		`FINISH!`,
+		`Rank`,
+		`Racer`,
+		`Time`,
+		`Distance`,
+		`Pace / 500m`,
+		`<p class="text-error hidden" role="alert"></p>`,
+		`<button type="button" class="btn btn-primary">Done</button>`,
+		`data-results-url="/rooms/01950000-0000-7000-8000-0000000000dd/race/results"`,
+		`data-dashboard-url="/dashboard"`,
+		`data-finished="false"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered race page missing %q", want)
+		}
+	}
+
+	finishedOut := render(true)
+	if !strings.Contains(finishedOut, `data-finished="true"`) {
+		t.Errorf(`finished race page missing data-finished="true"`)
+	}
+}
+
 // TestSimulatorPanelRendersOnlyInDevMode renders the REAL dashboard and race
 // pages and asserts the PM5 simulator panel (with its controls and defaults)
 // appears right after #bt-connection-info in development mode, before the

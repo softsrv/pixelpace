@@ -558,6 +558,37 @@ test('broadcast frames from the current socket are re-dispatched as race telemet
   assert.equal(app.events('pixelpace:race-telemetry').length, 1, 'a stopped stream no longer dispatches');
 });
 
+test('a finished frame dispatches pixelpace:race-finished and no telemetry, and window.stopRaceStream closes the active stream', function () {
+  var app = runDashboardApp();
+  var stream = app.start('race-one');
+  var socket = stream.socket;
+  socket.open();
+
+  socket.onmessage({ data: JSON.stringify({ type: 'finished' }) });
+  assert.equal(app.events('pixelpace:race-finished').length, 1, 'exactly one race-finished event');
+  assert.equal(app.events('pixelpace:race-telemetry').length, 0, 'no race-telemetry event from finished frame');
+
+  socket.finishClose();
+  app.retry();
+  socket.onmessage({ data: JSON.stringify({ type: 'finished' }) });
+  assert.equal(app.events('pixelpace:race-finished').length, 1, 'stale socket dispatches none');
+
+  var currentStream = app.window.startRaceStream('race-one');
+  var currentSocket = currentStream.socket;
+  currentSocket.open();
+  assert.equal(typeof app.window.stopRaceStream, 'function');
+  assert.equal(currentSocket.readyState, 1);
+  app.window.stopRaceStream();
+  assert.equal(currentSocket.readyState, 2, 'active socket was closed by stopRaceStream');
+  currentSocket.onmessage({ data: JSON.stringify({ type: 'finished' }) });
+  assert.equal(app.events('pixelpace:race-finished').length, 1, 'stopped stream dispatches none');
+
+  // Calling stopRaceStream when no active stream is running is a safe no-op.
+  assert.doesNotThrow(function () {
+    app.window.stopRaceStream();
+  });
+});
+
 test('each streamed sample is also dispatched locally, only while a race is active', function () {
   var app = runDashboardApp();
   app.tick();

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/softsrv/starter/internal/auth"
 	"github.com/softsrv/starter/internal/db"
@@ -21,9 +22,13 @@ const routerTestJWTSecret = "router-test-secret-at-least-32-bytes-long!!"
 
 type routerUserFetcher struct {
 	user db.User
+	err  error
 }
 
 func (f routerUserFetcher) GetUserByID(context.Context, uuid.UUID) (db.User, error) {
+	if f.err != nil {
+		return db.User{}, f.err
+	}
 	return f.user, nil
 }
 
@@ -238,14 +243,41 @@ func TestRootRoute(t *testing.T) {
 		t.Fatalf("issue wrong secret access token: %v", err)
 	}
 
+	unverifiedUser := db.User{ID: uuid.New(), Email: "unverified@example.com", EmailVerified: false}
+	unverifiedToken, err := auth.IssueAccessToken(unverifiedUser.ID, unverifiedUser.Email, routerTestJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue unverified access token: %v", err)
+	}
+
 	tests := []struct {
 		name         string
 		path         string
 		cookie       *http.Cookie
+		fetcher      *routerUserFetcher
 		wantCode     int
 		wantLocation string
 		wantMarker   bool
+		wantCleared  bool
 	}{
+		{
+			name:         "valid token for deleted user -> 200 landing page, cookie cleared",
+			path:         "/",
+			cookie:       &http.Cookie{Name: "access_token", Value: validToken.AccessToken},
+			fetcher:      &routerUserFetcher{err: pgx.ErrNoRows},
+			wantCode:     http.StatusOK,
+			wantLocation: "",
+			wantMarker:   true,
+			wantCleared:  true,
+		},
+		{
+			name:         "valid token for unverified user -> 302 to /dashboard",
+			path:         "/",
+			cookie:       &http.Cookie{Name: "access_token", Value: unverifiedToken.AccessToken},
+			fetcher:      &routerUserFetcher{user: unverifiedUser},
+			wantCode:     http.StatusFound,
+			wantLocation: "/dashboard",
+			wantMarker:   false,
+		},
 		{
 			name:         "no cookie -> 200 landing page",
 			path:         "/",
@@ -298,8 +330,12 @@ func TestRootRoute(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			fetcher := routerUserFetcher{user: validUser}
+			if tt.fetcher != nil {
+				fetcher = *tt.fetcher
+			}
 			h := NewRouter(ctx, RouterConfig{
-				Queries:   routerUserFetcher{user: validUser},
+				Queries:   fetcher,
 				Renderer:  newDashboardTestRenderer(t),
 				JWTSecret: routerTestJWTSecret,
 			})
@@ -321,6 +357,15 @@ func TestRootRoute(t *testing.T) {
 			hasMarker := strings.Contains(body, `id="landing-marker"`)
 			if hasMarker != tt.wantMarker {
 				t.Errorf("landing marker present = %v, want %v; body = %q", hasMarker, tt.wantMarker, body)
+			}
+			cleared := false
+			for _, c := range rr.Result().Cookies() {
+				if c.Name == "access_token" && c.MaxAge < 0 {
+					cleared = true
+				}
+			}
+			if cleared != tt.wantCleared {
+				t.Errorf("access_token cleared = %v, want %v", cleared, tt.wantCleared)
 			}
 		})
 	}

@@ -282,11 +282,31 @@ func TestLandingPageRender(t *testing.T) {
 	if !strings.Contains(out, `data-theme="dracula"`) {
 		t.Errorf("rendered output missing data-theme=\"dracula\"")
 	}
-	if !strings.Contains(out, `<a href="/" class="text-xl font-bold">PixelPace</a>`) {
-		t.Errorf("rendered output missing PixelPace brand navbar link")
+	if !strings.Contains(out, `<span class="text-xl font-bold">PixelPace</span>`) {
+		t.Errorf("rendered output missing PixelPace navbar brand (plain text on the landing page)")
 	}
-	if strings.Contains(out, `<a href="/" class="text-xl font-bold">App</a>`) {
-		t.Errorf("rendered output contains forbidden App brand navbar link")
+	if strings.Contains(out, `<a href="/" class="text-xl font-bold">`) {
+		t.Errorf("landing page navbar brand must not be a link")
+	}
+	if strings.Contains(out, `font-bold">App<`) {
+		t.Errorf("rendered output contains forbidden App navbar brand")
+	}
+
+	// The only links on the whole rendered page are Sign up (/register) and Sign in (/login).
+	pageHrefs := regexp.MustCompile(`<a\b[^>]*\bhref="([^"]*)"`).FindAllStringSubmatch(out, -1)
+	sawRegister, sawLogin := false, false
+	for _, m := range pageHrefs {
+		switch m[1] {
+		case "/register":
+			sawRegister = true
+		case "/login":
+			sawLogin = true
+		default:
+			t.Errorf("forbidden link on landing page: href=%q (only /register and /login allowed)", m[1])
+		}
+	}
+	if !sawRegister || !sawLogin {
+		t.Errorf("landing page links: register=%v login=%v, want both", sawRegister, sawLogin)
 	}
 
 	// CLM-5: Shows a 'Sign up' link to /register and a 'Sign in' link to /login,

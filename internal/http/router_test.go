@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"errors"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -268,6 +269,16 @@ func TestRootRoute(t *testing.T) {
 			wantLocation: "",
 			wantMarker:   true,
 			wantCleared:  true,
+		},
+		{
+			name:         "valid token, transient user lookup error -> 302 to /dashboard, cookie kept",
+			path:         "/",
+			cookie:       &http.Cookie{Name: "access_token", Value: validToken.AccessToken},
+			fetcher:      &routerUserFetcher{err: errors.New("connection reset")},
+			wantCode:     http.StatusFound,
+			wantLocation: "/dashboard",
+			wantMarker:   false,
+			wantCleared:  false,
 		},
 		{
 			name:         "valid token for unverified user -> 302 to /dashboard",

@@ -2,12 +2,14 @@ package http
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/auth"
@@ -69,7 +71,7 @@ type rootSession int
 const (
 	rootSignedOut rootSession = iota // missing, malformed, expired or wrong-secret token
 	rootOrphaned                     // valid token whose user no longer exists
-	rootSignedIn                     // valid token for an existing user
+	rootSignedIn                     // valid token for an existing user (or a lookup that failed transiently)
 )
 
 // classifyRootToken validates token and looks its user up with the same
@@ -84,8 +86,13 @@ func classifyRootToken(r *http.Request, cfg RouterConfig, token string) rootSess
 		return rootOrphaned
 	}
 	if _, err := cfg.Queries.GetUserByID(r.Context(), userID); err != nil {
-		slog.WarnContext(r.Context(), "root: token user lookup failed; treating as signed out", "user_id", userID, "error", err)
-		return rootOrphaned
+		if errors.Is(err, pgx.ErrNoRows) {
+			return rootOrphaned
+		}
+		// A transient store failure says nothing about the account: keep the
+		// session rather than clearing a valid cookie and logging the user out.
+		slog.WarnContext(r.Context(), "root: token user lookup failed; keeping session", "user_id", userID, "error", err)
+		return rootSignedIn
 	}
 	return rootSignedIn
 }

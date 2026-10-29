@@ -97,15 +97,19 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		// Only send the user to the dashboard if they present a genuinely valid
-		// access token; a stale or malformed cookie should land on /login rather
-		// than bouncing through a protected route.
+		// access token; a stale or malformed cookie on exactly "/" should land on
+		// the landing page rather than bouncing through a protected route.
 		if cookie, err := r.Cookie("access_token"); err == nil && cookie.Value != "" {
 			if _, vErr := auth.ValidateAccessToken(cookie.Value, cfg.JWTSecret); vErr == nil {
 				http.Redirect(w, r, "/dashboard", http.StatusFound)
 				return
 			}
 		}
-		http.Redirect(w, r, "/login", http.StatusFound)
+		if r.URL.Path != "/" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		cfg.Renderer.Page(w, http.StatusOK, "landing.html", nil)
 	})
 	mux.HandleFunc("GET /login", authH.LoginPage)
 	mux.HandleFunc("GET /register", authH.RegisterPage)

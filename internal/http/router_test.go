@@ -32,6 +32,7 @@ func newDashboardTestRenderer(t *testing.T) *handlers.TemplateRenderer {
 	fsys := fstest.MapFS{
 		"templates/base.html":      &fstest.MapFile{Data: []byte(`{{define "base.html"}}<!doctype html><html><body>{{block "content" .}}{{end}}</body></html>{{end}}`)},
 		"templates/dashboard.html": &fstest.MapFile{Data: []byte(`{{define "content"}}<section id="rowing-machine-card" data-dev-mode="{{if .DevMode}}true{{else}}false{{end}}">{{.User.Email}}</section>{{end}}`)},
+		"templates/landing.html":   &fstest.MapFile{Data: []byte(`{{define "content"}}<section id="landing-marker">PixelPace Landing</section>{{end}}`)},
 	}
 	base, err := template.ParseFS(fsys, "templates/base.html")
 	if err != nil {
@@ -215,4 +216,112 @@ func TestRouterWait(t *testing.T) {
 	r := NewRouter(ctx, RouterConfig{})
 	// Wait should return cleanly when no in-flight begins exist.
 	r.Wait()
+}
+
+func TestRootRoute(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	validUser := db.User{ID: uuid.New(), Email: "user@example.com", EmailVerified: true}
+	validToken, err := auth.IssueAccessToken(validUser.ID, validUser.Email, routerTestJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue valid access token: %v", err)
+	}
+
+	expiredToken, err := auth.IssueAccessToken(validUser.ID, validUser.Email, routerTestJWTSecret, -1*time.Minute)
+	if err != nil {
+		t.Fatalf("issue expired access token: %v", err)
+	}
+
+	wrongSecretToken, err := auth.IssueAccessToken(validUser.ID, validUser.Email, "wrong-jwt-secret-with-minimum-length-32", 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue wrong secret access token: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		path         string
+		cookie       *http.Cookie
+		wantCode     int
+		wantLocation string
+		wantMarker   bool
+	}{
+		{
+			name:         "no cookie -> 200 landing page",
+			path:         "/",
+			cookie:       nil,
+			wantCode:     http.StatusOK,
+			wantLocation: "",
+			wantMarker:   true,
+		},
+		{
+			name:         "garbage cookie -> 200 landing page",
+			path:         "/",
+			cookie:       &http.Cookie{Name: "access_token", Value: "garbage-value-not-a-jwt"},
+			wantCode:     http.StatusOK,
+			wantLocation: "",
+			wantMarker:   true,
+		},
+		{
+			name:         "expired token -> 200 landing page",
+			path:         "/",
+			cookie:       &http.Cookie{Name: "access_token", Value: expiredToken.AccessToken},
+			wantCode:     http.StatusOK,
+			wantLocation: "",
+			wantMarker:   true,
+		},
+		{
+			name:         "wrong secret token -> 200 landing page",
+			path:         "/",
+			cookie:       &http.Cookie{Name: "access_token", Value: wrongSecretToken.AccessToken},
+			wantCode:     http.StatusOK,
+			wantLocation: "",
+			wantMarker:   true,
+		},
+		{
+			name:         "valid token -> 302 to /dashboard without landing marker",
+			path:         "/",
+			cookie:       &http.Cookie{Name: "access_token", Value: validToken.AccessToken},
+			wantCode:     http.StatusFound,
+			wantLocation: "/dashboard",
+			wantMarker:   false,
+		},
+		{
+			name:         "GET /nope with no cookie -> 302 to /login without landing marker",
+			path:         "/nope",
+			cookie:       nil,
+			wantCode:     http.StatusFound,
+			wantLocation: "/login",
+			wantMarker:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewRouter(ctx, RouterConfig{
+				Queries:   routerUserFetcher{user: validUser},
+				Renderer:  newDashboardTestRenderer(t),
+				JWTSecret: routerTestJWTSecret,
+			})
+
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			if tt.cookie != nil {
+				req.AddCookie(tt.cookie)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+
+			if rr.Code != tt.wantCode {
+				t.Errorf("status = %d, want %d", rr.Code, tt.wantCode)
+			}
+			if loc := rr.Header().Get("Location"); loc != tt.wantLocation {
+				t.Errorf("Location = %q, want %q", loc, tt.wantLocation)
+			}
+			body := rr.Body.String()
+			hasMarker := strings.Contains(body, `id="landing-marker"`)
+			if hasMarker != tt.wantMarker {
+				t.Errorf("landing marker present = %v, want %v; body = %q", hasMarker, tt.wantMarker, body)
+			}
+		})
+	}
 }

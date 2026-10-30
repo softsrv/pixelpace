@@ -254,6 +254,10 @@ document.body.addEventListener('token-expired', async function () {
         return;
       }
       if (!frame || typeof frame !== 'object' || Array.isArray(frame)) return;
+      if (frame.type === 'finished') {
+        document.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+        return;
+      }
       if (frame.type === 'roster') {
         if (!Array.isArray(frame.players)) return;
         var roster = Object.create(null);
@@ -357,6 +361,9 @@ document.body.addEventListener('token-expired', async function () {
 
   // The race owner supplies the id; the returned handle exposes the replay buffer.
   window.startRaceStream = startRaceStream;
+  window.stopRaceStream = function () {
+    if (activeRaceStream) activeRaceStream.stop();
+  };
 
   function showConnectionInfo(message) {
     if (!connectionInfo) return;

@@ -35,6 +35,7 @@ type Querier interface {
 	EnqueueQuickMatch(ctx context.Context, arg EnqueueQuickMatchParams) error
 	FinishRace(ctx context.Context, arg FinishRaceParams) error
 	FinishRaceParticipant(ctx context.Context, arg FinishRaceParticipantParams) error
+	FinishRaceRoom(ctx context.Context, id uuid.UUID) error
 	FriendshipExists(ctx context.Context, arg FriendshipExistsParams) (bool, error)
 	GetActiveRoomByJoinCode(ctx context.Context, joinCode string) (Room, error)
 	GetFriendRequest(ctx context.Context, id uuid.UUID) (FriendRequest, error)
@@ -75,6 +76,8 @@ type Querier interface {
 	// Invites stay listed only while their room is an open lobby the invitee has
 	// not already joined.
 	ListPendingRoomInvites(ctx context.Context, inviteeUserID uuid.UUID) ([]ListPendingRoomInvitesRow, error)
+	// Every participant with their public name, recorded finish and latest sample.
+	ListRaceResults(ctx context.Context, raceID uuid.UUID) ([]ListRaceResultsRow, error)
 	ListRaceRoomParticipants(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
 	ListRaceRoster(ctx context.Context, raceID uuid.UUID) ([]ListRaceRosterRow, error)
 	ListRaceStandings(ctx context.Context, arg ListRaceStandingsParams) ([]ListRaceStandingsRow, error)
@@ -82,6 +85,8 @@ type Querier interface {
 	// Lanes follow the same order Begin seeds race participants in.
 	ListRoomLineup(ctx context.Context, roomID uuid.UUID) ([]ListRoomLineupRow, error)
 	ListRoomRoster(ctx context.Context, roomID uuid.UUID) ([]ListRoomRosterRow, error)
+	// Begun races not yet finalized whose room is still racing, for resuming Run.
+	ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error)
 	ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)

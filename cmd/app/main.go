@@ -137,6 +137,11 @@ func main() {
 	// ── Token cleanup background worker ───────────────────────────────────────
 	go app.RunTokenCleanup(cleanupCtx, queries)
 
+	// ── Resume races a previous run left unfinished ───────────────────────────
+	if err := handler.ResumeRaces(); err != nil {
+		slog.Error("resume unfinished races", "error", err)
+	}
+
 	// ── Graceful shutdown ─────────────────────────────────────────────────────
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

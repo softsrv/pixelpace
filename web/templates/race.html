@@ -19,6 +19,9 @@
            data-status-url="/rooms/{{.Race.RoomID}}/race/status"
            data-ready-url="/rooms/{{.Race.RoomID}}/race/ready"
            data-lobby-url="/rooms/{{.Race.RoomID}}/lobby"
+           data-results-url="/rooms/{{.Race.RoomID}}/race/results"
+           data-dashboard-url="/dashboard"
+           data-finished="{{if .Race.Finished}}true{{else}}false{{end}}"
            data-race-id="{{with .Race.RaceID}}{{.}}{{end}}"
            role="img"
            aria-label="Race track: start line at the bottom, finish line at the top"></div>
@@ -28,6 +31,30 @@
       </ol>
     </div>
   </div>
+
+  <dialog id="race-finish-modal" class="modal">
+    <div class="modal-box max-w-2xl space-y-4">
+      <h2 class="text-2xl font-bold">FINISH!</h2>
+      <p class="text-error hidden" role="alert"></p>
+      <div class="overflow-x-auto">
+        <table class="table table-zebra w-full">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Racer</th>
+              <th>Time</th>
+              <th>Distance</th>
+              <th>Pace / 500m</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="modal-action">
+        <button type="button" class="btn btn-primary">Done</button>
+      </div>
+    </div>
+  </dialog>
 
   <div id="rowing-machine-card" class="card bg-base-100 shadow-xl" data-dev-mode="{{if .DevMode}}true{{else}}false{{end}}">
     <div class="card-body p-4">

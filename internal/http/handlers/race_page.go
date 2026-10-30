@@ -17,6 +17,7 @@ import (
 type roomRaceViewer interface {
 	RoomRace(ctx context.Context, roomID, userID uuid.UUID) (app.RoomRace, error)
 	MarkEquipmentReady(ctx context.Context, roomID, userID uuid.UUID) error
+	Results(ctx context.Context, roomID, userID uuid.UUID) (app.RaceResults, error)
 }
 
 var _ roomRaceViewer = (*app.RaceService)(nil)
@@ -32,11 +33,14 @@ type RaceLane struct {
 // RaceStatus is what the race page polls for: who is still connecting, when
 // the race starts and, once it has, the race to stream telemetry to.
 // ServerTime lets the page align its countdown with the server clock.
+// Finished is true once the race has ended, so a reloaded page can show the
+// results instead of waiting for a start.
 type RaceStatus struct {
 	RaceID       *uuid.UUID      `json:"race_id"`
 	RaceStartsAt *time.Time      `json:"race_starts_at"`
 	ServerTime   time.Time       `json:"server_time"`
 	Racers       []app.RaceRacer `json:"racers"`
+	Finished     bool            `json:"finished"`
 }
 
 // RacePageHandler renders the race view, collects each racer's equipment
@@ -84,7 +88,32 @@ func (h *RacePageHandler) Status(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(RaceStatus{
 		RaceID: race.RaceID, RaceStartsAt: race.RaceStartsAt, ServerTime: h.now(), Racers: race.Racers,
+		Finished: race.Finished,
 	})
+}
+
+// Results reports every participant's outcome of the room's race, by public
+// name. A racer dropped before the race gets 404 and a room with no race yet
+// gets 409.
+func (h *RacePageHandler) Results(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	roomID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "Invalid room ID", http.StatusBadRequest)
+		return
+	}
+	results, err := h.races.Results(r.Context(), roomID, user.ID)
+	if err != nil {
+		writeRaceError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(results)
 }
 
 // Ready records that the caller's race page has loaded and their rowing
@@ -126,11 +155,24 @@ func (h *RacePageHandler) roomRace(w http.ResponseWriter, r *http.Request, toLob
 			http.Redirect(w, r, lobbyPath(roomID), http.StatusSeeOther)
 			return uuid.Nil, app.RoomRace{}, false
 		}
+		if toLobby && errors.Is(err, app.ErrParticipantNotFound) {
+			// A racer dropped before the start has no participant row, so
+			// race.mjs never runs for them: tell them on the page itself.
+			h.renderer.Page(w, http.StatusNotFound, "room-unavailable.html", map[string]any{
+				"User": user, "Message": removedFromRaceMessage,
+			})
+			return uuid.Nil, app.RoomRace{}, false
+		}
 		writeRaceError(w, r, err)
 		return uuid.Nil, app.RoomRace{}, false
 	}
 	return user.ID, race, true
 }
+
+// removedFromRaceMessage is what the race page shows someone who is not in
+// the race. RoomRace cannot tell a racer dropped before the start apart from
+// someone who never joined, so it covers both without saying more.
+const removedFromRaceMessage = "You're not in this race. If your rowing machine wasn't connected in time, you were removed from it before the start."
 
 func writeRaceError(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError

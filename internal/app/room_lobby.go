@@ -15,6 +15,8 @@ import (
 type RaceTypeOption struct {
 	ID    uuid.UUID
 	Label string
+	// TargetMillimeters is the race distance, used to show pace.
+	TargetMillimeters int64
 }
 
 // RoomLobby is one participant's view of a room before its race starts.
@@ -50,7 +52,7 @@ func (s *RoomService) RaceTypeOptions(ctx context.Context) ([]RaceTypeOption, er
 	}
 	options := make([]RaceTypeOption, 0, len(rows))
 	for _, row := range rows {
-		options = append(options, RaceTypeOption{ID: row.ID, Label: row.Label})
+		options = append(options, RaceTypeOption{ID: row.ID, Label: row.Label, TargetMillimeters: row.TargetValue})
 	}
 	return options, nil
 }

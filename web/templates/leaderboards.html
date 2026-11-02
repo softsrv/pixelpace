@@ -1,0 +1,102 @@
+{{define "title"}}Leaderboards{{end}}
+
+{{define "main-class"}}max-w-6xl{{end}}
+
+{{define "content"}}
+<div class="space-y-10 pb-6">
+  <section class="pp-panel pp-hero-card overflow-hidden" aria-labelledby="pp-leaderboards-title">
+    {{template "pp-scene"}}
+    <div class="pp-hero-body">
+      <div class="space-y-2">
+        <p class="pp-kicker pp-arcade">Hall of fame</p>
+        <h1 id="pp-leaderboards-title" class="pp-player-name">Leaderboards</h1>
+        <p class="pp-muted text-sm">Every rower's personal best. Races and solo time trials are ranked separately.</p>
+      </div>
+      <a href="/dashboard" class="pp-btn pp-btn-sm self-start lg:self-end">Row now</a>
+    </div>
+  </section>
+
+  {{template "leaderboard-board" .Board}}
+</div>
+{{end}}
+
+{{/* The board region: filters and rankings. Filter links swap only this
+     region in place (and update the address bar), and work as plain links
+     without JavaScript. */}}
+{{define "leaderboard-board"}}
+<section id="leaderboard-board" class="pp-panel" aria-labelledby="pp-board-title">
+  <div class="pp-section gap-6">
+    <div class="flex flex-wrap items-center justify-between gap-4">
+      <div class="pp-head">
+        <span class="pp-ico-box">{{if .TimeTrial}}{{template "pp-icon-clock"}}{{else}}{{template "pp-icon-trophy"}}{{end}}</span>
+        <div>
+          <p class="pp-kicker pp-arcade">{{if .TimeTrial}}Time trial{{else}}Race{{end}} leaderboard</p>
+          <h2 id="pp-board-title" class="pp-title pp-title-lg">{{.RaceLabel}}</h2>
+        </div>
+      </div>
+      {{template "leaderboard-tabs" .Mode}}
+    </div>
+
+    <div class="space-y-4">
+      {{template "leaderboard-tabs" .Distance}}
+      <div class="flex flex-wrap gap-x-8 gap-y-4">
+        {{template "leaderboard-tabs" .Scope}}
+        {{template "leaderboard-tabs" .Period}}
+      </div>
+    </div>
+
+    {{if .You}}
+    <div class="pp-row pp-you" role="status">
+      <span class="pp-arcade text-xs">Your best</span>
+      <span class="pp-mono font-bold">#{{.You.Rank}} &middot; {{.You.Time}}</span>
+    </div>
+    {{end}}
+
+    {{if .Entries}}
+    <div class="overflow-x-auto">
+      <table class="pp-table pp-leaderboard">
+        <thead>
+          <tr>
+            <th scope="col">Rank</th>
+            <th scope="col">Racer</th>
+            <th scope="col">Time</th>
+            <th scope="col">Pace / 500m</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Entries}}
+          <tr class="pp-rank-{{.Rank}}{{if .You}} font-bold{{end}}"{{if .You}} aria-current="true"{{end}}>
+            <td>{{.Rank}}</td>
+            <td class="break-all">{{.Name}}{{if .You}} <span class="pp-you-tag pp-arcade">You</span>{{end}}</td>
+            <td>{{.Time}}</td>
+            <td>{{.Pace}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <div class="pp-empty space-y-3 text-center">
+      <p class="pp-arcade pp-blink text-sm text-[#f1fa8c]">No scores yet</p>
+      <p class="pp-muted text-sm">
+        {{if .Friends}}None of your friends have a finished {{.RaceLabel}} {{if .TimeTrial}}time trial{{else}}race{{end}}{{if ne .Window "all-time"}} this {{.Window}}{{end}}.
+        {{else}}Nobody has finished a {{.RaceLabel}} {{if .TimeTrial}}time trial{{else}}race{{end}}{{if ne .Window "all-time"}} this {{.Window}}{{end}}.{{end}}
+        {{if .TimeTrial}}Create a race and start it on your own to set the first time.{{else}}Create a race and invite a friend to set the first time.{{end}}
+      </p>
+      <a href="/dashboard" class="pp-btn pp-btn-cyan pp-btn-sm">Go to dashboard</a>
+    </div>
+    {{end}}
+  </div>
+</section>
+{{end}}
+
+{{define "leaderboard-tabs"}}
+<nav class="space-y-2" aria-label="{{.Label}}">
+  <span class="pp-label pp-arcade block">{{.Label}}</span>
+  <ul class="pp-tabs{{if .Big}} pp-tabs-lg{{end}}">
+    {{range .Filters}}
+    <li><a class="pp-tab pp-arcade" href="{{.URL}}" hx-get="{{.URL}}" hx-target="#leaderboard-board" hx-swap="outerHTML" hx-push-url="true"{{if .Active}} aria-current="page"{{end}}>{{.Label}}</a></li>
+    {{end}}
+  </ul>
+</nav>
+{{end}}

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/softsrv/starter/internal/app"
+	"github.com/softsrv/starter/internal/http/handlers"
 )
 
 // TestDashboardStatValuesContainOverflowGuardClasses renders the REAL embedded
@@ -144,6 +145,10 @@ func TestMainLayoutColumnWidths(t *testing.T) {
 		{page: "templates/lobby.html", want: "max-w-6xl", notWant: "max-w-md", data: map[string]any{
 			"User":  map[string]any{"Email": "host@example.com"},
 			"Lobby": app.RoomLobby{JoinCode: "ABC234", RaceLabel: "2000m"},
+		}},
+		{page: "templates/leaderboards.html", want: "max-w-6xl", notWant: "max-w-md", data: map[string]any{
+			"User":  map[string]any{"Email": "rower@example.com"},
+			"Board": handlers.LeaderboardBoard{RaceLabel: "500m"},
 		}},
 		{page: "templates/race.html", want: "max-w-6xl", notWant: "max-w-md", data: map[string]any{
 			"User": map[string]any{"Email": "rower@example.com"},

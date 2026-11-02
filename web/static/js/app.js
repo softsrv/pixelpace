@@ -834,8 +834,16 @@ document.body.addEventListener('token-expired', async function () {
   }
 
   connectBtn.addEventListener('click', async function () {
-    if (!window.isSecureContext || !navigator.bluetooth) {
-      showConnectionInfo('Web Bluetooth is not available in this browser or this page is not a secure context. Use a supported browser over HTTPS or localhost.');
+    // In development, check the page first: browsers that do support Web
+    // Bluetooth (Chrome included) hide navigator.bluetooth on insecure pages,
+    // so a missing API there says nothing about the browser. Production is
+    // always served over HTTPS, and customers only ever see the browser advice.
+    if (devMode && !window.isSecureContext) {
+      showConnectionInfo('Bluetooth only works on a secure page. Open PixelPace over HTTPS (or at localhost when developing).');
+      return;
+    }
+    if (!navigator.bluetooth) {
+      showConnectionInfo('Google Chrome is required to connect a rowing machine. This browser does not support Bluetooth connections.');
       return;
     }
 

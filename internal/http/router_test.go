@@ -14,7 +14,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/auth"
+	"github.com/softsrv/starter/internal/concept2"
 	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/http/handlers"
 )
@@ -213,6 +215,90 @@ func TestProfileDisplayNameRouteRequiresVerifiedUser(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// concept2Routes are every /profile/concept2/* route the router registers.
+var concept2Routes = []struct{ method, path string }{
+	{http.MethodGet, "/profile/concept2"},
+	{http.MethodGet, "/profile/concept2/connect"},
+	{http.MethodGet, "/profile/concept2/callback"},
+	{http.MethodPost, "/profile/concept2/disconnect"},
+}
+
+// CLM-8: with Concept2 enabled, every /profile/concept2/* route sits behind
+// verifiedMW — anonymous goes to /login, unverified to /verify-email.
+func TestConcept2RoutesRequireVerifiedUser(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	user := db.User{ID: uuid.New(), Email: "unverified@example.com", EmailVerified: false}
+	token, err := auth.IssueAccessToken(user.ID, user.Email, routerTestJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue access token: %v", err)
+	}
+	h := NewRouter(ctx, RouterConfig{
+		Queries:   routerUserFetcher{user: user},
+		Renderer:  newDashboardTestRenderer(t),
+		JWTSecret: routerTestJWTSecret,
+		// Enabled; middleware must reject before either is used.
+		Concept2Svc:    app.NewConcept2Service(nil, app.Concept2ServiceConfig{}),
+		Concept2Client: concept2.New("https://log-dev.concept2.invalid", "id", "secret", "http://localhost/profile/concept2/callback"),
+	})
+	for _, route := range concept2Routes {
+		for _, authenticated := range []bool{false, true} {
+			name := route.method + " " + route.path + "/anonymous"
+			wantLocation := "/login"
+			if authenticated {
+				name = route.method + " " + route.path + "/unverified"
+				wantLocation = "/verify-email"
+			}
+			t.Run(name, func(t *testing.T) {
+				req := httptest.NewRequest(route.method, route.path, nil)
+				if authenticated {
+					req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
+				}
+				rr := httptest.NewRecorder()
+				h.ServeHTTP(rr, req)
+				if rr.Code != http.StatusSeeOther {
+					t.Errorf("status = %d, want %d", rr.Code, http.StatusSeeOther)
+				}
+				if got := rr.Header().Get("Location"); got != wantLocation {
+					t.Errorf("Location = %q, want %q", got, wantLocation)
+				}
+			})
+		}
+	}
+}
+
+// CLM-10: with a nil Concept2Svc a verified user gets 404 from every
+// /profile/concept2/* route and is never redirected toward Concept2.
+func TestConcept2RoutesNotFoundWhenDisabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	user := db.User{ID: uuid.New(), Email: "rower@example.com", EmailVerified: true}
+	token, err := auth.IssueAccessToken(user.ID, user.Email, routerTestJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue access token: %v", err)
+	}
+	h := NewRouter(ctx, RouterConfig{
+		Queries:     routerUserFetcher{user: user},
+		Renderer:    newDashboardTestRenderer(t),
+		JWTSecret:   routerTestJWTSecret,
+		Concept2Svc: nil,
+	})
+	for _, route := range concept2Routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			req := httptest.NewRequest(route.method, route.path, nil)
+			req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want %d", rr.Code, http.StatusNotFound)
+			}
+			if got := rr.Header().Get("Location"); got != "" {
+				t.Errorf("Location = %q, want none", got)
+			}
+		})
 	}
 }
 

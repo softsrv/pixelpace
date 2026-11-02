@@ -24,6 +24,7 @@ type Querier interface {
 	CreateRaceParticipant(ctx context.Context, arg CreateRaceParticipantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecideFriendRequest(ctx context.Context, arg DecideFriendRequestParams) (FriendRequest, error)
+	DeleteConcept2Connection(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 	DeleteRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
 	DeleteRoomInvite(ctx context.Context, arg DeleteRoomInviteParams) (int64, error)
@@ -38,6 +39,7 @@ type Querier interface {
 	FinishRaceRoom(ctx context.Context, id uuid.UUID) error
 	FriendshipExists(ctx context.Context, arg FriendshipExistsParams) (bool, error)
 	GetActiveRoomByJoinCode(ctx context.Context, joinCode string) (Room, error)
+	GetConcept2Connection(ctx context.Context, userID uuid.UUID) (Concept2Connection, error)
 	GetFriendRequest(ctx context.Context, id uuid.UUID) (FriendRequest, error)
 	GetOldestRecentVerificationCode(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (PasswordResetToken, error)
@@ -90,6 +92,7 @@ type Querier interface {
 	ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)
+	MarkConcept2NeedsReconnect(ctx context.Context, userID uuid.UUID) (int64, error)
 	MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) error
 	MarkRaceParticipantDNF(ctx context.Context, id uuid.UUID) error
 	MarkRoomEquipmentReady(ctx context.Context, arg MarkRoomEquipmentReadyParams) (int64, error)
@@ -111,9 +114,15 @@ type Querier interface {
 	SetRoomRaceStartsAt(ctx context.Context, arg SetRoomRaceStartsAtParams) error
 	SetUserDisplayName(ctx context.Context, arg SetUserDisplayNameParams) error
 	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
+	UpdateConcept2Tokens(ctx context.Context, arg UpdateConcept2TokensParams) (int64, error)
 	UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error
 	UpdateRoomRaceType(ctx context.Context, arg UpdateRoomRaceTypeParams) error
+	// Every query here is keyed by the PixelPace user's id (user_id), so acting
+	// for one user can never read or change another user's connection.
+	// Connect or reconnect: a reconnect overwrites the stored tokens, account and
+	// timezone and clears needs_reconnect. auto_post and connected_at are kept.
+	UpsertConcept2Connection(ctx context.Context, arg UpsertConcept2ConnectionParams) (Concept2Connection, error)
 }
 
 var _ Querier = (*Queries)(nil)

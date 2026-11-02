@@ -52,6 +52,26 @@ document.addEventListener('htmx:response:error', function (evt) {
   if (found && found.target) found.target.textContent = found.source.getAttribute('data-error-message') || 'Something went wrong.';
 });
 
+// ── Concept2 Logbook connect: send the browser's timezone ─────────────────────
+
+// The Concept2 panel is loaded by htmx after page load, so this is a document
+// delegate. It fills the connect form's hidden tz with the browser's IANA
+// timezone; if Intl is unavailable or throws it stays empty (the server
+// stores UTC).
+document.addEventListener('submit', function (evt) {
+  var form = evt.target;
+  if (!form || !form.matches || !form.matches('form[data-concept2-connect]')) return;
+  var input = form.querySelector('input[name="tz"]');
+  if (!input) return;
+  var tz = '';
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (_) {
+    tz = '';
+  }
+  input.value = tz;
+});
+
 // ── Token expiry handling ─────────────────────────────────────────────────────
 
 // When the server fires the token-expired event, attempt a silent refresh.

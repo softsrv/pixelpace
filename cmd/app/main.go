@@ -12,11 +12,15 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	// Embed the IANA timezone database: the distroless runtime image has no
+	// zoneinfo, and Concept2 connections store the user's IANA timezone.
+	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/softsrv/starter/internal/app"
+	"github.com/softsrv/starter/internal/concept2"
 	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/email"
 	internalhttp "github.com/softsrv/starter/internal/http"
@@ -84,6 +88,20 @@ func main() {
 	raceSvc := app.NewRaceService(queries, pool, broadcaster, app.RaceServiceConfig{})
 	quickMatchSvc := app.NewQuickMatchService(queries, pool, roomSvc, app.QuickMatchServiceConfig{})
 
+	// Concept2 Logbook is optional: without CONCEPT2_CLIENT_ID and
+	// CONCEPT2_CLIENT_SECRET both stay nil and the router hides it.
+	var (
+		concept2Svc    *app.Concept2Service
+		concept2Client *concept2.Client
+	)
+	if cfg.Concept2Enabled() {
+		concept2Client = concept2.New(cfg.Concept2BaseURL, cfg.Concept2ClientID, cfg.Concept2ClientSecret, cfg.Concept2RedirectURL())
+		concept2Svc = app.NewConcept2Service(queries, app.Concept2ServiceConfig{
+			Sealer: concept2.NewSealer([]byte(cfg.JWTSecret)),
+		})
+		slog.Info("concept2 logbook enabled", "base_url", cfg.Concept2BaseURL)
+	}
+
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
 	// Page templates are NOT loaded here — the TemplateRenderer clones this
@@ -117,6 +135,8 @@ func main() {
 		QuickMatchSvc:     quickMatchSvc,
 		FriendSvc:         friendSvc,
 		LeaderboardSvc:    leaderboardSvc,
+		Concept2Svc:       concept2Svc,
+		Concept2Client:    concept2Client,
 		Renderer:          renderer,
 		JWTSecret:         cfg.JWTSecret,
 		AppBaseURL:        cfg.AppBaseURL,
@@ -189,41 +209,55 @@ func main() {
 // ── Config ────────────────────────────────────────────────────────────────────
 
 type config struct {
-	AppEnv             string
-	Port               string
-	AppBaseURL         string
-	DatabaseURL        string
-	ValkeyAddr         string
-	DBMaxConns         int
-	DBMinConns         int
-	TrustedProxyCount  int
-	JWTSecret          string
-	JWTAccessExpiry    time.Duration
-	RefreshTokenExpiry time.Duration
-	BCryptCost         int
-	PasswordMinLen     int
-	SMTPHost           string
-	SMTPPort           string
-	SMTPUsername       string
-	SMTPPassword       string
-	SMTPFromEmail      string
-	SMTPFromName       string
+	AppEnv               string
+	Port                 string
+	AppBaseURL           string
+	DatabaseURL          string
+	ValkeyAddr           string
+	DBMaxConns           int
+	DBMinConns           int
+	TrustedProxyCount    int
+	JWTSecret            string
+	JWTAccessExpiry      time.Duration
+	RefreshTokenExpiry   time.Duration
+	BCryptCost           int
+	PasswordMinLen       int
+	SMTPHost             string
+	SMTPPort             string
+	SMTPUsername         string
+	SMTPPassword         string
+	SMTPFromEmail        string
+	SMTPFromName         string
+	Concept2ClientID     string
+	Concept2ClientSecret string
+	Concept2BaseURL      string
+}
+
+func (c config) Concept2Enabled() bool {
+	return c.Concept2ClientID != "" && c.Concept2ClientSecret != ""
+}
+
+func (c config) Concept2RedirectURL() string {
+	return c.AppBaseURL + "/profile/concept2/callback"
 }
 
 func mustLoadConfig() config {
 	cfg := config{
-		AppEnv:        getEnvOrDefault("APP_ENV", "development"),
-		Port:          getEnvOrDefault("PORT", "8080"),
-		AppBaseURL:    mustGetEnv("APP_BASE_URL"),
-		DatabaseURL:   mustGetEnv("DATABASE_URL"),
-		ValkeyAddr:    getEnvOrDefault("VALKEY_ADDR", "localhost:6379"),
-		JWTSecret:     mustGetEnv("JWT_SECRET"),
-		SMTPHost:      mustGetEnv("SMTP_HOST"),
-		SMTPPort:      mustGetEnv("SMTP_PORT"),
-		SMTPUsername:  os.Getenv("SMTP_USERNAME"),
-		SMTPPassword:  os.Getenv("SMTP_PASSWORD"),
-		SMTPFromEmail: mustGetEnv("SMTP_FROM_EMAIL"),
-		SMTPFromName:  getEnvOrDefault("SMTP_FROM_NAME", "App"),
+		AppEnv:               getEnvOrDefault("APP_ENV", "development"),
+		Port:                 getEnvOrDefault("PORT", "8080"),
+		AppBaseURL:           mustGetEnv("APP_BASE_URL"),
+		DatabaseURL:          mustGetEnv("DATABASE_URL"),
+		ValkeyAddr:           getEnvOrDefault("VALKEY_ADDR", "localhost:6379"),
+		JWTSecret:            mustGetEnv("JWT_SECRET"),
+		SMTPHost:             mustGetEnv("SMTP_HOST"),
+		SMTPPort:             mustGetEnv("SMTP_PORT"),
+		SMTPUsername:         os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
+		SMTPFromEmail:        mustGetEnv("SMTP_FROM_EMAIL"),
+		SMTPFromName:         getEnvOrDefault("SMTP_FROM_NAME", "App"),
+		Concept2ClientID:     os.Getenv("CONCEPT2_CLIENT_ID"),
+		Concept2ClientSecret: os.Getenv("CONCEPT2_CLIENT_SECRET"),
+		Concept2BaseURL:      getEnvOrDefault("CONCEPT2_BASE_URL", "https://log-dev.concept2.com"),
 	}
 
 	if len(cfg.JWTSecret) < 32 {

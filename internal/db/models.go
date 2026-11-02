@@ -11,6 +11,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Concept2Connection struct {
+	UserID          uuid.UUID          `json:"user_id"`
+	C2UserID        int64              `json:"c2_user_id"`
+	C2Username      string             `json:"c2_username"`
+	AccessTokenEnc  []byte             `json:"access_token_enc"`
+	RefreshTokenEnc []byte             `json:"refresh_token_enc"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	Scope           string             `json:"scope"`
+	AutoPost        bool               `json:"auto_post"`
+	NeedsReconnect  bool               `json:"needs_reconnect"`
+	Timezone        string             `json:"timezone"`
+	ConnectedAt     pgtype.Timestamptz `json:"connected_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EmailVerificationCode struct {
 	ID        uuid.UUID          `json:"id"`
 	UserID    uuid.UUID          `json:"user_id"`

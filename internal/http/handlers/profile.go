@@ -25,16 +25,29 @@ type profileUserServicer interface {
 
 // ProfileHandler groups profile management HTTP handlers.
 type ProfileHandler struct {
-	auth     profileAuthServicer
-	users    profileUserServicer
-	renderer *TemplateRenderer
-	secure   bool
+	auth            profileAuthServicer
+	users           profileUserServicer
+	renderer        *TemplateRenderer
+	secure          bool
+	concept2Enabled bool
 }
 
 // NewProfileHandler constructs a ProfileHandler.
 func NewProfileHandler(authSvc profileAuthServicer, userSvc profileUserServicer, renderer *TemplateRenderer, secure bool) *ProfileHandler {
 	return &ProfileHandler{auth: authSvc, users: userSvc, renderer: renderer, secure: secure}
 }
+
+// SetConcept2Enabled shows (true) or hides (false, the default) the profile's
+// Concept2 Logbook section. It is false when Concept2 is not configured.
+func (h *ProfileHandler) SetConcept2Enabled(enabled bool) {
+	h.concept2Enabled = enabled
+}
+
+// Messages shown after the Concept2 OAuth callback redirects back here.
+const (
+	concept2ConnectedMessage = "Your Concept2 Logbook is connected."
+	concept2ErrorMessage     = "Could not connect your Concept2 Logbook. Nothing was changed; please try again."
+)
 
 // ProfilePage renders the user profile page.
 func (h *ProfileHandler) ProfilePage(w http.ResponseWriter, r *http.Request) {
@@ -43,9 +56,19 @@ func (h *ProfileHandler) ProfilePage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	h.renderer.Page(w, http.StatusOK, "profile.html", map[string]any{
-		"User": user,
-	})
+	data := map[string]any{
+		"User":            user,
+		"Concept2Enabled": h.concept2Enabled,
+	}
+	if h.concept2Enabled {
+		switch r.URL.Query().Get("concept2") {
+		case "connected":
+			data["Concept2Flash"] = map[string]any{"Message": concept2ConnectedMessage}
+		case "error":
+			data["Concept2Error"] = map[string]any{"Error": concept2ErrorMessage}
+		}
+	}
+	h.renderer.Page(w, http.StatusOK, "profile.html", data)
 }
 
 // ChangePassword handles password change form submission.

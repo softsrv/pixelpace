@@ -133,6 +133,25 @@
         </div>
       </section>
 
+      {{if .Concept2Enabled}}
+      <section class="pp-panel" aria-labelledby="pp-concept2-title">
+        <div class="pp-section">
+          <div class="pp-head">
+            <span class="pp-ico-box">{{template "pp-icon-trophy"}}</span>
+            <div>
+              <p class="pp-kicker pp-arcade">Logbook</p>
+              <h2 id="pp-concept2-title" class="pp-title">Concept2 Logbook</h2>
+            </div>
+          </div>
+          {{with .Concept2Flash}}{{template "partials/flash.html" .}}{{end}}
+          {{with .Concept2Error}}{{template "partials/error.html" .}}{{end}}
+          <div hx-get="/profile/concept2" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+            <span class="loading loading-dots loading-sm" aria-label="Loading"></span>
+          </div>
+        </div>
+      </section>
+      {{end}}
+
       <section class="pp-panel pp-danger" aria-labelledby="pp-delete-title">
         <div class="pp-section">
           <div class="pp-head">

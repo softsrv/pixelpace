@@ -1,0 +1,21 @@
+{{define "partials/concept2-panel.html"}}
+<div id="concept2-panel" class="space-y-4">
+  {{if .Connected}}
+    <div class="space-y-1">
+      <p class="pp-mono text-sm font-bold break-words">Connected as {{.Connection.Username}}</p>
+      <p class="pp-muted text-sm">Since {{.Connection.ConnectedAt.Format "Jan 2, 2006"}}</p>
+    </div>
+    <button type="button" class="pp-btn pp-btn-red"
+            hx-post="/profile/concept2/disconnect"
+            hx-target="#concept2-panel"
+            hx-swap="outerHTML"
+            hx-confirm="Disconnect your Concept2 Logbook? Results already posted stay in your logbook.">Disconnect</button>
+  {{else}}
+    <p class="pp-muted text-sm">Connect your Concept2 Logbook to post your finished races and time trials automatically.</p>
+    <form method="get" action="/profile/concept2/connect" data-concept2-connect>
+      <input type="hidden" name="tz" value="">
+      <button type="submit" class="pp-btn pp-btn-cyan">Connect Concept2</button>
+    </form>
+  {{end}}
+</div>
+{{end}}

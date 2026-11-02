@@ -93,7 +93,7 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 		return RoomLobby{}, ErrParticipantNotFound
 	}
 	count := len(lobby.Participants)
-	lobby.CanStart = lobby.IsHost && room.Status == "waiting" && guestsReady && count >= 2 && count <= maxRoomParticipants
+	lobby.CanStart = lobby.IsHost && room.Status == "waiting" && guestsReady && count >= 1 && count <= maxRoomParticipants
 	invited, err := s.q.ListRoomInviteeIDs(ctx, roomID)
 	if err != nil {
 		return RoomLobby{}, fmt.Errorf("list room invites: %w", err)

@@ -45,9 +45,9 @@ func (q *Queries) CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUI
 }
 
 const createRace = `-- name: CreateRace :one
-INSERT INTO races (id, room_id, race_type_id, started_at)
-VALUES ($1, $2, $3, $4)
-RETURNING id, room_id, race_type_id, started_at, finished_at
+INSERT INTO races (id, room_id, race_type_id, started_at, time_trial)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, room_id, race_type_id, started_at, finished_at, time_trial
 `
 
 type CreateRaceParams struct {
@@ -55,6 +55,7 @@ type CreateRaceParams struct {
 	RoomID     uuid.UUID          `json:"room_id"`
 	RaceTypeID uuid.UUID          `json:"race_type_id"`
 	StartedAt  pgtype.Timestamptz `json:"started_at"`
+	TimeTrial  bool               `json:"time_trial"`
 }
 
 func (q *Queries) CreateRace(ctx context.Context, arg CreateRaceParams) (Race, error) {
@@ -63,6 +64,7 @@ func (q *Queries) CreateRace(ctx context.Context, arg CreateRaceParams) (Race, e
 		arg.RoomID,
 		arg.RaceTypeID,
 		arg.StartedAt,
+		arg.TimeTrial,
 	)
 	var i Race
 	err := row.Scan(
@@ -71,6 +73,7 @@ func (q *Queries) CreateRace(ctx context.Context, arg CreateRaceParams) (Race, e
 		&i.RaceTypeID,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.TimeTrial,
 	)
 	return i, err
 }
@@ -473,7 +476,7 @@ func (q *Queries) ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error) 
 }
 
 const lockRace = `-- name: LockRace :one
-SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, rt.kind, rt.target_value
+SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, r.time_trial, rt.kind, rt.target_value
 FROM races r JOIN race_types rt ON rt.id = r.race_type_id
 WHERE r.id = $1 FOR UPDATE OF r
 `
@@ -484,6 +487,7 @@ type LockRaceRow struct {
 	RaceTypeID  uuid.UUID          `json:"race_type_id"`
 	StartedAt   pgtype.Timestamptz `json:"started_at"`
 	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+	TimeTrial   bool               `json:"time_trial"`
 	Kind        string             `json:"kind"`
 	TargetValue int64              `json:"target_value"`
 }
@@ -497,6 +501,7 @@ func (q *Queries) LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, erro
 		&i.RaceTypeID,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.TimeTrial,
 		&i.Kind,
 		&i.TargetValue,
 	)

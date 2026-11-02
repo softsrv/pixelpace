@@ -12,7 +12,7 @@ import (
 	"github.com/softsrv/starter/internal/db"
 )
 
-// ErrInvalidLeaderboardFilter indicates an unsupported scope or time window.
+// ErrInvalidLeaderboardFilter indicates an unsupported scope, time window, or mode.
 var ErrInvalidLeaderboardFilter = errors.New("invalid leaderboard filter")
 
 type friendLister interface {
@@ -44,11 +44,20 @@ func NewLeaderboardService(q *db.Queries, friends friendLister, cfg LeaderboardS
 // Windows use completion time: month is a trailing calendar month in UTC,
 // week is seven days, and all-time has no lower bound. Friends includes only
 // the caller's friends, not the caller, unless they are in that resolved set.
-func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window string, raceTypeID, callerID uuid.UUID) ([]LeaderboardRow, error) {
+// Mode "race" ranks races with other entrants; "time-trial" ranks solo races.
+// The two never mix, so a 500m race and a 500m time trial rank separately.
+func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window, mode string, raceTypeID, callerID uuid.UUID) ([]LeaderboardRow, error) {
 	if scope != "global" && scope != "friends" {
 		return nil, ErrInvalidLeaderboardFilter
 	}
 	params := db.LeaderboardPersonalBestParams{RaceTypeID: raceTypeID}
+	switch mode {
+	case "race":
+	case "time-trial":
+		params.TimeTrial = true
+	default:
+		return nil, ErrInvalidLeaderboardFilter
+	}
 	switch window {
 	case "all-time":
 	case "month":

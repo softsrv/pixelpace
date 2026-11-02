@@ -32,6 +32,32 @@ func roomIntegrationFriends(t *testing.T, pool *pgxpool.Pool, a, b uuid.UUID) {
 	})
 }
 
+// A host alone in their room can start right away; the race is a Time Trial.
+func TestRoomIntegrationSoloHostCanStart(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host := roomIntegrationUser(t, pool)
+	roomID, _ := roomIntegrationCreate(t, pool, host)
+	s := NewRoomService(db.New(pool), pool)
+	lobby, err := s.Lobby(ctx, host, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lobby.IsHost || !lobby.CanStart || len(lobby.Participants) != 1 {
+		t.Fatalf("solo host lobby = %+v", lobby)
+	}
+	if err := s.StartRace(ctx, host, roomID); err != nil {
+		t.Fatalf("solo start = %v", err)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, "SELECT status FROM rooms WHERE id = $1", roomID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "counting_down" {
+		t.Fatalf("room status = %s", status)
+	}
+}
+
 // The host starts once every guest is ready, without readying up themselves.
 // Changing the race clears every ready flag; guests can withdraw readiness.
 func TestRoomIntegrationLobbyReadinessAndRaceType(t *testing.T) {

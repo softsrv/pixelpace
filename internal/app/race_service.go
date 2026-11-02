@@ -123,16 +123,19 @@ func (s *RaceService) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, err
 	if err != nil {
 		return db.Race{}, fmt.Errorf("claim counting-down room: %w", err)
 	}
-	race, err := q.CreateRace(ctx, db.CreateRaceParams{
-		ID: uuid.Must(uuid.NewV7()), RoomID: room.ID, RaceTypeID: room.RaceTypeID,
-		StartedAt: pgtype.Timestamptz{Time: startsAt, Valid: true},
-	})
-	if err != nil {
-		return db.Race{}, fmt.Errorf("create race: %w", err)
-	}
 	participants, err := q.ListRaceRoomParticipants(ctx, roomID)
 	if err != nil {
 		return db.Race{}, fmt.Errorf("list room participants: %w", err)
+	}
+	// A race that begins with one entrant is a Time Trial, even if others
+	// were in the room but dropped while their equipment connected.
+	race, err := q.CreateRace(ctx, db.CreateRaceParams{
+		ID: uuid.Must(uuid.NewV7()), RoomID: room.ID, RaceTypeID: room.RaceTypeID,
+		StartedAt: pgtype.Timestamptz{Time: startsAt, Valid: true},
+		TimeTrial: len(participants) == 1,
+	})
+	if err != nil {
+		return db.Race{}, fmt.Errorf("create race: %w", err)
 	}
 	for _, userID := range participants {
 		if err := q.CreateRaceParticipant(ctx, db.CreateRaceParticipantParams{

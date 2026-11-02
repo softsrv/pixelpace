@@ -86,9 +86,20 @@ func (f *leaderboardFixture) exec(t *testing.T, query string, args ...any) {
 
 func (f *leaderboardFixture) result(t *testing.T, user int, raceType uuid.UUID, status string, elapsed int32, finished time.Time) {
 	t.Helper()
+	f.resultIn(t, false, user, raceType, status, elapsed, finished)
+}
+
+// timeTrial records a result from a race that began with a single entrant.
+func (f *leaderboardFixture) timeTrial(t *testing.T, user int, raceType uuid.UUID, status string, elapsed int32, finished time.Time) {
+	t.Helper()
+	f.resultIn(t, true, user, raceType, status, elapsed, finished)
+}
+
+func (f *leaderboardFixture) resultIn(t *testing.T, timeTrial bool, user int, raceType uuid.UUID, status string, elapsed int32, finished time.Time) {
+	t.Helper()
 	race := uuid.Must(uuid.NewV7())
 	// The race timestamp deliberately differs from the participant's completion.
-	f.exec(t, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at) VALUES ($1, $2, $3, $4, $5)", race, f.room, raceType, finished.Add(-time.Hour), f.now)
+	f.exec(t, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial) VALUES ($1, $2, $3, $4, $5, $6)", race, f.room, raceType, finished.Add(-time.Hour), f.now, timeTrial)
 	f.exec(t, "INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, $4, $5, $6)", uuid.Must(uuid.NewV7()), race, f.users[user], status, finished, elapsed)
 }
 
@@ -99,12 +110,17 @@ func (f *leaderboardFixture) friends(t *testing.T, a, b int) {
 
 func (f *leaderboardFixture) check(t *testing.T, scope, window string, caller int, want ...app.LeaderboardRow) {
 	t.Helper()
-	got, err := f.svc.Leaderboard(context.Background(), scope, window, f.raceType, f.users[caller])
+	f.checkMode(t, "race", scope, window, caller, want...)
+}
+
+func (f *leaderboardFixture) checkMode(t *testing.T, mode, scope, window string, caller int, want ...app.LeaderboardRow) {
+	t.Helper()
+	got, err := f.svc.Leaderboard(context.Background(), scope, window, mode, f.raceType, f.users[caller])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != len(want) || (len(want) > 0 && !reflect.DeepEqual(got, want)) {
-		t.Fatalf("%s/%s: got %+v, want %+v", scope, window, got, want)
+		t.Fatalf("%s/%s/%s: got %+v, want %+v", mode, scope, window, got, want)
 	}
 }
 
@@ -124,7 +140,7 @@ func TestLeaderboardPersonalBestAndStatusesIntegration(t *testing.T) {
 			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 2000},
 			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 3000})
 
-		got, err := f.svc.Leaderboard(context.Background(), "global", window, f.raceType, f.users[0])
+		got, err := f.svc.Leaderboard(context.Background(), "global", window, "race", f.raceType, f.users[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,6 +153,40 @@ func TestLeaderboardPersonalBestAndStatusesIntegration(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestLeaderboardTimeTrialSeparationIntegration(t *testing.T) {
+	f := seedLeaderboard(t, 4)
+	f.friends(t, 0, 1)
+	// Racer 0's faster time trial must not become their race personal best,
+	// and their slower race must not appear on the time trial leaderboard.
+	f.result(t, 0, f.raceType, "finished", 3000, f.now)
+	f.timeTrial(t, 0, f.raceType, "finished", 1000, f.now)
+	f.timeTrial(t, 0, f.raceType, "finished", 1500, f.now)
+	f.result(t, 1, f.raceType, "finished", 2000, f.now)
+	f.timeTrial(t, 1, f.raceType, "dnf", 1, f.now)
+	f.timeTrial(t, 2, f.raceType, "finished", 2500, f.now)
+	f.timeTrial(t, 3, f.otherType, "finished", 1, f.now)
+	for _, window := range []string{"all-time", "month", "week"} {
+		f.checkMode(t, "race", "global", window, 0,
+			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 2000},
+			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 3000})
+		f.checkMode(t, "time-trial", "global", window, 0,
+			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 1000},
+			app.LeaderboardRow{UserID: f.users[2], Name: "Racer 2", ElapsedMilliseconds: 2500})
+		f.checkMode(t, "time-trial", "friends", window, 1,
+			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 1000})
+		f.checkMode(t, "time-trial", "friends", window, 0) // Racer 1's only time trial was a DNF.
+	}
+	old := f.now.Add(-8 * 24 * time.Hour)
+	f.timeTrial(t, 3, f.raceType, "finished", 500, old)
+	f.checkMode(t, "time-trial", "global", "week", 0,
+		app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 1000},
+		app.LeaderboardRow{UserID: f.users[2], Name: "Racer 2", ElapsedMilliseconds: 2500})
+	f.checkMode(t, "time-trial", "global", "all-time", 0,
+		app.LeaderboardRow{UserID: f.users[3], Name: "Racer 3", ElapsedMilliseconds: 500},
+		app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 1000},
+		app.LeaderboardRow{UserID: f.users[2], Name: "Racer 2", ElapsedMilliseconds: 2500})
 }
 
 func TestLeaderboardWindowBoundariesIntegration(t *testing.T) {
@@ -191,7 +241,7 @@ func TestLeaderboardFriendsAndFinishedIntegration(t *testing.T) {
 			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 3000})
 		f.check(t, "friends", window, 3) // No friends must not fall back to Global.
 
-		got, err := f.svc.Leaderboard(context.Background(), "global", window, f.raceType, f.users[0])
+		got, err := f.svc.Leaderboard(context.Background(), "global", window, "race", f.raceType, f.users[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +269,7 @@ func TestLeaderboardTieCaseIntegration(t *testing.T) {
 	f.result(t, 0, f.raceType, "finished", 3000, f.now)
 	f.result(t, 0, f.raceType, "finished", 2000, f.now)
 
-	got, err := f.svc.Leaderboard(context.Background(), "global", "all-time", f.raceType, f.users[0])
+	got, err := f.svc.Leaderboard(context.Background(), "global", "all-time", "race", f.raceType, f.users[0])
 	if err != nil {
 		t.Fatal(err)
 	}

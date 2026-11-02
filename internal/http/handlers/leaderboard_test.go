@@ -20,27 +20,29 @@ import (
 )
 
 type stubLeaderboardService struct {
-	listFn func(context.Context, string, string, uuid.UUID, uuid.UUID) ([]app.LeaderboardRow, error)
+	listFn func(context.Context, string, string, string, uuid.UUID, uuid.UUID) ([]app.LeaderboardRow, error)
 }
 
-func (s *stubLeaderboardService) Leaderboard(ctx context.Context, scope, window string, raceType, caller uuid.UUID) ([]app.LeaderboardRow, error) {
-	return s.listFn(ctx, scope, window, raceType, caller)
+func (s *stubLeaderboardService) Leaderboard(ctx context.Context, scope, window, mode string, raceType, caller uuid.UUID) ([]app.LeaderboardRow, error) {
+	return s.listFn(ctx, scope, window, mode, raceType, caller)
 }
 
 func TestLeaderboardAuthenticatedActor(t *testing.T) {
 	actor, raceType, racer := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	want := []app.LeaderboardRow{{UserID: racer, Name: "Speedy Racer", ElapsedMilliseconds: 1200}}
-	for _, tc := range []struct{ query, scope, window string }{
-		{"", "global", "all-time"},
-		{"&scope=global&window=month", "global", "month"},
-		{"&scope=friends&window=week", "friends", "week"},
+	for _, tc := range []struct{ query, scope, window, mode string }{
+		{"", "global", "all-time", "race"},
+		{"&scope=global&window=month", "global", "month", "race"},
+		{"&scope=friends&window=week", "friends", "week", "race"},
+		{"&mode=time-trial", "global", "all-time", "time-trial"},
+		{"&scope=friends&window=week&mode=race", "friends", "week", "race"},
 	} {
-		t.Run(tc.scope+"/"+tc.window, func(t *testing.T) {
+		t.Run(tc.mode+"/"+tc.scope+"/"+tc.window, func(t *testing.T) {
 			called := false
-			h := handlers.NewLeaderboardHandler(&stubLeaderboardService{listFn: func(_ context.Context, scope, window string, gotType, caller uuid.UUID) ([]app.LeaderboardRow, error) {
+			h := handlers.NewLeaderboardHandler(&stubLeaderboardService{listFn: func(_ context.Context, scope, window, mode string, gotType, caller uuid.UUID) ([]app.LeaderboardRow, error) {
 				called = true
-				if scope != tc.scope || window != tc.window || gotType != raceType || caller != actor {
-					t.Fatalf("arguments = %s, %s, %s, %s", scope, window, gotType, caller)
+				if scope != tc.scope || window != tc.window || mode != tc.mode || gotType != raceType || caller != actor {
+					t.Fatalf("arguments = %s, %s, %s, %s, %s", scope, window, mode, gotType, caller)
 				}
 				return want, nil
 			}})
@@ -93,7 +95,7 @@ func TestLeaderboardErrors(t *testing.T) {
 		{fmt.Errorf("wrapped: %w", app.ErrInvalidLeaderboardFilter), http.StatusBadRequest},
 		{errors.New("private database details"), http.StatusInternalServerError},
 	} {
-		h := handlers.NewLeaderboardHandler(&stubLeaderboardService{listFn: func(context.Context, string, string, uuid.UUID, uuid.UUID) ([]app.LeaderboardRow, error) {
+		h := handlers.NewLeaderboardHandler(&stubLeaderboardService{listFn: func(context.Context, string, string, string, uuid.UUID, uuid.UUID) ([]app.LeaderboardRow, error) {
 			return nil, tc.err
 		}})
 		id := uuid.Must(uuid.NewV7())
@@ -120,7 +122,7 @@ func TestLeaderboardNoEmailInResponse(t *testing.T) {
 	}
 
 	h := handlers.NewLeaderboardHandler(&stubLeaderboardService{
-		listFn: func(_ context.Context, scope, window string, raceType, caller uuid.UUID) ([]app.LeaderboardRow, error) {
+		listFn: func(_ context.Context, scope, window, mode string, raceType, caller uuid.UUID) ([]app.LeaderboardRow, error) {
 			return rows, nil
 		},
 	})

@@ -1,0 +1,1 @@
+ALTER TABLE races DROP COLUMN IF EXISTS time_trial;

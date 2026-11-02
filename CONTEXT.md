@@ -12,8 +12,12 @@ _Avoid_: Session, match, workout
 Defines a race's win condition and target, chosen from a **fixed preset catalog** — never a freeform value — so results stay comparable within a Leaderboard. Starts with **Fixed Distance** (500m / 1000m / 2000m / 5000m / 10000m — first to reach the target wins, ranked by elapsed time). Designed to extend to **Fixed Time** (5 / 10 / 20 minutes — most distance covered wins) and **Interval** (a sequence of Segments) without a schema redesign.
 _Avoid_: Race format, workout type, game mode
 
+**Time Trial**:
+A Race that begins with a single entrant: a racer rowing alone against the clock to set a personal best. Same Room, Race Types, Countdown, and race options as any other Race — the only difference is the entrant count when the Race begins, recorded on the Race at that instant. A Race that begins with others stays a Race even if the rest later DNF; a Room whose other participants are dropped before the start (equipment never connected) begins as a Time Trial.
+_Avoid_: Solo race, practice, workout
+
 **Leaderboard**:
-A ranking of each racer's own **personal-best** result (not every result they've ever posted) for a single Race Type. Further filtered by a **time window** (All-Time / Month / Week — each its own ranking, not a combined one) and a **scope** (Global, or Friends-only). An "in your area" geography-based scope is a deferred future idea, not yet designed.
+A ranking of each racer's own **personal-best** result (not every result they've ever posted) for a single Race Type and **mode** — Race or Time Trial. The two modes never mix: the 500m Race Leaderboard and the 500m Time Trial Leaderboard are separate rankings. Further filtered by a **time window** (All-Time / Month / Week — each its own ranking, not a combined one) and a **scope** (Global, or Friends-only). An "in your area" geography-based scope is a deferred future idea, not yet designed.
 _Avoid_: Rankings, standings
 
 **Telemetry Sample**:
@@ -37,7 +41,7 @@ The Room participant with control — configures the Race, can kick a non-Ready 
 _Avoid_: Owner, organizer
 
 **Ready**:
-A per-participant status in a Room signaling they're prepared to race. The Host can only start once every participant is Ready, and a Room needs at least 2 participants (max 8) to start.
+A per-participant status in a Room signaling they're prepared to race. The Host can only start once every participant is Ready, and a Room needs at least 1 participant (max 8) to start. A Host alone in their Room may start immediately, making the Race a Time Trial.
 _Avoid_: Ready-up (as a verb, fine informally, but the status itself is "Ready")
 
 **Countdown**:

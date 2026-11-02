@@ -24,12 +24,14 @@
       {{if .User}}
       <div class="flex items-center gap-4">
         <a href="/dashboard" class="pp-navlink pp-arcade hidden sm:inline-flex">Dashboard</a>
+        <a href="/leaderboards" class="pp-navlink pp-arcade hidden sm:inline-flex">Leaderboards</a>
         <div class="dropdown dropdown-end">
           <div tabindex="0" role="button" class="pp-avatar" aria-label="Account menu">
             {{template "pp-icon-avatar"}}
           </div>
           <ul tabindex="0" class="dropdown-content pp-menu z-[1] mt-4 w-52">
             <li class="sm:hidden"><a href="/dashboard" class="pp-menu-item pp-arcade">Dashboard</a></li>
+            <li class="sm:hidden"><a href="/leaderboards" class="pp-menu-item pp-arcade">Leaderboards</a></li>
             <li><a href="/profile" class="pp-menu-item pp-arcade">Profile</a></li>
             <li>
               <form method="post" action="/auth/logout" class="contents">

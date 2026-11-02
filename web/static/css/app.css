@@ -743,6 +743,38 @@
   .pp-table tr.font-bold td { background: rgb(255 121 198 / 0.2); color: #fff; }
   .pp-table tr.font-bold td:first-child { color: var(--pp-pink); }
 
+  /* Leaderboards: filter tabs are small pixel chips; the selected one is lit. */
+  .pp-tabs { display: flex; flex-wrap: wrap; gap: 0.75rem; padding: 2px; }
+  .pp-tab {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.5rem 0.8rem;
+    font-size: 0.7rem;
+    background: var(--pp-panel-2);
+    color: rgb(248 248 242 / 0.75);
+    box-shadow: 0 -2px 0 0 var(--pp-edge), 0 2px 0 0 var(--pp-edge), -2px 0 0 0 var(--pp-edge), 2px 0 0 0 var(--pp-edge);
+    transition: transform 80ms steps(2), background 100ms, color 100ms;
+  }
+  .pp-tab:hover { transform: translateY(-2px); background: #3a2f63; color: #f8f8f2; }
+  .pp-tab:focus-visible { outline: 3px solid var(--pp-yellow); outline-offset: 3px; }
+  .pp-tab[aria-current="page"] {
+    background: var(--pp-cyan);
+    color: #1a1029;
+    box-shadow: 0 -2px 0 0 #000, 0 2px 0 0 #000, -2px 0 0 0 #000, 2px 0 0 0 #000, inset -3px -3px 0 0 rgb(0 0 0 / 0.25);
+  }
+  .pp-tabs-lg .pp-tab { padding: 0.7rem 1.1rem; font-size: 0.8rem; }
+  .pp-tabs-lg .pp-tab[aria-current="page"] { background: var(--pp-pink); }
+
+  /* Podium ranks: gold, silver and bronze rank numbers; the rest are muted. */
+  .pp-leaderboard td:first-child { color: rgb(248 248 242 / 0.55); }
+  .pp-leaderboard tr.pp-rank-1 td:first-child { color: var(--pp-yellow); text-shadow: 0 0 8px rgb(241 250 140 / 0.6); }
+  .pp-leaderboard tr.pp-rank-2 td:first-child { color: #d6d9e8; }
+  .pp-leaderboard tr.pp-rank-3 td:first-child { color: var(--pp-orange); }
+  .pp-leaderboard tr.font-bold td:first-child { color: var(--pp-pink); }
+  .pp-you { color: var(--pp-pink); outline: 2px solid rgb(255 121 198 / 0.5); outline-offset: -2px; }
+  .pp-you-tag { margin-left: 0.5rem; padding: 0.1rem 0.35rem; font-size: 0.6rem; background: var(--pp-pink); color: #1a1029; }
+  .pp-empty { padding: 2rem 1rem; background: var(--pp-panel-2); outline: 2px dashed var(--pp-edge); outline-offset: -2px; }
+
   /* The race view sits in a black bezel like a game screen. */
   .pp-track { background: #10183c; box-shadow: 0 0 0 4px #000, 0 0 0 8px var(--pp-edge); }
   .pp-status-line { font-family: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace; color: var(--pp-yellow); }

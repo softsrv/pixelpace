@@ -4,8 +4,8 @@ WHERE id = $1 AND status = 'counting_down'
 RETURNING *;
 
 -- name: CreateRace :one
-INSERT INTO races (id, room_id, race_type_id, started_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO races (id, room_id, race_type_id, started_at, time_trial)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: ListRaceRoomParticipants :many

@@ -128,6 +128,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	sessH := handlers.NewSessionHandler(cfg.UserSvc, cfg.Renderer, cfg.Secure)
 	friendH := handlers.NewFriendHandler(cfg.FriendSvc)
 	leaderboardH := handlers.NewLeaderboardHandler(cfg.LeaderboardSvc)
+	leaderboardPageH := handlers.NewLeaderboardPageHandler(cfg.LeaderboardSvc, cfg.RoomSvc, cfg.Renderer)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
 	roomH := handlers.NewRoomHandler(ctx, cfg.RoomSvc, cfg.RaceSvc, cfg.Renderer, cfg.Secure)
 	racePageH := handlers.NewRacePageHandler(cfg.RaceSvc, cfg.Renderer, cfg.DevMode)
@@ -205,6 +206,8 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux.HandleFunc("GET /auth/verify-email", authH.VerifyEmail)
 	mux.Handle("GET /auth/sessions", verifiedMW(http.HandlerFunc(sessH.ListSessions)))
 	mux.Handle("DELETE /auth/sessions/{id}", verifiedMW(http.HandlerFunc(sessH.RevokeSession)))
+
+	mux.Handle("GET /leaderboards", verifiedMW(http.HandlerFunc(leaderboardPageH.Page)))
 
 	mux.Handle("GET /profile", verifiedMW(http.HandlerFunc(profileH.ProfilePage)))
 	mux.Handle("POST /profile/change-password", verifiedMW(http.HandlerFunc(profileH.ChangePassword)))

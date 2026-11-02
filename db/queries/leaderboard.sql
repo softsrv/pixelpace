@@ -4,6 +4,7 @@ FROM race_participants AS rp
 JOIN races AS r ON r.id = rp.race_id
 JOIN users AS u ON u.id = rp.user_id
 WHERE r.race_type_id = $1
+  AND r.time_trial = $4
   AND rp.status = 'finished'
   AND ($2::timestamptz IS NULL OR rp.finished_at >= $2)
   AND ($3::uuid[] IS NULL OR rp.user_id = ANY($3))

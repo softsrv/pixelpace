@@ -58,6 +58,7 @@ type Race struct {
 	RaceTypeID uuid.UUID          `json:"race_type_id"`
 	StartedAt  pgtype.Timestamptz `json:"started_at"`
 	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+	TimeTrial  bool               `json:"time_trial"`
 }
 
 type RaceParticipant struct {

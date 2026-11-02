@@ -208,7 +208,7 @@ func TestRaceServiceBegin(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, "SELECT rooms.status, races.started_at FROM rooms JOIN races ON races.room_id = rooms.id WHERE races.id = $1", f.race.ID).Scan(&status, &started); err != nil {
 		t.Fatal(err)
 	}
-	if status != "in_progress" || !started.Equal(before.Add(time.Millisecond)) || !f.race.StartedAt.Valid {
+	if status != "in_progress" || !started.Equal(before.Add(time.Millisecond)) || !f.race.StartedAt.Valid || f.race.TimeTrial {
 		t.Fatalf("status=%s started=%v race=%+v", status, started, f.race)
 	}
 	rows, err := f.pool.Query(ctx, "SELECT user_id, status FROM race_participants WHERE race_id = $1", f.race.ID)
@@ -247,6 +247,18 @@ func TestRaceServiceBegin(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("race count=%d", count)
+	}
+}
+
+func TestRaceServiceBeginSoloIsTimeTrial(t *testing.T) {
+	f := seedRaceRoom(t, 1, 500000, time.Minute)
+	f.begin(t)
+	var timeTrial bool
+	if err := f.pool.QueryRow(context.Background(), "SELECT time_trial FROM races WHERE id = $1", f.race.ID).Scan(&timeTrial); err != nil {
+		t.Fatal(err)
+	}
+	if !timeTrial || !f.race.TimeTrial {
+		t.Fatalf("time_trial=%v race=%+v", timeTrial, f.race)
 	}
 }
 

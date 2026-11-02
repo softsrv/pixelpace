@@ -311,6 +311,121 @@ func (c *Client) GetMeContext(ctx context.Context, tokens ...string) (*User, err
 	}, nil
 }
 
+// WeightClassHeavy is the Logbook's heavyweight class, its default for a
+// rower result; "L" (lightweight) is the other value.
+const WeightClassHeavy = "H"
+
+// Result is one workout to add to a user's Logbook (POST
+// /api/users/me/results). Type, Date, Distance, Time and WeightClass are
+// always sent; every other key is omitted when its value is unknown, so a
+// result with no detail still posts.
+type Result struct {
+	Type          string     `json:"type"`
+	Date          string     `json:"date"` // end of the workout, "2006-01-02 15:04:05" local wall time
+	Timezone      string     `json:"timezone,omitempty"`
+	Distance      int64      `json:"distance"` // meters
+	Time          int64      `json:"time"`     // tenths of a second
+	WeightClass   string     `json:"weight_class"`
+	WorkoutType   string     `json:"workout_type,omitempty"`
+	StrokeRate    *int32     `json:"stroke_rate,omitempty"`
+	StrokeCount   *int32     `json:"stroke_count,omitempty"`
+	CaloriesTotal *int32     `json:"calories_total,omitempty"`
+	DragFactor    *int32     `json:"drag_factor,omitempty"`
+	HeartRate     *HeartRate `json:"heart_rate,omitempty"`
+	Workout       *Workout   `json:"workout,omitempty"`
+	StrokeData    []Stroke   `json:"stroke_data,omitempty"`
+	Metadata      *Metadata  `json:"metadata,omitempty"`
+}
+
+// Workout is a result's split data.
+type Workout struct {
+	Splits []Split `json:"splits,omitempty"`
+}
+
+// Split is one split of a result: its own distance and time, not cumulative.
+type Split struct {
+	Distance   int64  `json:"distance"` // meters
+	Time       int64  `json:"time"`     // tenths of a second
+	StrokeRate *int32 `json:"stroke_rate,omitempty"`
+}
+
+// HeartRate is a result's heart-rate summary in beats per minute.
+type HeartRate struct {
+	Average *int32 `json:"average,omitempty"`
+	Min     *int32 `json:"min,omitempty"`
+	Max     *int32 `json:"max,omitempty"`
+	Ending  *int32 `json:"ending,omitempty"`
+}
+
+// Stroke is one stroke of a result's stroke data. Time and distance are
+// cumulative from the start of the workout.
+type Stroke struct {
+	T   int64  `json:"t"`             // tenths of a second
+	D   int64  `json:"d"`             // decimeters
+	P   *int32 `json:"p,omitempty"`   // pace, tenths of a second per 500m
+	SPM *int32 `json:"spm,omitempty"` // strokes per minute
+	HR  *int32 `json:"hr,omitempty"`  // heart rate
+}
+
+// Metadata describes the client and monitor that recorded a result.
+type Metadata struct {
+	ClientVersion   string `json:"client_version,omitempty"`
+	PMVersion       string `json:"pm_version,omitempty"`
+	FirmwareVersion string `json:"firmware_version,omitempty"`
+	SerialNumber    string `json:"serial_number,omitempty"`
+	Other           string `json:"other,omitempty"`
+}
+
+type postResultResponse struct {
+	Data struct {
+		ID json.Number `json:"id"`
+	} `json:"data"`
+}
+
+// PostResult adds r to the Logbook of the user the access token belongs to and
+// returns the new result's Logbook id. A non-2xx response is an *APIError
+// (409 is a duplicate result, 401 matches ErrUnauthorized); the token never
+// appears in an error. A 2xx response whose body has no readable id still
+// means the result was created, so it returns id 0 and no error.
+func (c *Client) PostResult(ctx context.Context, accessToken string, r Result) (int64, error) {
+	if accessToken == "" {
+		return 0, &APIError{StatusCode: http.StatusUnauthorized, Message: "missing access token"}
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return 0, fmt.Errorf("concept2: encode result: %w", err)
+	}
+	endpoint := c.baseURL + "/api/users/me/results"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return 0, c.sanitizeError(err, accessToken)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.c2logbook.v1+json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, c.handleNetworkError(err, accessToken)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, c.parseAPIError(resp, accessToken)
+	}
+	var created postResultResponse
+	dec := json.NewDecoder(io.LimitReader(resp.Body, maxErrorBodyBytes))
+	dec.UseNumber()
+	if err := dec.Decode(&created); err != nil {
+		return 0, nil
+	}
+	id, err := created.Data.ID.Int64()
+	if err != nil {
+		return 0, nil
+	}
+	return id, nil
+}
+
 // DateIn returns the wall-clock time formatted as "2006-01-02 15:04:05" in loc,
 // along with the location's IANA timezone name. If loc is nil, UTC is used.
 func DateIn(t time.Time, loc *time.Location) (date, tz string) {

@@ -119,7 +119,14 @@ func containsToken(tokens []string, want string) bool {
 func TestMainLayoutColumnWidths(t *testing.T) {
 	render := func(page string, data any) string {
 		t.Helper()
-		tmpl, err := template.ParseFS(FS, "templates/base.html", page)
+		base, err := template.ParseFS(FS, "templates/base.html")
+		if err != nil {
+			t.Fatalf("parse base.html: %v", err)
+		}
+		if _, err := base.ParseFS(FS, "templates/partials/*.html"); err != nil {
+			t.Fatalf("parse partials: %v", err)
+		}
+		tmpl, err := base.ParseFS(FS, page)
 		if err != nil {
 			t.Fatalf("parse %s: %v", page, err)
 		}

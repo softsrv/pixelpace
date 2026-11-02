@@ -24,6 +24,7 @@ type concept2Servicer interface {
 	Status(ctx context.Context, userID uuid.UUID) (app.Concept2Connection, error)
 	SaveConnection(ctx context.Context, userID uuid.UUID, g app.Concept2Grant) (app.Concept2Connection, error)
 	Disconnect(ctx context.Context, userID uuid.UUID) error
+	SetAutoPost(ctx context.Context, userID uuid.UUID, autoPost bool) (app.Concept2Connection, error)
 }
 
 // concept2OAuthClient is the OAuth half of the Concept2 Logbook client the
@@ -198,6 +199,48 @@ func (h *Concept2Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.renderer.Partial(w, http.StatusOK, "partials/concept2-panel.html", map[string]any{"Connected": false})
+}
+
+// AutoPost toggles or updates the signed-in user's Concept2 auto-post preference.
+// It is keyed strictly to the signed-in user and leaves the connection intact.
+func (h *Concept2Handler) AutoPost(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.UserFromContext(r.Context())
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	conn, err := h.svc.Status(r.Context(), user.ID)
+	if err != nil {
+		if errors.Is(err, app.ErrConcept2NotConnected) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		slog.ErrorContext(r.Context(), "concept2 auto-post status", "user_id", user.ID, "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	newAutoPost := !conn.AutoPost
+	if raw := strings.TrimSpace(r.FormValue("auto_post")); raw != "" {
+		switch strings.ToLower(raw) {
+		case "true", "1", "on":
+			newAutoPost = true
+		case "false", "0", "off":
+			newAutoPost = false
+		}
+	}
+
+	updated, err := h.svc.SetAutoPost(r.Context(), user.ID, newAutoPost)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "concept2 set auto-post", "user_id", user.ID, "error", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	h.renderer.Partial(w, http.StatusOK, "partials/concept2-panel.html", map[string]any{
+		"Connected":  true,
+		"Connection": updated,
+	})
 }
 
 // newConcept2State returns 32 random bytes, base64url-encoded.

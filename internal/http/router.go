@@ -140,12 +140,13 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	concept2Enabled := cfg.Concept2Svc != nil && cfg.Concept2Client != nil
 	profileH.SetConcept2Enabled(concept2Enabled)
 	// With Concept2 disabled every /profile/concept2/* route answers 404.
-	concept2Panel, concept2Connect, concept2Callback, concept2Disconnect :=
-		http.NotFound, http.NotFound, http.NotFound, http.NotFound
+	concept2Panel, concept2Connect, concept2Callback, concept2Disconnect, concept2AutoPost :=
+		http.NotFound, http.NotFound, http.NotFound, http.NotFound, http.NotFound
 	if concept2Enabled {
 		concept2H := handlers.NewConcept2Handler(cfg.Concept2Svc, cfg.Concept2Client, cfg.Renderer, cfg.Secure)
 		concept2Panel, concept2Connect = concept2H.Panel, concept2H.Connect
 		concept2Callback, concept2Disconnect = concept2H.Callback, concept2H.Disconnect
+		concept2AutoPost = concept2H.AutoPost
 	}
 	roomH := handlers.NewRoomHandler(ctx, cfg.RoomSvc, cfg.RaceSvc, cfg.Renderer, cfg.Secure)
 	racePageH := handlers.NewRacePageHandler(cfg.RaceSvc, cfg.Renderer, cfg.DevMode)
@@ -234,6 +235,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux.Handle("GET /profile/concept2/connect", verifiedMW(http.HandlerFunc(concept2Connect)))
 	mux.Handle("GET /profile/concept2/callback", verifiedMW(http.HandlerFunc(concept2Callback)))
 	mux.Handle("POST /profile/concept2/disconnect", verifiedMW(http.HandlerFunc(concept2Disconnect)))
+	mux.Handle("POST /profile/concept2/auto-post", verifiedMW(http.HandlerFunc(concept2AutoPost)))
 
 	mux.Handle("POST /quick-match", verifiedMW(http.HandlerFunc(quickMatchH.Enqueue)))
 	mux.Handle("POST /quick-match/leave", verifiedMW(http.HandlerFunc(quickMatchH.Leave)))

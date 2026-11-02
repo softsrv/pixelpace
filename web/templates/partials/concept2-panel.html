@@ -5,6 +5,28 @@
       <p class="pp-mono text-sm font-bold break-words">Connected as {{.Connection.Username}}</p>
       <p class="pp-muted text-sm">Since {{.Connection.ConnectedAt.Format "Jan 2, 2006"}}</p>
     </div>
+    {{if .Connection.NeedsReconnect}}
+      <div class="space-y-2" data-concept2-needs-reconnect>
+        <p class="pp-muted text-sm">Reconnect Concept2 to keep posting results</p>
+        <form method="get" action="/profile/concept2/connect" data-concept2-connect>
+          <input type="hidden" name="tz" value="">
+          <button type="submit" class="pp-btn pp-btn-cyan">Reconnect</button>
+        </form>
+      </div>
+    {{end}}
+    <form method="post" action="/profile/concept2/auto-post"
+          hx-post="/profile/concept2/auto-post"
+          hx-target="#concept2-panel"
+          hx-swap="outerHTML"
+          class="space-y-2">
+      <label class="flex items-center justify-between">
+        <span class="pp-label pp-arcade">Auto-post to Logbook</span>
+        <span class="pp-muted text-xs">{{if .Connection.AutoPost}}Enabled{{else}}Disabled{{end}}</span>
+      </label>
+      <button type="submit" class="pp-btn">
+        {{if .Connection.AutoPost}}Disable Auto-Post{{else}}Enable Auto-Post{{end}}
+      </button>
+    </form>
     <button type="button" class="pp-btn pp-btn-red"
             hx-post="/profile/concept2/disconnect"
             hx-target="#concept2-panel"

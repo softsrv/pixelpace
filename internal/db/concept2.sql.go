@@ -12,12 +12,96 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimDueConcept2Posts = `-- name: ClaimDueConcept2Posts :many
+UPDATE concept2_result_posts SET
+    attempts        = attempts + 1,
+    next_attempt_at = $1::timestamptz,
+    updated_at      = NOW()
+WHERE id IN (
+    SELECT d.id FROM concept2_result_posts d
+    WHERE d.status = 'pending' AND d.next_attempt_at <= $2::timestamptz
+      AND NOT EXISTS (
+          SELECT 1 FROM concept2_connections c
+          WHERE c.user_id = d.user_id AND c.needs_reconnect
+      )
+    ORDER BY d.next_attempt_at, d.id
+    LIMIT $3::int
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, user_id, race_id, attempts
+`
+
+type ClaimDueConcept2PostsParams struct {
+	LeaseUntil pgtype.Timestamptz `json:"lease_until"`
+	Now        pgtype.Timestamptz `json:"now"`
+	MaxPosts   int32              `json:"max_posts"`
+}
+
+type ClaimDueConcept2PostsRow struct {
+	ID       uuid.UUID `json:"id"`
+	UserID   uuid.UUID `json:"user_id"`
+	RaceID   uuid.UUID `json:"race_id"`
+	Attempts int32     `json:"attempts"`
+}
+
+// Leases up to max_posts due pending posts: each claimed row is counted as an
+// attempt and not due again until lease_until, so concurrent posters (SKIP
+// LOCKED) never claim the same row, and a poster that stops mid-post leaves
+// the row to be retried once the lease ends. Posts of a connection that needs
+// reconnecting wait, unclaimed and with attempts unchanged, until the user
+// reconnects.
+func (q *Queries) ClaimDueConcept2Posts(ctx context.Context, arg ClaimDueConcept2PostsParams) ([]ClaimDueConcept2PostsRow, error) {
+	rows, err := q.db.Query(ctx, claimDueConcept2Posts, arg.LeaseUntil, arg.Now, arg.MaxPosts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ClaimDueConcept2PostsRow{}
+	for rows.Next() {
+		var i ClaimDueConcept2PostsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.RaceID,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteConcept2Connection = `-- name: DeleteConcept2Connection :execrows
 DELETE FROM concept2_connections WHERE user_id = $1
 `
 
 func (q *Queries) DeleteConcept2Connection(ctx context.Context, userID uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteConcept2Connection, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const enqueueConcept2ResultPost = `-- name: EnqueueConcept2ResultPost :execrows
+INSERT INTO concept2_result_posts (id, user_id, race_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (user_id, race_id) DO NOTHING
+`
+
+type EnqueueConcept2ResultPostParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+	RaceID uuid.UUID `json:"race_id"`
+}
+
+// Idempotent: a (user, race) pair already queued is left as it is.
+func (q *Queries) EnqueueConcept2ResultPost(ctx context.Context, arg EnqueueConcept2ResultPostParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueConcept2ResultPost, arg.ID, arg.UserID, arg.RaceID)
 	if err != nil {
 		return 0, err
 	}
@@ -48,6 +132,158 @@ func (q *Queries) GetConcept2Connection(ctx context.Context, userID uuid.UUID) (
 	return i, err
 }
 
+const getConcept2PostPayload = `-- name: GetConcept2PostPayload :one
+SELECT p.id, p.user_id, p.race_id,
+       rp.elapsed_milliseconds, rp.finished_at,
+       rp.pm5_serial_number, rp.pm5_firmware_version, rp.pm5_hardware_revision,
+       rt.kind, rt.target_value,
+       c.timezone
+FROM concept2_result_posts p
+JOIN race_participants rp ON rp.race_id = p.race_id AND rp.user_id = p.user_id AND rp.status = 'finished'
+JOIN races r ON r.id = p.race_id
+JOIN race_types rt ON rt.id = r.race_type_id
+JOIN concept2_connections c ON c.user_id = p.user_id
+WHERE p.id = $1 AND p.user_id = $2
+`
+
+type GetConcept2PostPayloadParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+type GetConcept2PostPayloadRow struct {
+	ID                  uuid.UUID          `json:"id"`
+	UserID              uuid.UUID          `json:"user_id"`
+	RaceID              uuid.UUID          `json:"race_id"`
+	ElapsedMilliseconds pgtype.Int4        `json:"elapsed_milliseconds"`
+	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
+	Pm5SerialNumber     pgtype.Text        `json:"pm5_serial_number"`
+	Pm5FirmwareVersion  pgtype.Text        `json:"pm5_firmware_version"`
+	Pm5HardwareRevision pgtype.Text        `json:"pm5_hardware_revision"`
+	Kind                string             `json:"kind"`
+	TargetValue         int64              `json:"target_value"`
+	Timezone            string             `json:"timezone"`
+}
+
+// What one post sends: the participant's recorded finish and PM5 details, the
+// race target and the user's connection timezone. No row when the user has
+// since disconnected. The tokens are read with GetConcept2Connection, the
+// strokes with ListConcept2PostStrokes.
+func (q *Queries) GetConcept2PostPayload(ctx context.Context, arg GetConcept2PostPayloadParams) (GetConcept2PostPayloadRow, error) {
+	row := q.db.QueryRow(ctx, getConcept2PostPayload, arg.ID, arg.UserID)
+	var i GetConcept2PostPayloadRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RaceID,
+		&i.ElapsedMilliseconds,
+		&i.FinishedAt,
+		&i.Pm5SerialNumber,
+		&i.Pm5FirmwareVersion,
+		&i.Pm5HardwareRevision,
+		&i.Kind,
+		&i.TargetValue,
+		&i.Timezone,
+	)
+	return i, err
+}
+
+const listConcept2PostCandidates = `-- name: ListConcept2PostCandidates :many
+
+SELECT rp.user_id
+FROM race_participants rp
+JOIN concept2_connections c ON c.user_id = rp.user_id
+WHERE rp.race_id = $1
+  AND rp.status = 'finished'
+  AND c.auto_post
+  AND NOT c.needs_reconnect
+ORDER BY rp.user_id
+`
+
+// ── Result posts ─────────────────────────────────────────────────────────────
+// Every query below is keyed by the post's user_id as well as its id.
+// The race's finished participants whose connection has auto_post on and does
+// not need reconnecting. Unconnected and DNF participants are never listed.
+func (q *Queries) ListConcept2PostCandidates(ctx context.Context, raceID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listConcept2PostCandidates, raceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConcept2PostStrokes = `-- name: ListConcept2PostStrokes :many
+SELECT s.elapsed_milliseconds, s.distance_millimeters, s.stroke_rate, s.power,
+       s.stroke_count, s.calories, s.heart_rate, s.drag_factor
+FROM concept2_result_posts p
+JOIN race_participants rp ON rp.race_id = p.race_id AND rp.user_id = p.user_id
+JOIN telemetry_samples s ON s.race_id = p.race_id AND s.user_id = p.user_id
+WHERE p.id = $1 AND p.user_id = $2
+  AND s.elapsed_milliseconds IS NOT NULL
+  AND s.distance_millimeters IS NOT NULL
+  AND s.elapsed_milliseconds <= rp.elapsed_milliseconds
+ORDER BY s.elapsed_milliseconds, s.sampled_at, s.id
+`
+
+type ListConcept2PostStrokesParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+type ListConcept2PostStrokesRow struct {
+	ElapsedMilliseconds pgtype.Int8 `json:"elapsed_milliseconds"`
+	DistanceMillimeters pgtype.Int8 `json:"distance_millimeters"`
+	StrokeRate          pgtype.Int4 `json:"stroke_rate"`
+	Power               pgtype.Int4 `json:"power"`
+	StrokeCount         pgtype.Int4 `json:"stroke_count"`
+	Calories            pgtype.Int4 `json:"calories"`
+	HeartRate           pgtype.Int4 `json:"heart_rate"`
+	DragFactor          pgtype.Int4 `json:"drag_factor"`
+}
+
+// The post's racer's samples of its race, up to their recorded finish, in
+// rowing order: the stroke data, splits and totals one post sends.
+func (q *Queries) ListConcept2PostStrokes(ctx context.Context, arg ListConcept2PostStrokesParams) ([]ListConcept2PostStrokesRow, error) {
+	rows, err := q.db.Query(ctx, listConcept2PostStrokes, arg.ID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConcept2PostStrokesRow{}
+	for rows.Next() {
+		var i ListConcept2PostStrokesRow
+		if err := rows.Scan(
+			&i.ElapsedMilliseconds,
+			&i.DistanceMillimeters,
+			&i.StrokeRate,
+			&i.Power,
+			&i.StrokeCount,
+			&i.Calories,
+			&i.HeartRate,
+			&i.DragFactor,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markConcept2NeedsReconnect = `-- name: MarkConcept2NeedsReconnect :execrows
 UPDATE concept2_connections SET needs_reconnect = true, updated_at = NOW()
 WHERE user_id = $1
@@ -59,6 +295,150 @@ func (q *Queries) MarkConcept2NeedsReconnect(ctx context.Context, userID uuid.UU
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const markConcept2PostFailed = `-- name: MarkConcept2PostFailed :execrows
+UPDATE concept2_result_posts SET
+    status     = 'failed',
+    last_error = $1,
+    updated_at = NOW()
+WHERE id = $2 AND user_id = $3 AND status = 'pending'
+`
+
+type MarkConcept2PostFailedParams struct {
+	LastError pgtype.Text `json:"last_error"`
+	ID        uuid.UUID   `json:"id"`
+	UserID    uuid.UUID   `json:"user_id"`
+}
+
+// Fails the post for good: a failed post is never claimed again.
+func (q *Queries) MarkConcept2PostFailed(ctx context.Context, arg MarkConcept2PostFailedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markConcept2PostFailed, arg.LastError, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markConcept2PostPosted = `-- name: MarkConcept2PostPosted :execrows
+UPDATE concept2_result_posts SET
+    status       = 'posted',
+    c2_result_id = $1,
+    last_error   = NULL,
+    posted_at    = NOW(),
+    updated_at   = NOW()
+WHERE id = $2 AND user_id = $3 AND status = 'pending'
+`
+
+type MarkConcept2PostPostedParams struct {
+	C2ResultID pgtype.Int8 `json:"c2_result_id"`
+	ID         uuid.UUID   `json:"id"`
+	UserID     uuid.UUID   `json:"user_id"`
+}
+
+func (q *Queries) MarkConcept2PostPosted(ctx context.Context, arg MarkConcept2PostPostedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markConcept2PostPosted, arg.C2ResultID, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const recordConcept2PostError = `-- name: RecordConcept2PostError :execrows
+UPDATE concept2_result_posts SET
+    last_error      = $1,
+    status          = CASE WHEN attempts >= $2::int THEN 'failed' ELSE 'pending' END,
+    next_attempt_at = $3::timestamptz,
+    updated_at      = NOW()
+WHERE id = $4 AND user_id = $5 AND status = 'pending'
+`
+
+type RecordConcept2PostErrorParams struct {
+	LastError   pgtype.Text        `json:"last_error"`
+	MaxAttempts int32              `json:"max_attempts"`
+	RetryAt     pgtype.Timestamptz `json:"retry_at"`
+	ID          uuid.UUID          `json:"id"`
+	UserID      uuid.UUID          `json:"user_id"`
+}
+
+// Keeps the post pending for another attempt at retry_at, or fails it once it
+// has used max_attempts.
+func (q *Queries) RecordConcept2PostError(ctx context.Context, arg RecordConcept2PostErrorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordConcept2PostError,
+		arg.LastError,
+		arg.MaxAttempts,
+		arg.RetryAt,
+		arg.ID,
+		arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requeueConcept2PostForReconnect = `-- name: RequeueConcept2PostForReconnect :execrows
+UPDATE concept2_result_posts SET
+    attempts        = GREATEST(attempts - 1, 0),
+    next_attempt_at = $1::timestamptz,
+    last_error      = $2,
+    updated_at      = NOW()
+WHERE id = $3 AND user_id = $4 AND status = 'pending'
+`
+
+type RequeueConcept2PostForReconnectParams struct {
+	Now       pgtype.Timestamptz `json:"now"`
+	LastError pgtype.Text        `json:"last_error"`
+	ID        uuid.UUID          `json:"id"`
+	UserID    uuid.UUID          `json:"user_id"`
+}
+
+// Gives back the attempt the claim counted, because nothing was sent: the
+// post waits, pending and due, until the user reconnects (ClaimDue skips it
+// while the connection needs reconnecting).
+func (q *Queries) RequeueConcept2PostForReconnect(ctx context.Context, arg RequeueConcept2PostForReconnectParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueConcept2PostForReconnect,
+		arg.Now,
+		arg.LastError,
+		arg.ID,
+		arg.UserID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setConcept2AutoPost = `-- name: SetConcept2AutoPost :one
+UPDATE concept2_connections
+SET auto_post = $1, updated_at = NOW()
+WHERE user_id = $2
+RETURNING user_id, c2_user_id, c2_username, access_token_enc, refresh_token_enc, expires_at, scope, auto_post, needs_reconnect, timezone, connected_at, updated_at
+`
+
+type SetConcept2AutoPostParams struct {
+	AutoPost bool      `json:"auto_post"`
+	UserID   uuid.UUID `json:"user_id"`
+}
+
+func (q *Queries) SetConcept2AutoPost(ctx context.Context, arg SetConcept2AutoPostParams) (Concept2Connection, error) {
+	row := q.db.QueryRow(ctx, setConcept2AutoPost, arg.AutoPost, arg.UserID)
+	var i Concept2Connection
+	err := row.Scan(
+		&i.UserID,
+		&i.C2UserID,
+		&i.C2Username,
+		&i.AccessTokenEnc,
+		&i.RefreshTokenEnc,
+		&i.ExpiresAt,
+		&i.Scope,
+		&i.AutoPost,
+		&i.NeedsReconnect,
+		&i.Timezone,
+		&i.ConnectedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateConcept2Tokens = `-- name: UpdateConcept2Tokens :execrows

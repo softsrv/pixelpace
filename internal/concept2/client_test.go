@@ -2,6 +2,7 @@ package concept2_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -513,5 +514,37 @@ func TestContextCancellation(t *testing.T) {
 	_, err := client.ExchangeCodeContext(ctx, "code")
 	if err == nil {
 		t.Fatalf("expected error on cancelled context, got nil")
+	}
+}
+
+// TestResultJSONShape pins the keys a full Result marshals to, as the Logbook's
+// Add Result endpoint names them, and that verified is never sent.
+func TestResultJSONShape(t *testing.T) {
+	i32 := func(v int32) *int32 { return &v }
+	r := concept2.Result{
+		Type: "rower", Date: "2026-01-02 03:07:25", Timezone: "UTC", Distance: 1000, Time: 1999,
+		WeightClass: concept2.WeightClassHeavy, WorkoutType: "FixedDistanceSplits",
+		StrokeRate: i32(29), StrokeCount: i32(95), CaloriesTotal: i32(68), DragFactor: i32(125),
+		Workout: &concept2.Workout{Splits: []concept2.Split{
+			{Distance: 500, Time: 1000, StrokeRate: i32(27)},
+			{Distance: 500, Time: 999},
+		}},
+		StrokeData: []concept2.Stroke{{T: 500, D: 2500, P: i32(1205), SPM: i32(26)}},
+		Metadata: &concept2.Metadata{
+			PMVersion: "5", FirmwareVersion: "171", SerialNumber: "430395351", Other: "PixelPace BLE; hw=PM5v3",
+		},
+	}
+	got, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"rower","date":"2026-01-02 03:07:25","timezone":"UTC","distance":1000,"time":1999,` +
+		`"weight_class":"H","workout_type":"FixedDistanceSplits","stroke_rate":29,"stroke_count":95,` +
+		`"calories_total":68,"drag_factor":125,` +
+		`"workout":{"splits":[{"distance":500,"time":1000,"stroke_rate":27},{"distance":500,"time":999}]},` +
+		`"stroke_data":[{"t":500,"d":2500,"p":1205,"spm":26}],` +
+		`"metadata":{"pm_version":"5","firmware_version":"171","serial_number":"430395351","other":"PixelPace BLE; hw=PM5v3"}}`
+	if string(got) != want {
+		t.Errorf("Result JSON =\n %s\nwant\n %s", got, want)
 	}
 }

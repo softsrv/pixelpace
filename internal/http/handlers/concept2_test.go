@@ -76,6 +76,17 @@ func (s *stubConcept2Service) Disconnect(_ context.Context, userID uuid.UUID) er
 	return nil
 }
 
+// SetAutoPost updates only userID's auto_post preference and keeps the connection.
+func (s *stubConcept2Service) SetAutoPost(_ context.Context, userID uuid.UUID, autoPost bool) (app.Concept2Connection, error) {
+	c, ok := s.conns[userID]
+	if !ok {
+		return app.Concept2Connection{}, app.ErrConcept2NotConnected
+	}
+	c.AutoPost = autoPost
+	s.conns[userID] = c
+	return c, nil
+}
+
 func newConcept2TestHandler(t *testing.T, svc *stubConcept2Service, secure bool) *handlers.Concept2Handler {
 	t.Helper()
 	client := concept2.New(c2TestBaseURL, c2TestClientID, "client-secret", c2TestAppBase+"/profile/concept2/callback")
@@ -540,6 +551,85 @@ func TestConcept2Disconnect_RendersConnectState(t *testing.T) {
 	}
 	if svc.conns[other].Username != "someone-else" {
 		t.Error("another user's connection was removed")
+	}
+}
+
+// CLM-17: a connected, verified user can toggle auto-post from the profile panel
+// (POST /profile/concept2/auto-post); the toggle flips auto_post for the caller only,
+// and the connection remains.
+func TestConcept2AutoPost_TogglesForCallerOnly(t *testing.T) {
+	t.Parallel()
+	user := verifiedConcept2User()
+	other := uuid.New()
+	svc := &stubConcept2Service{conns: map[uuid.UUID]app.Concept2Connection{
+		user.ID: {Username: "erg_hero", AutoPost: true},
+		other:   {Username: "someone-else", AutoPost: true},
+	}}
+	h := newConcept2TestHandler(t, svc, false)
+
+	// Panel renders auto-post toggle form with pp-btn and pp-label
+	panel := serveAuthenticated(t, user, http.HandlerFunc(h.Panel), httptest.NewRequest(http.MethodGet, "/profile/concept2", nil))
+	panelBody := panel.Body.String()
+	for _, want := range []string{
+		`action="/profile/concept2/auto-post"`,
+		`hx-post="/profile/concept2/auto-post"`,
+		`pp-btn`,
+		`pp-label`,
+	} {
+		if !strings.Contains(panelBody, want) {
+			t.Errorf("panel missing %q\nbody:\n%s", want, panelBody)
+		}
+	}
+
+	// First POST toggles auto_post from true to false
+	rr1 := serveAuthenticated(t, user, http.HandlerFunc(h.AutoPost),
+		httptest.NewRequest(http.MethodPost, "/profile/concept2/auto-post", nil))
+	if rr1.Code != http.StatusOK {
+		t.Fatalf("first auto-post status = %d, want 200", rr1.Code)
+	}
+	if svc.conns[user.ID].AutoPost != false {
+		t.Errorf("user auto_post = %v, want false", svc.conns[user.ID].AutoPost)
+	}
+	// Connection remains intact
+	if svc.conns[user.ID].Username != "erg_hero" {
+		t.Errorf("user username = %q, want erg_hero", svc.conns[user.ID].Username)
+	}
+	// Other user remains untouched
+	if svc.conns[other].AutoPost != true {
+		t.Errorf("other user auto_post changed: %v, want true", svc.conns[other].AutoPost)
+	}
+
+	// Second POST toggles auto_post from false to true
+	rr2 := serveAuthenticated(t, user, http.HandlerFunc(h.AutoPost),
+		httptest.NewRequest(http.MethodPost, "/profile/concept2/auto-post", nil))
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("second auto-post status = %d, want 200", rr2.Code)
+	}
+	if svc.conns[user.ID].AutoPost != true {
+		t.Errorf("user auto_post = %v, want true", svc.conns[user.ID].AutoPost)
+	}
+	if svc.conns[user.ID].Username != "erg_hero" {
+		t.Errorf("user username = %q, want erg_hero", svc.conns[user.ID].Username)
+	}
+
+	// Explicit form value works as well
+	form := url.Values{"auto_post": {"false"}}
+	req3 := httptest.NewRequest(http.MethodPost, "/profile/concept2/auto-post", strings.NewReader(form.Encode()))
+	req3.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr3 := serveAuthenticated(t, user, http.HandlerFunc(h.AutoPost), req3)
+	if rr3.Code != http.StatusOK {
+		t.Fatalf("third auto-post status = %d, want 200", rr3.Code)
+	}
+	if svc.conns[user.ID].AutoPost != false {
+		t.Errorf("user auto_post = %v, want false", svc.conns[user.ID].AutoPost)
+	}
+
+	// Unconnected user returns 404
+	unconnectedUser := verifiedConcept2User()
+	rrUnconn := serveAuthenticated(t, unconnectedUser, http.HandlerFunc(h.AutoPost),
+		httptest.NewRequest(http.MethodPost, "/profile/concept2/auto-post", nil))
+	if rrUnconn.Code != http.StatusNotFound {
+		t.Errorf("unconnected auto-post status = %d, want 404", rrUnconn.Code)
 	}
 }
 

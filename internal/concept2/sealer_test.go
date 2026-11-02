@@ -122,6 +122,36 @@ func TestSealer_TamperedAndShortBlobsYieldErrDecrypt(t *testing.T) {
 	}
 }
 
+// CLM-10: A sealed token copied to another user fails to open (user_id is the associated data).
+func TestSealer_CLM10_WrongUserFailsToOpen(t *testing.T) {
+	secret := []byte("very-secure-jwt-secret-at-least-32-bytes")
+	sealer := concept2.NewSealer(secret)
+	userA := uuid.MustParse("01912345-6789-7abc-def0-12345678900a")
+	userB := uuid.MustParse("01912345-6789-7abc-def0-12345678900b")
+	plaintext := []byte("token-owned-by-user-a")
+
+	sealedForA, err := sealer.Seal(plaintext, userA)
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+
+	// Opening for the owning user succeeds and matches plaintext.
+	opened, err := sealer.Open(sealedForA, userA)
+	if err != nil {
+		t.Fatalf("Open with user A: %v", err)
+	}
+	if !bytes.Equal(opened, plaintext) {
+		t.Fatalf("Open returned %q, want %q", opened, plaintext)
+	}
+
+	// Attempting to open user A's token as user B must fail with ErrDecrypt
+	// because user_id is bound as AEAD associated data.
+	_, err = sealer.Open(sealedForA, userB)
+	if !errors.Is(err, concept2.ErrDecrypt) {
+		t.Fatalf("Open with user B: got %v, want %v", err, concept2.ErrDecrypt)
+	}
+}
+
 func TestSealer_UserIsolation_WrongUserYieldsErrDecrypt(t *testing.T) {
 	secret := []byte("very-secure-jwt-secret-at-least-32-bytes")
 	sealer := concept2.NewSealer(secret)

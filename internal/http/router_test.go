@@ -218,12 +218,69 @@ func TestProfileDisplayNameRouteRequiresVerifiedUser(t *testing.T) {
 	}
 }
 
+// CLM-17: POST /profile/concept2/auto-post requires a verified user.
+func TestConcept2AutoPostRouteRequiresVerifiedUser(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	user := db.User{ID: uuid.New(), Email: "unverified@example.com", EmailVerified: false}
+	token, err := auth.IssueAccessToken(user.ID, user.Email, routerTestJWTSecret, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("issue access token: %v", err)
+	}
+	h := NewRouter(ctx, RouterConfig{
+		Queries:        routerUserFetcher{user: user},
+		Renderer:       newDashboardTestRenderer(t),
+		JWTSecret:      routerTestJWTSecret,
+		Concept2Svc:    app.NewConcept2Service(nil, app.Concept2ServiceConfig{}),
+		Concept2Client: concept2.New("https://log-dev.concept2.invalid", "id", "secret", "http://localhost/profile/concept2/callback"),
+	})
+
+	path := "/profile/concept2/auto-post"
+	for _, authenticated := range []bool{false, true} {
+		for _, htmx := range []bool{false, true} {
+			name := path + "/anonymous"
+			wantLocation := "/login"
+			wantStatus := http.StatusUnauthorized
+			if authenticated {
+				name = path + "/unverified"
+				wantLocation = "/verify-email"
+				wantStatus = http.StatusForbidden
+			}
+			locationHeader := "Location"
+			if htmx {
+				name += "/htmx"
+			} else {
+				wantStatus = http.StatusSeeOther
+			}
+			t.Run(name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, path, nil)
+				if authenticated {
+					req.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
+				}
+				if htmx {
+					req.Header.Set("HX-Request", "true")
+					locationHeader = "HX-Redirect"
+				}
+				rr := httptest.NewRecorder()
+				h.ServeHTTP(rr, req)
+				if rr.Code != wantStatus {
+					t.Errorf("status = %d, want %d", rr.Code, wantStatus)
+				}
+				if got := rr.Header().Get(locationHeader); got != wantLocation {
+					t.Errorf("%s = %q, want %q", locationHeader, got, wantLocation)
+				}
+			})
+		}
+	}
+}
+
 // concept2Routes are every /profile/concept2/* route the router registers.
 var concept2Routes = []struct{ method, path string }{
 	{http.MethodGet, "/profile/concept2"},
 	{http.MethodGet, "/profile/concept2/connect"},
 	{http.MethodGet, "/profile/concept2/callback"},
 	{http.MethodPost, "/profile/concept2/disconnect"},
+	{http.MethodPost, "/profile/concept2/auto-post"},
 }
 
 // CLM-8: with Concept2 enabled, every /profile/concept2/* route sits behind

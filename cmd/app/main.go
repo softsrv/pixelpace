@@ -85,7 +85,6 @@ func main() {
 	valkeyClient := redis.NewClient(&redis.Options{Addr: cfg.ValkeyAddr})
 	defer func() { _ = valkeyClient.Close() }()
 	broadcaster := realtime.NewValkeyBroadcaster(valkeyClient)
-	raceSvc := app.NewRaceService(queries, pool, broadcaster, app.RaceServiceConfig{})
 	quickMatchSvc := app.NewQuickMatchService(queries, pool, roomSvc, app.QuickMatchServiceConfig{})
 
 	// Concept2 Logbook is optional: without CONCEPT2_CLIENT_ID and
@@ -98,9 +97,20 @@ func main() {
 		concept2Client = concept2.New(cfg.Concept2BaseURL, cfg.Concept2ClientID, cfg.Concept2ClientSecret, cfg.Concept2RedirectURL())
 		concept2Svc = app.NewConcept2Service(queries, app.Concept2ServiceConfig{
 			Sealer: concept2.NewSealer([]byte(cfg.JWTSecret)),
+			Client: concept2Client,
+			// Only production posts to Concept2: staging and development
+			// queue and send nothing.
+			DevMode: devModeForAppEnv(cfg.AppEnv),
 		})
 		slog.Info("concept2 logbook enabled", "base_url", cfg.Concept2BaseURL)
 	}
+	raceCfg := app.RaceServiceConfig{}
+	if concept2Svc != nil {
+		// Set only when enabled: a nil *Concept2Service in the interface
+		// would not be a nil ResultPoster.
+		raceCfg.ResultPoster = concept2Svc
+	}
+	raceSvc := app.NewRaceService(queries, pool, broadcaster, raceCfg)
 
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
@@ -162,6 +172,18 @@ func main() {
 		slog.Error("resume unfinished races", "error", err)
 	}
 
+	// ── Concept2 result poster ──────────────────────────────────────────────
+	// Posts queued results, including those a previous run left pending.
+	posterDone := make(chan struct{})
+	if concept2Svc != nil {
+		go func() {
+			defer close(posterDone)
+			_ = concept2Svc.RunPoster(cleanupCtx, concept2PostInterval)
+		}()
+	} else {
+		close(posterDone)
+	}
+
 	// ── Graceful shutdown ─────────────────────────────────────────────────────
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -184,8 +206,14 @@ func main() {
 		slog.Error("graceful shutdown", "error", err)
 	}
 
-	// Stop background goroutines (token cleanup, rate-limiter sweepers).
+	// Stop background goroutines (token cleanup, rate-limiter sweepers,
+	// Concept2 poster).
 	stopCleanup()
+	select {
+	case <-posterDone:
+	case <-shutdownCtx.Done():
+		slog.Error("concept2 poster stop timed out", "error", shutdownCtx.Err())
+	}
 
 	// Wait for in-flight race begins to finish or reset their rooms.
 	waitDone := make(chan struct{})
@@ -320,6 +348,12 @@ func getEnvOrDefault(key, def string) string {
 	return def
 }
 
+// concept2PostInterval is how often the Concept2 poster looks for due posts.
+const concept2PostInterval = 30 * time.Second
+
+// devModeForAppEnv is the single owner of DevMode: every environment except
+// production is DevMode. It turns on dev-only routes, and turns off posting
+// results to Concept2 (Concept2ServiceConfig.DevMode).
 func devModeForAppEnv(appEnv string) bool {
 	return appEnv != "production"
 }

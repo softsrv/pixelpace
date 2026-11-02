@@ -31,6 +31,7 @@ type raceFixture struct {
 	users []uuid.UUID
 	race  db.Race
 	now   time.Time
+	cfg   app.RaceServiceConfig
 	// onSleep runs on every injected sleep after the clock advances, so a
 	// test can act between Run's polls.
 	onSleep func()
@@ -85,7 +86,7 @@ func seedRaceRoom(t *testing.T, n int, target int64, threshold time.Duration) *r
 			t.Fatal(err)
 		}
 	}
-	f.svc = app.NewRaceService(db.New(f.pool), f.pool, f.fake, app.RaceServiceConfig{
+	f.cfg = app.RaceServiceConfig{
 		CountdownDuration: time.Millisecond, StalenessThreshold: threshold, RacePollInterval: time.Millisecond,
 		Now: func() time.Time { return f.now },
 		Sleep: func(ctx context.Context, duration time.Duration) error {
@@ -98,8 +99,15 @@ func seedRaceRoom(t *testing.T, n int, target int64, threshold time.Duration) *r
 			}
 			return ctx.Err()
 		},
-	})
+	}
+	f.svc = app.NewRaceService(db.New(f.pool), f.pool, f.fake, f.cfg)
 	return f
+}
+
+// withResultPoster rebuilds the fixture's service with p as its result poster.
+func (f *raceFixture) withResultPoster(p app.RaceResultPoster) {
+	f.cfg.ResultPoster = p
+	f.svc = app.NewRaceService(db.New(f.pool), f.pool, f.fake, f.cfg)
 }
 
 // roomStatus reads the fixture room's status.
@@ -271,10 +279,32 @@ func TestRaceServiceIngestStoresAndBroadcastsEverySample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	strokeCount := int32(14)
+	calories := int32(45)
+	heartRate := int32(155)
+	dragFactor := int32(125)
 	samples := []app.TelemetrySample{
-		{SampledAt: f.now}, // Zero values must be stored as non-null measurements.
-		{ElapsedMilliseconds: 1000, DistanceMillimeters: 2500, StrokeRate: 27, Power: 123, SampledAt: f.now.Add(time.Second)},
-		{ElapsedMilliseconds: 2000, DistanceMillimeters: 6000, StrokeRate: 29, Power: 210, SampledAt: f.now.Add(2 * time.Second)},
+		{SampledAt: f.now}, // Zero values must be stored as non-null measurements; optional fields remain NULL when absent.
+		{
+			ElapsedMilliseconds: 1000,
+			DistanceMillimeters: 2500,
+			StrokeRate:          27,
+			Power:               123,
+			SampledAt:           f.now.Add(time.Second),
+			StrokeCount:         &strokeCount,
+			Calories:            &calories,
+		},
+		{
+			ElapsedMilliseconds: 2000,
+			DistanceMillimeters: 6000,
+			StrokeRate:          29,
+			Power:               210,
+			SampledAt:           f.now.Add(2 * time.Second),
+			StrokeCount:         &strokeCount,
+			Calories:            &calories,
+			HeartRate:           &heartRate,
+			DragFactor:          &dragFactor,
+		},
 	}
 	for _, sample := range samples {
 		if err := f.svc.Ingest(ctx, f.race.ID, f.users[0], sample); err != nil {
@@ -304,6 +334,18 @@ func TestRaceServiceIngestStoresAndBroadcastsEverySample(t *testing.T) {
 				"power":                true,
 				"sampled_at":           true,
 			}
+			if sample.StrokeCount != nil {
+				expectedKeys["stroke_count"] = true
+			}
+			if sample.Calories != nil {
+				expectedKeys["calories"] = true
+			}
+			if sample.HeartRate != nil {
+				expectedKeys["heart_rate"] = true
+			}
+			if sample.DragFactor != nil {
+				expectedKeys["drag_factor"] = true
+			}
 			if len(frame) != len(expectedKeys) {
 				t.Fatalf("broadcast frame has %d keys (%v), want exactly %d keys %v", len(frame), frame, len(expectedKeys), expectedKeys)
 			}
@@ -321,7 +363,7 @@ func TestRaceServiceIngestStoresAndBroadcastsEverySample(t *testing.T) {
 		t.Fatal("extra publish")
 	default:
 	}
-	rows, err := f.pool.Query(ctx, "SELECT elapsed_milliseconds, distance_millimeters, stroke_rate, power, sampled_at FROM telemetry_samples WHERE race_id = $1 AND user_id = $2 ORDER BY sampled_at", f.race.ID, f.users[0])
+	rows, err := f.pool.Query(ctx, "SELECT elapsed_milliseconds, distance_millimeters, stroke_rate, power, sampled_at, stroke_count, calories, heart_rate, drag_factor FROM telemetry_samples WHERE race_id = $1 AND user_id = $2 ORDER BY sampled_at", f.race.ID, f.users[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +373,8 @@ func TestRaceServiceIngestStoresAndBroadcastsEverySample(t *testing.T) {
 		var elapsed, distance pgtype.Int8
 		var stroke, power pgtype.Int4
 		var at time.Time
-		if err := rows.Scan(&elapsed, &distance, &stroke, &power, &at); err != nil {
+		var storedStrokeCount, storedCalories, storedHeartRate, storedDragFactor pgtype.Int4
+		if err := rows.Scan(&elapsed, &distance, &stroke, &power, &at, &storedStrokeCount, &storedCalories, &storedHeartRate, &storedDragFactor); err != nil {
 			t.Fatal(err)
 		}
 		if count >= len(samples) {
@@ -341,6 +384,21 @@ func TestRaceServiceIngestStoresAndBroadcastsEverySample(t *testing.T) {
 		if !elapsed.Valid || !distance.Valid || !stroke.Valid || !power.Valid || elapsed.Int64 != want.ElapsedMilliseconds || distance.Int64 != want.DistanceMillimeters || stroke.Int32 != want.StrokeRate || power.Int32 != want.Power || !at.Equal(want.SampledAt) {
 			t.Fatalf("stored sample %d differs: elapsed=%+v distance=%+v stroke=%+v power=%+v at=%v", count, elapsed, distance, stroke, power, at)
 		}
+		checkOptional := func(field string, got pgtype.Int4, want *int32) {
+			if want == nil {
+				if got.Valid {
+					t.Fatalf("stored sample %d field %s: want NULL, got %d", count, field, got.Int32)
+				}
+			} else {
+				if !got.Valid || got.Int32 != *want {
+					t.Fatalf("stored sample %d field %s: want %d, got valid=%v val=%d", count, field, *want, got.Valid, got.Int32)
+				}
+			}
+		}
+		checkOptional("stroke_count", storedStrokeCount, want.StrokeCount)
+		checkOptional("calories", storedCalories, want.Calories)
+		checkOptional("heart_rate", storedHeartRate, want.HeartRate)
+		checkOptional("drag_factor", storedDragFactor, want.DragFactor)
 		count++
 	}
 	if err := rows.Err(); err != nil {
@@ -661,6 +719,159 @@ func TestRaceServiceRunFinalizesWhenEveryoneIsDNF(t *testing.T) {
 	}
 	if frames := finishedFrames(t, drain(sub)); len(frames) != 1 {
 		t.Fatalf("finished frames=%v, want one", frames)
+	}
+}
+
+// CLM-3: only a connected finisher gets a result post. In a mixed race an
+// unconnected finisher and a connected DNF get none, and the Logbook hears
+// only about the connected finisher.
+func TestRaceServiceFinalizeQueuesPostsOnlyForConnectedFinishers(t *testing.T) {
+	const target = 500000
+	f := seedRaceRoom(t, 3, target, 5*time.Millisecond)
+	lb := newFakeLogbook(t)
+	poster := newConcept2Poster(f.pool, lb)
+	f.withResultPoster(poster)
+	connectConcept2(t, f.pool, f.users[0], "connected-finisher")
+	connectConcept2(t, f.pool, f.users[2], "connected-dnf")
+	f.begin(t)
+	f.ingest(t, 0, 90000, target, f.now)
+	f.ingest(t, 1, 95000, target, f.now)
+	f.ingest(t, 2, 1000, 1000, f.now) // never reaches the target, then goes silent
+	if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished", "finished", "dnf"}) {
+		t.Fatalf("statuses=%v", got)
+	}
+	posts := resultPosts(t, f.pool, f.race.ID)
+	if len(posts) != 1 || posts[0].UserID != f.users[0] || posts[0].Status != "pending" {
+		t.Fatalf("posts=%+v, want one pending post for the connected finisher only", posts)
+	}
+	if posted, err := poster.PostDue(context.Background()); err != nil || posted != 1 {
+		t.Fatalf("PostDue = %d, %v; want 1, nil", posted, err)
+	}
+	reqs := lb.received()
+	if len(reqs) != 1 || reqs[0].Authorization != "Bearer access-connected-finisher" {
+		t.Fatalf("Logbook requests=%+v, want one for the connected finisher", reqs)
+	}
+}
+
+// CLM-3: when every participant is DNF nobody gets a result post, connected
+// or not, and the Logbook receives nothing.
+func TestRaceServiceAllDNFRaceQueuesNoPosts(t *testing.T) {
+	f := seedRaceRoom(t, 2, 500000, 5*time.Millisecond)
+	lb := newFakeLogbook(t)
+	poster := newConcept2Poster(f.pool, lb)
+	f.withResultPoster(poster)
+	connectConcept2(t, f.pool, f.users[0], "dnf-a")
+	connectConcept2(t, f.pool, f.users[1], "dnf-b")
+	f.begin(t)
+	f.ingest(t, 0, 1000, 1000, f.now)
+	if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"dnf", "dnf"}) {
+		t.Fatalf("statuses=%v", got)
+	}
+	if posts := resultPosts(t, f.pool, f.race.ID); len(posts) != 0 {
+		t.Fatalf("posts=%+v, want none", posts)
+	}
+	if posted, err := poster.PostDue(context.Background()); err != nil || posted != 0 {
+		t.Fatalf("PostDue = %d, %v; want 0, nil", posted, err)
+	}
+	if reqs := lb.received(); len(reqs) != 0 {
+		t.Fatalf("Logbook received %d requests, want 0", len(reqs))
+	}
+}
+
+// raceOutcome is what finalizing decides: finish order by fixture user index,
+// each finish time and every participant's status.
+type raceOutcome struct {
+	Order    []int
+	Elapsed  []int64
+	Statuses []string
+}
+
+// runHookScenario finalizes the same three-racer race (user 1 wins, user 0
+// second, user 2 DNF) with the given poster setup, then finalizes it twice
+// more as a resumed run would, and returns the outcome of each finalize.
+func runHookScenario(t *testing.T, setup func(f *raceFixture)) (*raceFixture, []raceOutcome) {
+	t.Helper()
+	const target = 500000
+	f := seedRaceRoom(t, 3, target, 5*time.Millisecond)
+	setup(f)
+	f.begin(t)
+	f.ingest(t, 0, 99000, target, f.now)
+	f.ingest(t, 1, 91000, target, f.now)
+	f.ingest(t, 2, 1000, 1000, f.now)
+	if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A second Run of a finished race returns at once without finalizing again.
+	if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	var outcomes []raceOutcome
+	for range 2 {
+		standings, err := f.svc.Finalize(context.Background(), f.race.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := raceOutcome{Statuses: f.participantStatuses(t)}
+		for _, s := range standings {
+			o.Order = append(o.Order, slices.Index(f.users, s.UserID))
+			o.Elapsed = append(o.Elapsed, s.ElapsedMilliseconds)
+		}
+		outcomes = append(outcomes, o)
+	}
+	return f, outcomes
+}
+
+// CLM-11: settle, finish and ranks are the same with no hook, with a hook
+// and nobody connected, and with connected racers; finalizing again (a
+// repeated Run, then Finalize twice) adds no second post for anyone.
+func TestRaceServiceResultPosterLeavesFinalizeUnchangedAndIsIdempotent(t *testing.T) {
+	want := raceOutcome{Order: []int{1, 0}, Elapsed: []int64{91000, 99000}, Statuses: []string{"finished", "finished", "dnf"}}
+	cases := []struct {
+		name      string
+		setup     func(t *testing.T, f *raceFixture)
+		wantPosts []int // fixture user indexes with one post each
+	}{
+		{name: "no hook", setup: func(*testing.T, *raceFixture) {}},
+		{name: "hook, nobody connected", setup: func(t *testing.T, f *raceFixture) {
+			f.withResultPoster(newConcept2Poster(f.pool, newFakeLogbook(t)))
+		}},
+		{name: "hook, connected racers", wantPosts: []int{0, 1}, setup: func(t *testing.T, f *raceFixture) {
+			f.withResultPoster(newConcept2Poster(f.pool, newFakeLogbook(t)))
+			for i, id := range f.users {
+				connectConcept2(t, f.pool, id, "racer-"+strconv.Itoa(i))
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, outcomes := runHookScenario(t, func(f *raceFixture) { tc.setup(t, f) })
+			for i, got := range outcomes {
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("finalize #%d outcome=%+v, want %+v", i+1, got, want)
+				}
+			}
+			if status := f.roomStatus(t); status != "finished" {
+				t.Fatalf("room status=%s", status)
+			}
+			posts := resultPosts(t, f.pool, f.race.ID)
+			var gotPosts []int
+			for _, p := range posts {
+				if p.Status != "pending" {
+					t.Fatalf("post %+v, want pending", p)
+				}
+				gotPosts = append(gotPosts, slices.Index(f.users, p.UserID))
+			}
+			slices.Sort(gotPosts)
+			if !reflect.DeepEqual(gotPosts, tc.wantPosts) {
+				t.Fatalf("posts for users %v, want one each for %v", gotPosts, tc.wantPosts)
+			}
+		})
 	}
 }
 

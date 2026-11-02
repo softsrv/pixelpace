@@ -1,44 +1,44 @@
 {{define "title"}}Sign In{{end}}
 
 {{define "content"}}
-<div class="card bg-base-100 shadow-xl">
-  <div class="card-body">
-    <h2 class="card-title text-2xl justify-center mb-4">Sign In</h2>
+<section class="pp-panel pp-auth overflow-hidden" aria-labelledby="pp-auth-title">
+  {{template "pp-scene"}}
+  <div class="pp-section">
+    <div class="space-y-1 text-center">
+      <p class="pp-kicker pp-arcade">Player login</p>
+      <h1 id="pp-auth-title" class="pp-title pp-title-lg">Sign In</h1>
+    </div>
 
     <div id="form-error"></div>
 
     <form hx-post="/auth/login"
           hx-target="#form-error"
           hx-swap="innerHTML"
-          class="space-y-4">
-      <div class="form-control">
-        <label class="label" for="email">
-          <span class="label-text">Email</span>
-        </label>
+          class="space-y-5">
+      <label class="block space-y-2" for="email">
+        <span class="pp-label pp-arcade">Email</span>
         <input id="email" name="email" type="email" required
-               class="input input-bordered w-full"
+               class="pp-field"
                autocomplete="email" />
-      </div>
+      </label>
 
-      <div class="form-control">
-        <label class="label" for="password">
-          <span class="label-text">Password</span>
-        </label>
+      <div class="space-y-2">
+        <div class="flex items-baseline justify-between gap-3">
+          <label class="pp-label pp-arcade" for="password">Password</label>
+          <a href="/forgot-password" class="pp-link text-xs">Forgot password?</a>
+        </div>
         <input id="password" name="password" type="password" required
-               class="input input-bordered w-full"
+               class="pp-field"
                autocomplete="current-password" />
-        <label class="label">
-          <a href="/forgot-password" class="label-text-alt link link-hover">Forgot password?</a>
-        </label>
       </div>
 
-      <button type="submit" class="btn btn-primary w-full">Sign In</button>
+      <button type="submit" class="pp-btn w-full"><span aria-hidden="true">&#9654;</span> Sign In</button>
     </form>
 
-    <p class="text-center text-sm mt-4">
+    <p class="text-center text-sm">
       Don't have an account?
-      <a href="/register" class="link link-primary">Sign up</a>
+      <a href="/register" class="pp-link pp-link-pink">Sign up</a>
     </p>
   </div>
-</div>
+</section>
 {{end}}

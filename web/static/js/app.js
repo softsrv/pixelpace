@@ -380,89 +380,34 @@ document.body.addEventListener('token-expired', async function () {
     return Math.round(SPM_INTERVAL_SLOW_MS - ((spm - SPM_INTERVAL_LOW) / (SPM_INTERVAL_HIGH - SPM_INTERVAL_LOW)) * (SPM_INTERVAL_SLOW_MS - SPM_INTERVAL_FAST_MS));
   }
 
-  function drawBoat() {
-    if (!rowerCtx || !rowerCanvas) return;
+  // Pixel-art rower at sunset, matching the landing page and race track: each
+  // entry is a run [x, y, width, palette index] on a 54x30 art-pixel grid,
+  // painted as ROWER_PIXEL-sized squares. Frame 0 is the catch (blade toward
+  // the bow), frame 1 the finish (blade swept toward the stern).
+  var ROWER_PIXEL = 6;
+  var ROWER_PALETTE = ['#140d35', '#1f1150', '#321466', '#4d1a72', '#75207a', '#a8317c', '#d94f7a', '#f6866b', '#2a2f6b', '#222a60', '#1b2455', '#151d48', '#ffe08a', '#ffb86c', '#3b4a96', '#f8f8f2', '#ff5555', '#bd93f9', '#6272a4', '#e9e9f0', '#9aa5ce', '#ff79c6', '#ffcf9e', '#f1fa8c', '#8be9fd'];
+  var ROWER_SCENE = [[0,0,54,0],[0,1,54,0],[0,2,54,0],[0,3,54,1],[0,4,54,1],[0,5,54,1],[0,6,54,2],[0,7,54,2],[0,8,54,2],[0,9,54,3],[0,10,54,3],[0,11,54,4],[0,12,54,4],[0,13,54,5],[0,14,54,6],[0,15,54,7],[0,16,54,8],[0,17,54,9],[0,18,54,9],[0,19,54,9],[0,20,54,10],[0,21,54,10],[0,22,54,10],[0,23,54,10],[0,24,54,11],[0,25,54,11],[0,26,54,11],[0,27,54,11],[0,28,54,11],[0,29,54,11],[41,10,6,12],[40,11,8,12],[39,12,10,12],[38,14,12,13],[38,15,12,13],[3,22,3,14],[20,25,4,14],[33,21,3,14],[44,26,4,14],[10,27,3,14],[49,19,3,14],[27,28,4,14],[2,23,1,15],[10,23,1,16],[18,23,1,15],[26,23,1,16],[34,23,1,15],[42,23,1,16],[50,23,1,15],[17,16,18,15],[14,17,28,15],[11,16,6,17],[35,16,9,17],[31,14,2,18],[29,15,2,18]];
+  var ROWER_CATCH = [[16,12,2,19],[18,13,4,19],[22,14,4,19],[26,15,3,19],[29,16,4,19],[33,17,4,19],[37,18,2,19],[22,11,1,20],[22,12,1,20],[21,13,3,20],[21,14,1,20],[23,14,1,20],[20,15,2,20],[23,15,2,20],[20,16,1,20],[24,16,1,20],[20,17,1,20],[21,10,1,21],[21,11,2,21],[22,12,1,21],[22,13,2,21],[23,14,2,21],[23,15,2,21],[24,16,1,21],[20,10,2,22],[18,11,2,22],[16,12,2,22],[19,8,3,22],[19,9,3,22],[20,10,1,22],[18,7,4,23],[37,18,3,24],[38,19,1,24]];
+  var ROWER_FINISH = [[30,12,1,19],[28,13,2,19],[26,14,2,19],[24,15,2,19],[22,16,2,19],[20,17,2,19],[19,18,1,19],[23,15,9,20],[20,16,12,20],[20,17,3,20],[33,10,1,21],[33,11,1,21],[32,12,2,21],[32,13,1,21],[31,14,2,21],[31,15,1,21],[31,16,1,21],[33,10,1,22],[31,11,2,22],[30,12,1,22],[33,7,3,22],[33,8,3,22],[34,9,1,22],[32,6,4,23],[18,18,3,24],[19,19,1,24]];
 
-    rowerCtx.fillStyle = '#4b2f1f';
-    rowerCtx.beginPath();
-    rowerCtx.moveTo(45, 124);
-    rowerCtx.lineTo(260, 124);
-    rowerCtx.lineTo(232, 148);
-    rowerCtx.lineTo(78, 148);
-    rowerCtx.closePath();
-    rowerCtx.fill();
-
-    rowerCtx.strokeStyle = '#f9fafb';
-    rowerCtx.lineWidth = 3;
-    rowerCtx.beginPath();
-    rowerCtx.moveTo(95, 120);
-    rowerCtx.lineTo(214, 120);
-    rowerCtx.stroke();
+  function paintRowerRuns(runs) {
+    for (var i = 0; i < runs.length; i++) {
+      var run = runs[i];
+      rowerCtx.fillStyle = ROWER_PALETTE[run[3]];
+      rowerCtx.fillRect(run[0] * ROWER_PIXEL, run[1] * ROWER_PIXEL, run[2] * ROWER_PIXEL, ROWER_PIXEL);
+    }
   }
 
   function drawRowerFrame(frame) {
     if (!rowerCtx || !rowerCanvas) return;
 
-    rowerCtx.fillStyle = '#1e63c9';
+    rowerCtx.fillStyle = '#10183c';
     rowerCtx.fillRect(0, 0, rowerCanvas.width, rowerCanvas.height);
-    drawBoat();
+    paintRowerRuns(ROWER_SCENE);
 
-    rowerCtx.strokeStyle = '#facc15';
-    rowerCtx.fillStyle = '#facc15';
-    rowerCtx.lineWidth = 5;
-    rowerCtx.lineCap = 'round';
-    rowerCtx.lineJoin = 'round';
-
-    if (frame === 1) {
-      rowerCtx.beginPath();
-      rowerCtx.arc(150, 76, 10, 0, Math.PI * 2);
-      rowerCtx.fill();
-      rowerCtx.beginPath();
-      rowerCtx.moveTo(150, 88);
-      rowerCtx.lineTo(132, 112);
-      rowerCtx.lineTo(116, 128);
-      rowerCtx.moveTo(132, 112);
-      rowerCtx.lineTo(158, 128);
-      rowerCtx.moveTo(140, 96);
-      rowerCtx.lineTo(102, 92);
-      rowerCtx.moveTo(140, 96);
-      rowerCtx.lineTo(112, 104);
-      rowerCtx.stroke();
-
-      rowerCtx.strokeStyle = '#e5e7eb';
-      rowerCtx.lineWidth = 4;
-      rowerCtx.beginPath();
-      rowerCtx.moveTo(102, 92);
-      rowerCtx.lineTo(54, 78);
-      rowerCtx.moveTo(112, 104);
-      rowerCtx.lineTo(65, 126);
-      rowerCtx.stroke();
-      return;
-    }
-
-    rowerCtx.beginPath();
-    rowerCtx.arc(174, 76, 10, 0, Math.PI * 2);
-    rowerCtx.fill();
-    rowerCtx.beginPath();
-    rowerCtx.moveTo(170, 88);
-    rowerCtx.lineTo(184, 112);
-    rowerCtx.lineTo(208, 128);
-    rowerCtx.moveTo(184, 112);
-    rowerCtx.lineTo(156, 128);
-    rowerCtx.moveTo(176, 96);
-    rowerCtx.lineTo(218, 90);
-    rowerCtx.moveTo(176, 96);
-    rowerCtx.lineTo(208, 106);
-    rowerCtx.stroke();
-
-    rowerCtx.strokeStyle = '#e5e7eb';
-    rowerCtx.lineWidth = 4;
-    rowerCtx.beginPath();
-    rowerCtx.moveTo(218, 90);
-    rowerCtx.lineTo(270, 72);
-    rowerCtx.moveTo(208, 106);
-    rowerCtx.lineTo(252, 132);
-    rowerCtx.stroke();
+    var pose = ROWER_CATCH;
+    if (frame === 1) pose = ROWER_FINISH;
+    paintRowerRuns(pose);
   }
 
   function drawRestingRower() {

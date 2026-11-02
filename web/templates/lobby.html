@@ -1,71 +1,90 @@
 {{define "title"}}Race Lobby{{end}}
 
+{{define "main-class"}}max-w-6xl{{end}}
+
 {{define "content"}}
-<div class="space-y-6">
-  <div class="card bg-base-100 shadow-xl">
-    <div class="card-body">
-      <h1 class="card-title">Race lobby</h1>
+<div class="grid grid-cols-1 items-start gap-10 pb-6 lg:grid-cols-5">
+  <section class="pp-panel lg:col-span-2" aria-labelledby="pp-lobby-title">
+    <div class="pp-section">
+      <div class="pp-head">
+        <span class="pp-ico-box">{{template "pp-icon-flag"}}</span>
+        <div>
+          <p class="pp-kicker pp-arcade">Waiting for racers</p>
+          <h1 id="pp-lobby-title" class="pp-title pp-title-lg">Race lobby</h1>
+        </div>
+      </div>
+
+      <div class="pp-lcd p-4 text-center">
+        <div class="pp-lcd-label pp-arcade">Join code</div>
+        <span id="join-code" class="pp-lcd-value pp-join-code">{{.Lobby.JoinCode}}</span>
+      </div>
+
+      <div class="space-y-2">
+        <span class="pp-label pp-arcade block">Invite others with this link or code</span>
+        <div class="flex gap-3">
+          <input id="join-url" class="pp-field pp-field-sm min-w-0 flex-1" value="{{.JoinURL}}" readonly aria-label="Join link" />
+          <button type="button" class="pp-btn pp-btn-dark pp-btn-sm" data-copy-target="#join-url">Copy</button>
+        </div>
+      </div>
+      <button type="button" class="pp-btn pp-btn-cyan w-full" data-dialog-open="#invite-dialog">Invite friends</button>
+
       {{if .Lobby.IsHost}}
-      <form hx-post="/rooms/{{.Lobby.RoomID}}/race-type" hx-trigger="change" hx-swap="none"
+      <form class="space-y-2" hx-post="/rooms/{{.Lobby.RoomID}}/race-type" hx-trigger="change" hx-swap="none"
             data-error-target="#race-type-error" data-error-message="Couldn't change the race type.">
-        <label class="form-control w-full">
-          <span class="label-text">Race type</span>
-          <select id="race-type-select" name="race_type_id" class="select select-bordered w-full">
+        <label class="block space-y-2" for="race-type-select">
+          <span class="pp-label pp-arcade">Race type</span>
+          <select id="race-type-select" name="race_type_id" class="pp-field">
             {{range .RaceTypes}}
             <option value="{{.ID}}"{{if eq .ID $.Lobby.RaceTypeID}} selected{{end}}>{{.Label}}</option>
             {{end}}
           </select>
         </label>
-        <p class="text-base-content/60 text-sm mt-1">Changing the race asks everyone to ready up again.</p>
+        <p class="pp-hint">Changing the race asks everyone to ready up again.</p>
         <p id="race-type-error" class="text-error text-sm" role="alert"></p>
       </form>
       {{end}}
-
-      <div class="space-y-2">
-        <span class="label-text">Invite others with this link or code</span>
-        <div class="join w-full">
-          <input id="join-url" class="input input-bordered join-item w-full" value="{{.JoinURL}}" readonly aria-label="Join link" />
-          <button type="button" class="btn join-item" data-copy-target="#join-url">Copy</button>
-        </div>
-        <p class="text-sm">Code: <span id="join-code" class="font-mono font-bold tracking-widest">{{.Lobby.JoinCode}}</span></p>
-        <button type="button" class="btn btn-secondary btn-sm" data-dialog-open="#invite-dialog">Invite friends</button>
-      </div>
     </div>
-  </div>
+  </section>
 
-  <div id="lobby-panel" class="card bg-base-100 shadow-xl"
+  <div id="lobby-panel" class="pp-panel lg:col-span-3"
        hx-get="/rooms/{{.Lobby.RoomID}}/lobby/panel" hx-trigger="every 2s, room-updated from:body">
     {{template "lobby-panel" .}}
   </div>
 
   <dialog id="invite-dialog" class="modal">
-    <div class="modal-box">
-      <h2 class="text-lg font-bold">Invite friends</h2>
+    <div class="pp-panel pp-modal space-y-5">
+      <div class="pp-head">
+        <span class="pp-ico-box">{{template "pp-icon-mail"}}</span>
+        <div>
+          <p class="pp-kicker pp-arcade">Send a challenge</p>
+          <h2 class="pp-title">Invite friends</h2>
+        </div>
+      </div>
       {{if .Friends}}
-      <ul class="mt-4 space-y-2">
+      <ul class="space-y-3">
         {{range .Friends}}
-        <li class="flex items-center justify-between gap-2">
-          <span>{{.Name}}</span>
+        <li class="pp-row">
+          <span class="min-w-0 font-bold break-words">{{.Name}}</span>
           {{if .Joined}}
-          <span class="badge badge-ghost">In lobby</span>
+          <span class="pp-status pp-arcade">In lobby</span>
           {{else if .Invited}}
           {{template "invite-sent"}}
           {{else}}
           <form hx-post="/rooms/{{$.Lobby.RoomID}}/invites" hx-swap="outerHTML"
                 data-error-target="#invite-error" data-error-message="Couldn't send that invite.">
             <input type="hidden" name="user_id" value="{{.UserID}}" />
-            <button type="submit" class="btn btn-primary btn-sm">Invite</button>
+            <button type="submit" class="pp-btn pp-btn-sm">Invite</button>
           </form>
           {{end}}
         </li>
         {{end}}
       </ul>
-      <p id="invite-error" class="text-error text-sm mt-2" role="alert"></p>
+      <p id="invite-error" class="text-error text-sm" role="alert"></p>
       {{else}}
-      <p class="mt-4 text-base-content/70">You haven't added any friends yet. Share the link instead.</p>
+      <p class="pp-muted">You haven't added any friends yet. Share the link instead.</p>
       {{end}}
-      <div class="modal-action">
-        <form method="dialog"><button class="btn">Close</button></form>
+      <div class="flex justify-end">
+        <form method="dialog"><button class="pp-btn pp-btn-dark">Close</button></form>
       </div>
     </div>
     <form method="dialog" class="modal-backdrop"><button>close</button></form>
@@ -73,47 +92,57 @@
 </div>
 {{end}}
 
-{{define "invite-sent"}}<span class="badge badge-success">Invited</span>{{end}}
+{{define "invite-sent"}}<span class="pp-status pp-status-ready pp-arcade">Invited</span>{{end}}
 
 {{define "lobby-panel"}}
 {{with .Lobby}}
-<div class="card-body">
-  <div class="flex items-center justify-between">
-    <h2 class="card-title">Racers</h2>
-    <span id="lobby-race-label" class="badge badge-primary badge-lg">{{.RaceLabel}}</span>
+<div class="pp-section">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <p class="pp-kicker pp-arcade">Starting grid</p>
+      <h2 class="pp-title">Racers</h2>
+    </div>
+    <span id="lobby-race-label" class="pp-tag pp-arcade">{{.RaceLabel}}</span>
   </div>
-  <ul id="lobby-roster" class="space-y-2">
+  <ul id="lobby-roster" class="pp-roster">
     {{range .Participants}}
-    <li class="flex items-center justify-between gap-2 rounded-box bg-base-200 px-3 py-2" data-user-id="{{.UserID}}">
-      <span class="font-medium">{{.Name}}{{if .Host}} <span class="badge badge-outline badge-sm">Host</span>{{end}}</span>
+    <li class="pp-roster-lane" data-user-id="{{.UserID}}">
+      {{template "pp-lane-boat"}}
+      <span class="pp-roster-name">{{.Name}}</span>
       {{if .Host}}
-      <span class="text-base-content/60 text-sm">Starts the race</span>
+      <span class="pp-status pp-status-host pp-arcade">Host</span>
       {{else if .Ready}}
-      <span class="badge badge-success">Ready</span>
+      <span class="pp-status pp-status-ready pp-arcade">Ready</span>
       {{else}}
-      <span class="badge badge-ghost">Not ready</span>
+      <span class="pp-status pp-arcade">Not ready</span>
       {{end}}
+    </li>
+    {{end}}
+    {{if lt (len .Participants) 8}}
+    <li class="pp-roster-lane pp-roster-open" aria-hidden="true">
+      {{template "pp-lane-boat"}}
+      <span class="pp-roster-name pp-arcade pp-blink text-xs">Open lane</span>
     </li>
     {{end}}
   </ul>
   <p id="lobby-error" class="text-error text-sm" role="alert"></p>
-  <div class="card-actions justify-between">
-    <button type="button" class="btn btn-ghost" hx-post="/rooms/{{.RoomID}}/leave" hx-swap="none"
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <button type="button" class="pp-btn pp-btn-dark" hx-post="/rooms/{{.RoomID}}/leave" hx-swap="none"
             data-error-target="#lobby-error" data-error-message="Couldn't leave the lobby.">Leave</button>
     {{if .IsHost}}
-    <button id="lobby-start" type="button" class="btn btn-primary" hx-post="/rooms/{{.RoomID}}/start" hx-swap="none"
+    <button id="lobby-start" type="button" class="pp-btn pp-btn-lg" hx-post="/rooms/{{.RoomID}}/start" hx-swap="none"
             data-error-target="#lobby-error" data-error-message="Couldn't start the race. Everyone else must be ready."
-            {{if not .CanStart}}disabled{{end}}>Start race</button>
+            {{if not .CanStart}}disabled{{end}}><span aria-hidden="true">&#9654;</span> Start race</button>
     {{else if .SelfReady}}
-    <button id="lobby-ready" type="button" class="btn btn-outline" hx-post="/rooms/{{.RoomID}}/unready" hx-swap="none"
+    <button id="lobby-ready" type="button" class="pp-btn pp-btn-dark" hx-post="/rooms/{{.RoomID}}/unready" hx-swap="none"
             data-error-target="#lobby-error" data-error-message="Couldn't update your status.">Not ready</button>
     {{else}}
-    <button id="lobby-ready" type="button" class="btn btn-success" hx-post="/rooms/{{.RoomID}}/ready" hx-swap="none"
+    <button id="lobby-ready" type="button" class="pp-btn pp-btn-green pp-btn-lg" hx-post="/rooms/{{.RoomID}}/ready" hx-swap="none"
             data-error-target="#lobby-error" data-error-message="Couldn't update your status.">I'm ready</button>
     {{end}}
   </div>
   {{if and .IsHost (not .CanStart)}}
-  <p class="text-base-content/60 text-sm">You can start once at least one other racer has joined and everyone is ready.</p>
+  <p class="pp-hint">You can start once at least one other racer has joined and everyone is ready.</p>
   {{end}}
 </div>
 {{end}}

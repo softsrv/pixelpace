@@ -1,13 +1,13 @@
 {{define "title"}}Race Unavailable{{end}}
 
 {{define "content"}}
-<div class="card bg-base-100 shadow-xl">
-  <div class="card-body">
-    <h1 class="card-title">Race unavailable</h1>
-    <p>{{.Message}}</p>
-    <div class="card-actions justify-end">
-      <a href="/dashboard" class="btn btn-primary">Back to dashboard</a>
-    </div>
+<section class="pp-panel" aria-labelledby="pp-unavailable-title">
+  <div class="pp-section items-center py-10 text-center">
+    <div class="pp-ico-box pp-ico-xl mb-2">{{template "pp-icon-warn"}}</div>
+    <p class="pp-kicker pp-arcade">Game over</p>
+    <h1 id="pp-unavailable-title" class="pp-title pp-title-lg">Race unavailable</h1>
+    <p class="pp-muted">{{.Message}}</p>
+    <a href="/dashboard" class="pp-btn mt-2"><span aria-hidden="true">&#9664;</span> Back to dashboard</a>
   </div>
-</div>
+</section>
 {{end}}

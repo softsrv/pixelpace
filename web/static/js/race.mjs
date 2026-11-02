@@ -12,22 +12,30 @@
 // Telemetry arrives as DOM events from app.js: `pixelpace:local-telemetry` for
 // our own samples and `pixelpace:race-telemetry` for every sample the server
 // broadcasts. PIXI is the global from the vendored classic scripts.
+//
+// The look is pixel art: sprites and the countdown font live in
+// race-pixels.mjs and are drawn as solid squares on an un-antialiased canvas.
+// Each boat's oars sweep at that racer's live stroke rate.
 
 import { countdownLabel, laneCenterX, progressFraction, trackY } from './race-track.mjs';
+import {
+  BOAT_POSES, BOAT_ROWS, BOAT_COLS, COLORS, GLYPH_ROWS,
+  advanceStroke, boatCells, cellColor, hullColor, pixelScale, snap, strokePose, textCells
+} from './race-pixels.mjs';
 
 var FINISH_MARGIN = 40; // space above the finish line for its label
-var START_MARGIN = 80; // space below the start line for the rowers and labels
-var BOAT_WIDTH = 16;
-var BOAT_LENGTH = 44;
+var START_MARGIN = 112; // space below the start line for the rowers (up to 80px long at 4x), wake and labels
 var CHECKER_SIZE = 8;
+var BUOY_SPACING = 18; // screen pixels between lane-divider buoys
+var RIPPLE_COUNT = 70; // ripple dashes per screen height of water
+var RIPPLE_IDLE_SPEED = 6; // px/s the water drifts while nobody rows
+var RIPPLE_ROW_SPEED = 40; // px/s it rushes past once we are rowing
 var POLL_INTERVAL_MS = 500;
 var FINISH_POLL_MS = 5000; // while racing, how often to check whether the race has ended
 var READY_RETRY_MS = 2000;
 var UNREADY_ALPHA = 0.35; // rivals still connecting their equipment are dimmed
 var EASE_PER_FRAME = 0.15; // share of the remaining gap a rower closes each 60fps frame
-var WATER_COLOR = 0x1e63c9;
-var SELF_COLOR = 0xfacc15;
-var RIVAL_COLOR = 0xe5e7eb;
+var LABEL_FONT = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 
 var REMOVED_MESSAGE = 'You were removed from this race because your rowing machine was not connected in time.';
 var RESULTS_ERROR_MESSAGE = 'We couldn\u2019t load the results. You can still head back to the dashboard.';
@@ -58,6 +66,8 @@ export async function startRaceView(trackEl, PIXI) {
       label: el.textContent.trim(),
       isSelf: el.dataset.self === 'true',
       distanceMillimeters: 0,
+      strokeRate: 0,
+      strokePhase: 0,
       y: null,
       sprite: null
     };
@@ -79,7 +89,7 @@ export async function startRaceView(trackEl, PIXI) {
   var countdownText = null; // assigned once the canvas has initialised
 
   document.addEventListener('pixelpace:race-finished', openFinishModal);
-  var doneBtn = modalEl ? modalEl.querySelector('button.btn-primary') : null;
+  var doneBtn = modalEl ? modalEl.querySelector('button[data-finish-done]') : null;
   if (doneBtn) doneBtn.addEventListener('click', leaveRace);
   // Escape would close the dialog and strand the racer on a finished track;
   // the way out is Done.
@@ -92,37 +102,48 @@ export async function startRaceView(trackEl, PIXI) {
   var app = new PIXI.Application();
   await app.init({
     resizeTo: trackEl,
-    background: WATER_COLOR,
-    antialias: true,
+    background: COLORS.water,
+    antialias: false,
+    roundPixels: true,
     autoDensity: true,
     resolution: window.devicePixelRatio || 1
   });
   trackEl.appendChild(app.canvas);
 
+  var water = new PIXI.Graphics();
+  var ripples = new PIXI.Container();
+  var rippleArt = new PIXI.Graphics();
+  ripples.addChild(rippleArt);
   var course = new PIXI.Graphics();
   var startText = courseLabel(PIXI, 'START');
   var finishText = courseLabel(PIXI, 'FINISH');
-  countdownText = new PIXI.Text({
-    text: '',
-    style: { fill: 0xffffff, fontSize: 120, fontFamily: 'sans-serif', fontWeight: 'bold', stroke: { color: 0x111827, width: 8 } }
-  });
-  countdownText.anchor.set(0.5);
-  app.stage.addChild(course, startText, finishText);
+  countdownText = createPixelLabel(PIXI);
+  app.stage.addChild(water, ripples, course, startText, finishText);
+  var scale = pixelScale(app.screen.width / Math.max(1, lanes.length));
+  var rivalIndex = 0;
   lanes.forEach(function (lane) {
-    lane.sprite = createRower(PIXI, lane);
+    lane.sprite = createRower(PIXI, lane, lane.isSelf ? 0 : rivalIndex++, scale);
     app.stage.addChild(lane.sprite);
   });
-  app.stage.addChild(countdownText);
+  app.stage.addChild(countdownText.view);
+  var rippleOffset = 0;
+  var rippleSpeed = RIPPLE_IDLE_SPEED;
 
   var drawnWidth = 0;
   var drawnHeight = 0;
   app.ticker.add(function (ticker) {
     var geometry = courseGeometry(app.screen);
     if (geometry.width !== drawnWidth || geometry.height !== drawnHeight) {
+      drawWater(water, rippleArt, geometry);
       drawCourse(course, startText, finishText, geometry, lanes.length);
-      countdownText.position.set(geometry.width / 2, geometry.height / 2);
-      // "GO!" is the widest label; keep it inside narrow (phone) tracks.
-      countdownText.style.fontSize = Math.min(120, Math.floor(geometry.width * 0.4));
+      countdownText.view.position.set(geometry.width / 2, geometry.height / 2);
+      // "GO!" is the widest label (13 cells); keep it inside narrow (phone) tracks.
+      countdownText.setCellSize(Math.max(4, Math.min(16, Math.floor((geometry.width * 0.5) / 13))));
+      var nextScale = pixelScale(geometry.width / Math.max(1, lanes.length));
+      if (nextScale !== scale) {
+        scale = nextScale;
+        lanes.forEach(function (lane) { lane.sprite.setScale(scale); });
+      }
       drawnWidth = geometry.width;
       drawnHeight = geometry.height;
     }
@@ -132,17 +153,28 @@ export async function startRaceView(trackEl, PIXI) {
       if (remaining <= 0 && !racing) go();
     }
     var ease = 1 - Math.pow(1 - EASE_PER_FRAME, ticker.deltaTime);
+    var elapsedMs = ticker.deltaMS || ticker.deltaTime * (1000 / 60);
     lanes.forEach(function (lane, index) {
       var fraction = progressFraction(lane.distanceMillimeters, targetMillimeters);
       var targetY = trackY(fraction, geometry.startY, geometry.finishY);
       lane.y = lane.y === null ? targetY : lane.y + (targetY - lane.y) * ease;
-      lane.sprite.position.set(laneCenterX(index, lanes.length, geometry.width), lane.y);
+      lane.sprite.position.set(snap(laneCenterX(index, lanes.length, geometry.width), scale), snap(lane.y, scale));
+      // Oars sweep at the racer's own stroke rate; across the line they rest.
+      var rowing = racing && fraction < 1 ? lane.strokeRate : 0;
+      lane.strokePhase = advanceStroke(lane.strokePhase, rowing, elapsedMs);
+      lane.sprite.setPose(strokePose(lane.strokePhase), rowing > 0);
     });
+    // The water rushes past while we row and drifts while we don't.
+    var wantSpeed = racing && !finished && self && self.strokeRate > 0 ? RIPPLE_ROW_SPEED : RIPPLE_IDLE_SPEED;
+    rippleSpeed += (wantSpeed - rippleSpeed) * ease * 0.1;
+    rippleOffset = (rippleOffset + (rippleSpeed * elapsedMs) / 1000) % Math.max(1, geometry.height);
+    ripples.y = snap(rippleOffset, scale) - geometry.height;
   });
 
   document.addEventListener('pixelpace:local-telemetry', function (evt) {
     if (!racing || !self) return;
     self.distanceMillimeters = evt.detail.distance_millimeters;
+    if (typeof evt.detail.stroke_rate === 'number') self.strokeRate = evt.detail.stroke_rate;
     if (!finished && progressFraction(self.distanceMillimeters, targetMillimeters) >= 1) {
       finished = true;
       if (!modalOpened) setStatus('Finished! Waiting for the other rowers to finish\u2026');
@@ -154,7 +186,9 @@ export async function startRaceView(trackEl, PIXI) {
     // Our own rower follows local telemetry; the echo can lag behind it.
     if (!sample || sample.user_id === selfId) return;
     var lane = lanesById[sample.user_id];
-    if (lane) lane.distanceMillimeters = sample.distance_millimeters;
+    if (!lane) return;
+    lane.distanceMillimeters = sample.distance_millimeters;
+    if (typeof sample.stroke_rate === 'number') lane.strokeRate = sample.stroke_rate;
   });
 
   // The view is drawn; the racer is ready once their rowing machine is too.
@@ -406,20 +440,44 @@ function courseGeometry(screen) {
   };
 }
 
+// The water: darker and lighter bands, plus a ripple layer two screens tall
+// that the ticker slides down so the course seems to move under the boats.
+function drawWater(water, rippleArt, geometry) {
+  water.clear();
+  var band = 48;
+  for (var y = 0; y < geometry.height; y += band * 2) {
+    water.rect(0, y + band, geometry.width, band).fill(COLORS.waterBand);
+  }
+  rippleArt.clear();
+  var seed = 7;
+  function rand() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+  var count = Math.round(RIPPLE_COUNT * Math.max(1, geometry.width / 400));
+  for (var i = 0; i < count; i++) {
+    var x = Math.floor(rand() * geometry.width);
+    var ry = Math.floor(rand() * geometry.height);
+    var w = 4 + Math.floor(rand() * 3) * 2;
+    // The same dash in both screens keeps the wrap seamless.
+    rippleArt.rect(x, ry, w, 2).fill(COLORS.ripple);
+    rippleArt.rect(x, ry + geometry.height, w, 2).fill(COLORS.ripple);
+  }
+}
+
 function drawCourse(course, startText, finishText, geometry, laneCount) {
   course.clear();
+  // Lane dividers are lines of buoys, alternating red and white.
   for (var i = 1; i < laneCount; i++) {
-    var x = (geometry.width * i) / laneCount;
-    course.moveTo(x, geometry.finishY).lineTo(x, geometry.startY);
+    var x = Math.round((geometry.width * i) / laneCount);
+    for (var n = 0, by = geometry.finishY + 6; by < geometry.startY; n++, by += BUOY_SPACING) {
+      course.rect(x - 2, by, 4, 4).fill(n % 2 === 0 ? COLORS.buoyRed : COLORS.buoyWhite);
+    }
   }
-  course.stroke({ width: 1, color: 0xffffff, alpha: 0.3 });
 
-  course.rect(0, geometry.startY - 2, geometry.width, 4).fill(0xffffff);
+  course.rect(0, geometry.startY - 2, geometry.width, 4).fill(COLORS.white);
 
   // A two-row checkered band whose lower edge is the finish line.
   for (var row = 0; row < 2; row++) {
     for (var col = 0; col * CHECKER_SIZE < geometry.width; col++) {
-      var color = (row + col) % 2 === 0 ? 0xffffff : 0x111827;
+      var color = (row + col) % 2 === 0 ? COLORS.white : COLORS.ink;
       course.rect(col * CHECKER_SIZE, geometry.finishY - (2 - row) * CHECKER_SIZE, CHECKER_SIZE, CHECKER_SIZE).fill(color);
     }
   }
@@ -430,25 +488,118 @@ function drawCourse(course, startText, finishText, geometry, laneCount) {
 }
 
 function courseLabel(PIXI, text) {
-  var label = new PIXI.Text({ text: text, style: { fill: 0xffffff, fontSize: 11, fontFamily: 'sans-serif', fontWeight: 'bold' } });
+  var label = new PIXI.Text({
+    text: text,
+    style: { fill: COLORS.white, fontSize: 11, fontFamily: LABEL_FONT, fontWeight: 'bold', letterSpacing: 2 }
+  });
   label.anchor.set(1, 0);
   label.alpha = 0.8;
   return label;
 }
 
-// A rower's placeholder: a hull whose bow sits at the sprite's origin, so the
-// bow touches the start line at 0% and the finish line at 100%.
-function createRower(PIXI, lane) {
+// Draws pixel cells ([col, row, ...] with a colour per cell) as squares.
+function paintCells(graphics, cells, size, colorOf, offsetX, offsetY) {
+  cells.forEach(function (cell) {
+    graphics.rect(offsetX + cell[0] * size, offsetY + cell[1] * size, size, size).fill(colorOf(cell));
+  });
+}
+
+// A rower: one pre-drawn sprite per stroke pose (only one is visible), a
+// wake that shows while they row, and their name. The bow sits at the
+// sprite's origin, so it touches the start line at 0% and the finish at 100%.
+function createRower(PIXI, lane, rivalIndex, scale) {
   var rower = new PIXI.Container();
-  var hull = new PIXI.Graphics()
-    .roundRect(-BOAT_WIDTH / 2, 0, BOAT_WIDTH, BOAT_LENGTH, BOAT_WIDTH / 2)
-    .fill(lane.isSelf ? SELF_COLOR : RIVAL_COLOR);
+  var hull = hullColor(lane.isSelf, rivalIndex);
+  var poses = {};
+  BOAT_POSES.forEach(function (pose) {
+    poses[pose] = new PIXI.Graphics();
+    rower.addChild(poses[pose]);
+  });
+  var wake = new PIXI.Graphics();
+  rower.addChild(wake);
   var label = new PIXI.Text({
-    text: lane.label,
-    style: { fill: 0xffffff, fontSize: 12, fontFamily: 'sans-serif', fontWeight: lane.isSelf ? 'bold' : 'normal' }
+    text: lane.isSelf ? lane.label + ' (you)' : lane.label,
+    style: {
+      fill: lane.isSelf ? hull : COLORS.white,
+      fontSize: 12,
+      fontFamily: LABEL_FONT,
+      fontWeight: 'bold',
+      stroke: { color: COLORS.ink, width: 3 }
+    }
   });
   label.anchor.set(0.5, 0);
-  label.y = BOAT_LENGTH + 4;
-  rower.addChild(hull, label);
+  rower.addChild(label);
+
+  var current = null;
+  var wakeFrame = 0;
+
+  rower.setScale = function (size) {
+    var left = -Math.floor(BOAT_COLS / 2) * size;
+    BOAT_POSES.forEach(function (pose) {
+      poses[pose].clear();
+      paintCells(poses[pose], boatCells(pose), size, function (cell) { return cellColor(cell[2], hull); }, left, 0);
+    });
+    wake.clear();
+    var stern = BOAT_ROWS * size;
+    paintCells(wake, [[-1, 0], [1, 0], [-2, 2], [2, 2], [0, 3]], size, function () { return COLORS.wake; }, -Math.floor(size / 2), stern);
+    label.y = stern + 4 * size + 2;
+    current = null;
+  };
+
+  // Shows the pose for this point in the stroke; the wake flickers while rowing.
+  rower.setPose = function (pose, rowing) {
+    if (pose !== current) {
+      BOAT_POSES.forEach(function (name) { poses[name].visible = name === pose; });
+      if (rowing && pose === 'catch') wakeFrame++;
+      current = pose;
+    }
+    wake.visible = rowing && wakeFrame % 2 === 0;
+  };
+
+  rower.setScale(scale);
+  rower.setPose('square', false);
   return rower;
+}
+
+// The countdown in the 5x7 pixel font with a hard drop shadow. `text` reads
+// and writes the label; the art is only redrawn when it changes.
+function createPixelLabel(PIXI) {
+  var view = new PIXI.Container();
+  var art = new PIXI.Graphics();
+  view.addChild(art);
+  var text = '';
+  var cellSize = 12;
+  var label = {
+    view: view,
+    isPixelLabel: true,
+    setCellSize: function (size) {
+      if (size === cellSize) return;
+      cellSize = size;
+      redraw();
+    }
+  };
+  Object.defineProperty(label, 'text', {
+    get: function () { return text; },
+    set: function (value) {
+      var next = value == null ? '' : String(value);
+      if (next === text) return;
+      text = next;
+      redraw();
+    }
+  });
+  view.pixelLabel = label;
+
+  function redraw() {
+    art.clear();
+    if (!text) return;
+    var layout = textCells(text);
+    var x0 = -Math.round((layout.width * cellSize) / 2);
+    var y0 = -Math.round((GLYPH_ROWS * cellSize) / 2);
+    var shadow = Math.max(2, Math.round(cellSize / 3));
+    var fill = text === 'GO!' ? COLORS.go : COLORS.countdown;
+    paintCells(art, layout.cells, cellSize, function () { return COLORS.ink; }, x0 + shadow, y0 + shadow);
+    paintCells(art, layout.cells, cellSize, function () { return fill; }, x0, y0);
+  }
+
+  return label;
 }

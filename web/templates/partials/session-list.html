@@ -2,33 +2,34 @@
 <div id="session-list" class="space-y-3">
   {{if .Sessions}}
     {{range .Sessions}}
-    <div class="card bg-base-100 border border-base-300">
-      <div class="card-body p-4 flex flex-row items-center justify-between">
-        <div class="space-y-1">
-          <p class="font-medium text-sm">
+    <div class="pp-row">
+      <div class="flex min-w-0 items-center gap-3">
+        {{template "pp-icon-device"}}
+        <div class="min-w-0 space-y-1">
+          <p class="pp-mono text-sm font-bold break-words">
             {{if .DeviceName.Valid}}{{.DeviceName.String}}{{else}}Unknown device{{end}}
           </p>
-          <p class="text-xs text-base-content/60">
+          <p class="pp-hint">
             {{if .IpAddress}}{{.IpAddress}}{{end}}
             &bull; Last used {{.LastUsedAt.Time.Format "Jan 2, 2006 15:04"}}
           </p>
-          <p class="text-xs text-base-content/60">
+          <p class="pp-hint">
             Created {{.CreatedAt.Time.Format "Jan 2, 2006"}}
           </p>
         </div>
-        <button
-          hx-delete="/auth/sessions/{{.ID}}"
-          hx-target="#session-list"
-          hx-swap="outerHTML"
-          hx-confirm="Revoke this session?"
-          class="btn btn-sm btn-error btn-outline">
-          Revoke
-        </button>
       </div>
+      <button
+        hx-delete="/auth/sessions/{{.ID}}"
+        hx-target="#session-list"
+        hx-swap="outerHTML"
+        hx-confirm="Revoke this session?"
+        class="pp-btn pp-btn-red pp-btn-sm">
+        Revoke
+      </button>
     </div>
     {{end}}
   {{else}}
-    <p class="text-base-content/60 text-sm text-center py-4">No active sessions.</p>
+    <p class="pp-hint py-4 text-center">No active sessions.</p>
   {{end}}
 </div>
 {{end}}

@@ -50,7 +50,7 @@ function fakeModal() {
   error.classList.add('hidden');
   var done = fakeElement('button');
   modal.querySelector = function (selector) {
-    return { table: table, tbody: tbody, '.text-error': error, 'button.btn-primary': done }[selector] || null;
+    return { table: table, tbody: tbody, '.text-error': error, 'button[data-finish-done]': done }[selector] || null;
   };
   return { modal: modal, table: table, tbody: tbody, error: error, done: done };
 }
@@ -60,6 +60,8 @@ function makePixi() {
   var initGate = new Promise(function (resolve) { release = resolve; });
   var texts = [];
   var ticks = [];
+  var graphics = [];
+  var stageChildren = [];
   function chain() {
     var g = {};
     ['moveTo', 'lineTo', 'stroke', 'rect', 'fill', 'roundRect', 'clear'].forEach(function (m) { g[m] = function () { return g; }; });
@@ -70,19 +72,28 @@ function makePixi() {
     Application: function () {
       this.init = function () { return initGate; };
       this.canvas = fakeElement('canvas');
-      this.stage = { addChild: function () {}, removeChild: function () {} };
+      this.stage = { addChild: function () { stageChildren.push.apply(stageChildren, arguments); }, removeChild: function () {} };
       this.ticker = { add: function (fn) { ticks.push(fn); } };
       this.screen = { width: 300, height: 600 };
     },
-    Graphics: function () { return chain(); },
-    Container: function () { return { addChild: function () {}, position: { set: function () {} }, destroy: function () {}, alpha: 1 }; },
+    Graphics: function () { var g = chain(); graphics.push(g); return g; },
+    Container: function () {
+      var c = { children: [], position: { set: function () {} }, destroy: function () {}, alpha: 1 };
+      c.addChild = function () { c.children.push.apply(c.children, arguments); };
+      return c;
+    },
     Text: function (options) {
       var t = { text: options.text, style: Object.assign({}, options.style), anchor: { set: function () {} }, position: { set: function () {} }, alpha: 1, y: 0 };
       texts.push(t);
       return t;
     }
   };
-  return { PIXI: PIXI, releaseInit: release, texts: texts, ticks: ticks };
+  // The countdown is drawn in the pixel font: find its label on the stage.
+  function countdownText() {
+    var view = stageChildren.find(function (c) { return c && c.pixelLabel; });
+    return view ? view.pixelLabel.text : undefined;
+  }
+  return { PIXI: PIXI, releaseInit: release, texts: texts, ticks: ticks, graphics: graphics, countdownText: countdownText };
 }
 
 // Sets up the race page globals. responses maps a URL to a function returning
@@ -188,8 +199,7 @@ test('finished reload: a dropped racer whose 404 lands after the canvas initiali
   await settle();
   assert.equal(page.status.textContent, REMOVED);
   assert.equal(page.parts.modal.open, false);
-  var countdown = pixi.texts.find(function (t) { return t.style.fontSize === 120; });
-  assert.equal(countdown.text, '', 'the countdown text is cleared once it exists');
+  assert.equal(pixi.countdownText(), '', 'the countdown text is cleared once it exists');
   assert.ok(!page.calls.includes('/rooms/r1/race/results'));
 });
 

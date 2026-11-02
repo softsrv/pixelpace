@@ -1,45 +1,43 @@
 {{define "title"}}Create Account{{end}}
 
 {{define "content"}}
-<div class="card bg-base-100 shadow-xl">
-  <div class="card-body">
-    <h2 class="card-title text-2xl justify-center mb-4">Create Account</h2>
+<section class="pp-panel pp-auth overflow-hidden" aria-labelledby="pp-auth-title">
+  {{template "pp-scene"}}
+  <div class="pp-section">
+    <div class="space-y-1 text-center">
+      <p class="pp-kicker pp-arcade">New player</p>
+      <h1 id="pp-auth-title" class="pp-title pp-title-lg">Create Account</h1>
+    </div>
 
     <div id="form-error"></div>
 
     <form hx-post="/auth/register"
           hx-target="#form-error"
           hx-swap="innerHTML"
-          class="space-y-4">
-      <div class="form-control">
-        <label class="label" for="email">
-          <span class="label-text">Email</span>
-        </label>
+          class="space-y-5">
+      <label class="block space-y-2" for="email">
+        <span class="pp-label pp-arcade">Email</span>
         <input id="email" name="email" type="email" required
-               class="input input-bordered w-full"
+               class="pp-field"
                autocomplete="email" />
-      </div>
+      </label>
 
-      <div class="form-control">
-        <label class="label" for="password">
-          <span class="label-text">Password</span>
-        </label>
+      <label class="block space-y-2" for="password">
+        <span class="pp-label pp-arcade">Password</span>
         <input id="password" name="password" type="password" required
-               class="input input-bordered w-full"
+               class="pp-field"
                autocomplete="new-password"
                minlength="8" />
-        <label class="label">
-          <span class="label-text-alt">Minimum 8 characters</span>
-        </label>
-      </div>
+        <span class="pp-hint block">Minimum 8 characters</span>
+      </label>
 
-      <button type="submit" class="btn btn-primary w-full">Create Account</button>
+      <button type="submit" class="pp-btn w-full"><span aria-hidden="true">&#9654;</span> Create Account</button>
     </form>
 
-    <p class="text-center text-sm mt-4">
+    <p class="text-center text-sm">
       Already have an account?
-      <a href="/login" class="link link-primary">Sign in</a>
+      <a href="/login" class="pp-link pp-link-pink">Sign in</a>
     </p>
   </div>
-</div>
+</section>
 {{end}}

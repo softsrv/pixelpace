@@ -110,41 +110,63 @@ func containsToken(tokens []string, want string) bool {
 	return false
 }
 
-// TestMainLayoutUsesNarrowContentColumn renders the REAL embedded base.html
-// (via web.FS, not a mock) and asserts the shared <main> content wrapper caps
-// at max-w-md, and that no per-page override re-widens it to max-w-4xl.
-// Re-introducing the base.html max-w-4xl cap turns this test red.
-func TestMainLayoutUsesNarrowContentColumn(t *testing.T) {
-	base, err := template.ParseFS(FS, "templates/base.html")
-	if err != nil {
-		t.Fatalf("parse base.html: %v", err)
-	}
-	tmpl, err := base.ParseFS(FS, "templates/dashboard.html")
-	if err != nil {
-		t.Fatalf("parse dashboard.html: %v", err)
-	}
-
-	var buf strings.Builder
-	data := map[string]any{
-		"User":    map[string]any{"Email": "rower@example.com", "EmailVerified": true},
-		"DevMode": false,
-	}
-	if err := tmpl.ExecuteTemplate(&buf, "base.html", data); err != nil {
-		t.Fatalf("execute base.html with dashboard content: %v", err)
-	}
-	out := buf.String()
-
-	mainTokens, ok := extractTagClassTokens(out, "main")
-	if !ok {
-		t.Fatalf("<main> tag or class attribute not found; rendered: %q", out)
-	}
-	for _, want := range []string{"container", "mx-auto", "max-w-md"} {
-		if !containsToken(mainTokens, want) {
-			t.Errorf("<main> wrapper does not carry %q; class tokens: %v", want, mainTokens)
+// TestMainLayoutColumnWidths renders the REAL embedded templates (via web.FS,
+// not a mock). Pages that don't override the width (the auth forms) keep the
+// shared narrow max-w-md column; the dashboard, profile, lobby and race pages
+// opt into the wide max-w-6xl multi-column layout. No page uses the old
+// max-w-4xl cap.
+func TestMainLayoutColumnWidths(t *testing.T) {
+	render := func(page string, data any) string {
+		t.Helper()
+		tmpl, err := template.ParseFS(FS, "templates/base.html", page)
+		if err != nil {
+			t.Fatalf("parse %s: %v", page, err)
 		}
+		var buf strings.Builder
+		if err := tmpl.ExecuteTemplate(&buf, "base.html", data); err != nil {
+			t.Fatalf("execute base.html with %s: %v", page, err)
+		}
+		return buf.String()
 	}
-	if strings.Contains(out, "max-w-4xl") {
-		t.Errorf("rendered output still contains the widened max-w-4xl cap")
+	cases := []struct {
+		page, want, notWant string
+		data                any
+	}{
+		{page: "templates/auth/login.html", want: "max-w-md", notWant: "max-w-6xl", data: map[string]any{}},
+		{page: "templates/dashboard.html", want: "max-w-6xl", notWant: "max-w-md", data: map[string]any{
+			"User":    map[string]any{"Email": "rower@example.com", "EmailVerified": true},
+			"DevMode": false,
+		}},
+		{page: "templates/auth/register.html", want: "max-w-md", notWant: "max-w-6xl", data: map[string]any{}},
+		{page: "templates/profile.html", want: "max-w-6xl", notWant: "max-w-md", data: map[string]any{
+			"User": map[string]any{"Email": "rower@example.com", "CreatedAt": struct{ Time time.Time }{Time: time.Now()}},
+		}},
+		{page: "templates/lobby.html", want: "max-w-6xl", notWant: "max-w-md", data: map[string]any{
+			"User":  map[string]any{"Email": "host@example.com"},
+			"Lobby": app.RoomLobby{JoinCode: "ABC234", RaceLabel: "2000m"},
+		}},
+		{page: "templates/race.html", want: "max-w-6xl", notWant: "max-w-md", data: map[string]any{
+			"User": map[string]any{"Email": "rower@example.com"},
+			"Race": map[string]any{"Label": "2000m"},
+		}},
+	}
+	for _, tc := range cases {
+		out := render(tc.page, tc.data)
+		mainTokens, ok := extractTagClassTokens(out, "main")
+		if !ok {
+			t.Fatalf("%s: <main> tag or class attribute not found", tc.page)
+		}
+		for _, want := range []string{"container", "mx-auto", tc.want} {
+			if !containsToken(mainTokens, want) {
+				t.Errorf("%s: <main> wrapper does not carry %q; class tokens: %v", tc.page, want, mainTokens)
+			}
+		}
+		if containsToken(mainTokens, tc.notWant) {
+			t.Errorf("%s: <main> wrapper carries %q; class tokens: %v", tc.page, tc.notWant, mainTokens)
+		}
+		if strings.Contains(out, "max-w-4xl") {
+			t.Errorf("%s: rendered output contains the old max-w-4xl cap", tc.page)
+		}
 	}
 }
 
@@ -570,7 +592,7 @@ func TestRacePageRendersTrackDataAndScripts(t *testing.T) {
 		`data-lobby-url="/rooms/` + roomID.String() + `/lobby"`,
 		`<li data-user-id="` + rivalID.String() + `" data-self="false">Ada</li>`,
 		`<li data-user-id="` + selfID.String() + `" data-self="true">Me</li>`,
-		`id="rowing-machine-card" class="card bg-base-100 shadow-xl" data-dev-mode="true"`,
+		`id="rowing-machine-card" class="pp-panel" data-dev-mode="true"`,
 		`id="bt-connect-btn"`,
 		`id="bt-metrics"`,
 		`data-metric="elapsedTime"`,
@@ -649,7 +671,7 @@ func TestRacePageRendersFinishModal(t *testing.T) {
 		`Distance`,
 		`Pace / 500m`,
 		`<p class="text-error hidden" role="alert"></p>`,
-		`<button type="button" class="btn btn-primary">Done</button>`,
+		`<button type="button" class="pp-btn" data-finish-done>Done</button>`,
 		`data-results-url="/rooms/01950000-0000-7000-8000-0000000000dd/race/results"`,
 		`data-dashboard-url="/dashboard"`,
 		`data-finished="false"`,

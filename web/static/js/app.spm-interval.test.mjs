@@ -258,7 +258,7 @@ test('dashboard starts the rower canvas hidden in the Rowing Machine card', func
 test('app reveals the canvas after connection success and draws the resting scene', function () {
   assert.match(appJs, /var server = await device\.gatt\.connect\(\);[\s\S]*showConnectionInfo\([\s\S]*\);\n      revealRowerCanvas\(\);\n      showZeroMetrics\(\);/);
   assert.match(appJs, /function revealRowerCanvas\(\) \{[\s\S]*rowerCanvas\.classList\.remove\('hidden'\);[\s\S]*drawRestingRower\(\);[\s\S]*\}/);
-  assert.match(appJs, /rowerCtx\.fillStyle = '#1e63c9';\n    rowerCtx\.fillRect\(0, 0, rowerCanvas\.width, rowerCanvas\.height\);/);
+  assert.match(appJs, /rowerCtx\.fillStyle = '#10183c';\n    rowerCtx\.fillRect\(0, 0, rowerCanvas\.width, rowerCanvas\.height\);/);
 });
 
 test('rower sprite uses exactly two in-code frames and no image asset loader', function () {

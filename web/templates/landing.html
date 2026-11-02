@@ -2,7 +2,7 @@
 
 {{define "scripts"}}<script type="module" src="/static/js/landing.mjs"></script>{{end}}
 
-{{define "brand"}}<span class="flex items-center gap-2"><svg class="pp-pixel h-6 w-auto" viewBox="0 0 20 9" aria-hidden="true"><path fill="#e9e9f0" d="M11 2h1v1h-1zM12 1h1v1h-1zM13 0h3v1h-3zM11 6h1v1h-1zM12 7h1v1h-1zM13 8h3v1h-3z"/><path fill="#ff79c6" d="M3 3h14v1h-14zM0 4h20v1h-20zM3 5h14v1h-14z"/><path fill="#282a36" d="M9 3h2v3h-2z"/><path fill="#ffcf9e" d="M8 4h1v1h-1z"/></svg><span class="text-xl font-bold">PixelPace</span></span>{{end}}
+{{define "brand"}}<span class="flex items-center gap-2">{{template "pp-brand-boat"}}<span class="text-xl font-bold">PixelPace</span></span>{{end}}
 
 {{define "nav-actions"}}
 <div class="flex items-center gap-3">

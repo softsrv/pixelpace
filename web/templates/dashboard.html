@@ -1,105 +1,160 @@
 {{define "title"}}Dashboard{{end}}
 
+{{define "main-class"}}max-w-6xl{{end}}
+
 {{define "content"}}
-<div class="space-y-6">
-  <div class="card bg-base-100 shadow-xl">
-    <div class="card-body">
-      <h2 class="card-title">Welcome back</h2>
-      {{if .User.DisplayName.Valid}}
-      <p class="text-base-content/90 font-medium">{{.User.DisplayName.String}}</p>
-      {{end}}
-      {{if not .User.DisplayName.Valid}}
-      <p class="text-base-content/70 text-sm">
-        Set a display name so other racers can see who you are.
-        <a href="/profile" class="link">Set a display name</a>
-      </p>
-      {{end}}
-      <p class="text-base-content/70">{{.User.Email}}</p>
-      {{if not .User.EmailVerified}}
-      <div class="alert alert-warning mt-2">
-        <span>Your email is not verified. <a href="/verify-email" class="link">Verify now</a></span>
+<div class="pp-dash space-y-10 pb-6">
+  <!-- Player card: a sunset scene with a sculler. On wide screens the scene
+       fills the card and the text sits over the sky; on phones it stacks. -->
+  <section class="pp-panel pp-hero-card overflow-hidden" aria-labelledby="pp-player-title">
+    {{template "pp-scene"}}
+    <div class="pp-hero-body">
+      <div class="space-y-2">
+        <p class="pp-kicker pp-arcade">Welcome back</p>
+        <h1 id="pp-player-title" class="pp-player-name">{{if .User.DisplayName.Valid}}{{.User.DisplayName.String}}{{else}}Player 1{{end}}</h1>
+        <p class="pp-mono pp-muted text-sm break-all">{{.User.Email}}</p>
+      </div>
+      {{if or (not .User.DisplayName.Valid) (not .User.EmailVerified)}}
+      <div class="w-full space-y-4 lg:max-w-sm">
+        {{if not .User.DisplayName.Valid}}
+        <div class="pp-notice">
+          <p class="pp-notice-kicker pp-arcade">Name your rower</p>
+          <p class="mt-1 text-sm">
+            Set a display name so other racers can see who you are.
+            <a href="/profile">Set a display name</a>
+          </p>
+        </div>
+        {{end}}
+        {{if not .User.EmailVerified}}
+        <div class="pp-notice pp-notice-warn" role="alert">
+          <p class="pp-notice-kicker pp-arcade">Warning</p>
+          <p class="mt-1 text-sm">Your email is not verified. <a href="/verify-email">Verify now</a></p>
+        </div>
+        {{end}}
       </div>
       {{end}}
     </div>
-  </div>
+  </section>
 
-  <div id="race-card" class="card bg-base-100 shadow-xl" hx-get="/dashboard/race-card" hx-trigger="load">
-    <div class="card-body">
+  <div class="grid grid-cols-1 items-start gap-10 lg:grid-cols-5">
+  <div id="race-card" class="pp-panel lg:col-span-2" hx-get="/dashboard/race-card" hx-trigger="load">
+    <div class="pp-section">
       <h2 class="card-title">Race</h2>
       <span class="loading loading-dots loading-sm" aria-label="Loading"></span>
     </div>
   </div>
 
-  <div id="rowing-machine-card" class="card bg-base-100 shadow-xl" data-dev-mode="{{if .DevMode}}true{{else}}false{{end}}">
-    <div class="card-body">
+  <div class="space-y-10 lg:col-span-3">
+  <div id="rowing-machine-card" class="pp-panel" data-dev-mode="{{if .DevMode}}true{{else}}false{{end}}">
+    <div class="pp-section">
+      <p class="pp-kicker pp-arcade">Player 1 controller</p>
       <h2 class="card-title">Rowing Machine</h2>
-      <p class="text-base-content/70">Connect a Concept2 PM5 rowing machine with Web Bluetooth.</p>
-      <button id="bt-connect-btn" type="button" class="btn btn-primary">Connect Rowing Machine</button>
-      <div id="bt-connection-info" class="alert alert-info hidden" role="status" aria-live="polite"></div>
-      <p id="race-roster" class="hidden text-base-content/90 font-medium" role="status" aria-live="polite"></p>
-      <canvas id="bt-rower-canvas" class="hidden w-full max-w-sm rounded-box bg-base-200" width="320" height="180" aria-label="Animated rower in a boat"></canvas>
+      <p class="pp-muted text-sm">Connect a Concept2 PM5 rowing machine with Web Bluetooth.</p>
+      <div class="pp-idle pp-monitor p-4" aria-hidden="true">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="pp-arcade text-xs text-[#f8f8f2]/80">PM5</span>
+          <span class="pp-arcade pp-blink text-[0.65rem] text-[#ff5555]">No signal</span>
+        </div>
+        <div class="pp-lcd grid grid-cols-3 gap-4 p-4 text-center">
+          <div><div class="pp-lcd-label pp-arcade">Time</div><div class="pp-lcd-value text-2xl">--:--</div></div>
+          <div><div class="pp-lcd-label pp-arcade">/500m</div><div class="pp-lcd-value text-2xl">-:--.-</div></div>
+          <div><div class="pp-lcd-label pp-arcade">s/m</div><div class="pp-lcd-value text-2xl">--</div></div>
+        </div>
+        <p class="pp-arcade mt-3 text-center text-[0.65rem] text-[#f1fa8c]">Insert rower to continue</p>
+      </div>
+      <button id="bt-connect-btn" type="button" class="pp-btn pp-btn-cyan w-full">Connect Rowing Machine</button>
+      <div id="bt-connection-info" class="pp-notice text-sm hidden" role="status" aria-live="polite"></div>
+      <p id="race-roster" class="hidden pp-mono text-sm text-[#f1fa8c]" role="status" aria-live="polite"></p>
+      <canvas id="bt-rower-canvas" class="hidden pp-canvas mx-auto w-full max-w-sm" width="320" height="180" aria-label="Animated rower in a boat"></canvas>
       <div id="bt-metrics" class="hidden grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-live="polite">
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Elapsed time</div>
           <div id="bt-metric-elapsed-time" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="elapsedTime">0:00</div>
         </div>
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Distance</div>
           <div id="bt-metric-distance" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="distance">0 m</div>
         </div>
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Pace / 500m</div>
           <div id="bt-metric-pace" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="pace">0:00</div>
         </div>
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Stroke rate</div>
           <div id="bt-metric-stroke-rate" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="strokeRate">0 spm</div>
         </div>
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Power</div>
           <div id="bt-metric-power" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="power">0 W</div>
         </div>
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Calories</div>
           <div id="bt-metric-calories" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="calories">0 kcal</div>
         </div>
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Stroke count</div>
           <div id="bt-metric-stroke-count" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="strokeCount">0</div>
         </div>
-        <div class="stat rounded-box bg-base-200">
+        <div class="stat">
           <div class="stat-title">Heart rate</div>
           <div id="bt-metric-heart-rate" class="stat-value text-2xl whitespace-normal break-words min-w-0" data-metric="heartRate">0 bpm</div>
         </div>
       </div>
     </div>
   </div>
+
+  <section class="pp-panel" aria-labelledby="pp-how-title">
+    <div class="pp-section">
+      <p class="pp-kicker pp-arcade">How to play</p>
+      <h2 id="pp-how-title" class="card-title">Race in three stages</h2>
+      <ol class="grid grid-cols-1 gap-5 sm:grid-cols-3">
+        <li class="space-y-2">
+          <span class="pp-stage-num pp-arcade">1</span>
+          <h3 class="pp-arcade text-sm text-[#ff79c6]">Connect</h3>
+          <p class="pp-muted text-sm">Pair your PM5 over Bluetooth.</p>
+        </li>
+        <li class="space-y-2">
+          <span class="pp-stage-num pp-arcade">2</span>
+          <h3 class="pp-arcade text-sm text-[#8be9fd]">Line up</h3>
+          <p class="pp-muted text-sm">Create a race and share its join code, or join a friend's. Two to eight rowers.</p>
+        </li>
+        <li class="space-y-2">
+          <span class="pp-stage-num pp-arcade">3</span>
+          <h3 class="pp-arcade text-sm text-[#50fa7b]">Row!</h3>
+          <p class="pp-muted text-sm">Everyone ready? A 10-second countdown, then first to the line wins.</p>
+        </li>
+      </ol>
+    </div>
+  </section>
+  </div>
+  </div>
 </div>
 {{end}}
 
 {{define "race-card"}}
-<div class="card-body">
+<div class="pp-section">
+  <p class="pp-kicker pp-arcade">Ready to row?</p>
   <h2 class="card-title">Race</h2>
   <div id="room-invites" hx-get="/invites" hx-trigger="load, every 10s, invites-updated from:body"></div>
-  <form class="space-y-2" hx-post="/rooms" hx-swap="none"
+  <form class="space-y-3" hx-post="/rooms" hx-swap="none"
         data-error-target="#create-room-error" data-error-message="Couldn't create the race. Please try again.">
-    <label class="form-control w-full">
-      <span class="label-text">Race type</span>
-      <select name="race_type_id" class="select select-bordered w-full">
+    <label class="block space-y-2">
+      <span class="pp-label pp-arcade">Race type</span>
+      <select name="race_type_id" class="pp-field">
         {{range .RaceTypes}}<option value="{{.ID}}">{{.Label}}</option>{{end}}
       </select>
     </label>
-    <button type="submit" class="btn btn-primary w-full">Create race</button>
+    <button type="submit" class="pp-btn w-full"><span aria-hidden="true">&#9654;</span> Create race</button>
     <p id="create-room-error" class="text-error text-sm" role="alert"></p>
   </form>
-  <div class="divider">or</div>
-  <form class="space-y-2" hx-post="/rooms/join" hx-swap="none"
+  <div class="pp-or pp-arcade" role="separator">or</div>
+  <form class="space-y-3" hx-post="/rooms/join" hx-swap="none"
         data-error-target="#join-room-error" data-error-message="Couldn't join. Check the code and make sure the race hasn't started.">
-    <label class="form-control w-full">
-      <span class="label-text">Join code</span>
-      <input name="join_code" class="input input-bordered w-full font-mono uppercase tracking-widest" maxlength="6" autocomplete="off" required />
+    <label class="block space-y-2">
+      <span class="pp-label pp-arcade">Join code</span>
+      <input name="join_code" class="pp-field pp-code uppercase" maxlength="6" autocomplete="off" placeholder="------" required />
     </label>
-    <button type="submit" class="btn btn-secondary w-full">Join race</button>
+    <button type="submit" class="pp-btn pp-btn-dark w-full">Join race</button>
     <p id="join-room-error" class="text-error text-sm" role="alert"></p>
   </form>
 </div>
@@ -107,13 +162,14 @@
 
 {{define "room-invites"}}
 {{if .Invites}}
-<ul class="space-y-2" aria-label="Race invites">
+<ul class="space-y-4" aria-label="Race invites">
   {{range .Invites}}
-  <li class="alert" data-invite-id="{{.ID}}">
-    <span><strong>{{.Inviter.Name}}</strong> invited you to a {{.RaceLabel}} race.</span>
-    <div class="flex gap-2">
-      <button type="button" class="btn btn-ghost btn-sm" hx-post="/invites/{{.ID}}/decline" hx-swap="none">Dismiss</button>
-      <button type="button" class="btn btn-primary btn-sm" hx-post="/invites/{{.ID}}/accept" hx-swap="none">Join</button>
+  <li class="pp-notice pp-notice-invite space-y-3" data-invite-id="{{.ID}}">
+    <p class="pp-notice-kicker pp-arcade">Incoming challenge!</p>
+    <p class="text-sm"><strong>{{.Inviter.Name}}</strong> invited you to a {{.RaceLabel}} race.</p>
+    <div class="flex gap-3">
+      <button type="button" class="pp-btn pp-btn-dark pp-btn-sm flex-1" hx-post="/invites/{{.ID}}/decline" hx-swap="none">Dismiss</button>
+      <button type="button" class="pp-btn pp-btn-sm flex-1" hx-post="/invites/{{.ID}}/accept" hx-swap="none">Join</button>
     </div>
   </li>
   {{end}}

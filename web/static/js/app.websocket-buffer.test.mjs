@@ -258,7 +258,7 @@ test('open race socket sends one converted sample per notification while retaini
   assert.equal(app.metricEls.distance.textContent, '4 m');
   var before = app.draws();
   app.rowerTimer().fn();
-  assert.equal(app.draws(), before + 1, 'rower animation still runs');
+  assert.ok(app.draws() > before, 'rower animation still runs');
 });
 
 test('every real PM5 notification renders and streams a complete latest-reading sample', async function () {

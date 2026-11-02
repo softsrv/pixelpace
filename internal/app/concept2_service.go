@@ -42,8 +42,9 @@ type Concept2ResultClient interface {
 }
 
 // Concept2ServiceConfig configures a Concept2Service. Zero values take the
-// defaults: 5 attempts per post, a 5 minute lease, retries 1 minute after the
-// first failure doubling up to 1 hour, 20 posts per pass and real time.
+// defaults: a 5 minute lease, retries 1 minute after the first failure
+// doubling up to 1 hour (with no limit on how many), 20 posts per pass and
+// real time.
 type Concept2ServiceConfig struct {
 	// Sealer encrypts tokens before every write. Required to save a connection.
 	Sealer TokenSealer
@@ -52,8 +53,6 @@ type Concept2ServiceConfig struct {
 	// DevMode turns posting off: Enqueue queues nothing and PostDue sends
 	// nothing. main sets it from devModeForAppEnv, its only owner.
 	DevMode bool
-	// MaxAttempts is how many times a post is tried before it is failed.
-	MaxAttempts int
 	// Lease is how long a claimed post stays claimed before another pass may
 	// take it again, so a poster that stops mid-post does not strand it.
 	Lease time.Duration
@@ -77,9 +76,6 @@ type Concept2Service struct {
 
 // NewConcept2Service constructs a Concept2Service.
 func NewConcept2Service(q *db.Queries, cfg Concept2ServiceConfig) *Concept2Service {
-	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 5
-	}
 	if cfg.Lease <= 0 {
 		cfg.Lease = 5 * time.Minute
 	}
@@ -104,8 +100,10 @@ func NewConcept2Service(q *db.Queries, cfg Concept2ServiceConfig) *Concept2Servi
 var _ RaceResultPoster = (*Concept2Service)(nil)
 
 // Enqueue queues one pending result post for each of the race's finished
-// participants whose connection has auto_post on and does not need
-// reconnecting. RaceService calls it with its finalize transaction's queries,
+// participants whose connection has auto_post on. A connection that needs
+// reconnecting is queued too: PostDue holds its posts until the user
+// reconnects, so a finish is never lost. RaceService calls it with its
+// finalize transaction's queries,
 // so the posts commit with the finish or not at all. It is idempotent: a
 // participant already queued for this race is not queued again. In DevMode
 // it queues nothing.
@@ -146,14 +144,16 @@ func (s *Concept2Service) RunPoster(ctx context.Context, interval time.Duration)
 }
 
 // PostDue makes one pass over the posts that are due: it claims up to
-// BatchSize of them and posts each to its user's Logbook. A post the Logbook
-// accepts, or already has (409), becomes posted; one it rejects (422 and
-// other permanent 4xx) is failed with Concept2's message; a 5xx or network
-// failure keeps it pending, retried after a capped exponential gap until
-// MaxAttempts. Tokens that will not open or refresh set the connection
-// needs_reconnect and leave its posts pending, attempts unchanged, with
-// nothing sent. It returns how many posts it posted, and an error only when
-// the database fails. In DevMode it sends nothing.
+// BatchSize of them (only those whose connection has auto_post on now and
+// does not need reconnecting) and posts each to its user's Logbook. A post
+// the Logbook accepts, or already has (409), becomes posted; one it rejects
+// (422 and other permanent 4xx) is failed with Concept2's message; a 5xx,
+// rate limit, network failure or unreadable reply keeps it pending, retried
+// after a capped exponential gap for as long as it takes. Tokens that will
+// not open or refresh set the connection needs_reconnect and leave its posts
+// pending, attempts unchanged, with nothing sent. It returns how many posts
+// it posted, and an error only when the database fails. In DevMode it sends
+// nothing.
 func (s *Concept2Service) PostDue(ctx context.Context) (int, error) {
 	if s.cfg.DevMode {
 		return 0, nil
@@ -282,6 +282,9 @@ func (s *Concept2Service) refreshTokens(ctx context.Context, post db.ClaimDueCon
 	case err == nil:
 	case errors.As(err, &apiErr) && permanentLogbookError(apiErr.StatusCode):
 		return nil, true, s.awaitReconnect(ctx, post, "concept2 refused the token refresh", true)
+	case errors.Is(err, concept2.ErrNoAccessToken):
+		// Concept2 answered but issued no access token: the renewal was refused.
+		return nil, true, s.awaitReconnect(ctx, post, "concept2 refused the token refresh", true)
 	default:
 		return nil, true, s.retryPost(ctx, post, err)
 	}
@@ -301,13 +304,50 @@ func (s *Concept2Service) refreshTokens(ctx context.Context, post db.ClaimDueCon
 	if err != nil {
 		return nil, true, fmt.Errorf("seal concept2 refresh token: %w", err)
 	}
-	if _, err := s.q.UpdateConcept2Tokens(ctx, db.UpdateConcept2TokensParams{
+	if err := s.saveRefreshedTokens(ctx, db.UpdateConcept2TokensParams{
 		UserID: post.UserID, AccessTokenEnc: accessEnc, RefreshTokenEnc: refreshEnc,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
-		return nil, true, fmt.Errorf("update concept2 tokens: %w", err)
+		// Concept2 has rotated the refresh token, so the stored one is dead.
+		// Ask the user to reconnect rather than leave the connection silently
+		// broken, and still post this result with the new access token.
+		slog.ErrorContext(ctx, "concept2 refreshed tokens could not be saved; connection needs reconnecting",
+			"user_id", post.UserID, "post_id", post.ID, "error", err)
+		if _, merr := s.q.MarkConcept2NeedsReconnect(ctx, post.UserID); merr != nil {
+			return nil, true, fmt.Errorf("mark concept2 needs reconnect after token save failed: %w", errors.Join(err, merr))
+		}
 	}
 	return []byte(tok.AccessToken), false, nil
+}
+
+// tokenSaveAttempts bounds how many times refreshed tokens are written before
+// the write is given up; tokenSaveGap is the wait before the first retry,
+// doubling after each.
+const (
+	tokenSaveAttempts = 3
+	tokenSaveGap      = 50 * time.Millisecond
+)
+
+// saveRefreshedTokens writes refreshed tokens, retrying a failed write a
+// bounded number of times, since the old refresh token is no longer valid.
+func (s *Concept2Service) saveRefreshedTokens(ctx context.Context, p db.UpdateConcept2TokensParams) error {
+	gap := tokenSaveGap
+	var err error
+	for attempt := 1; attempt <= tokenSaveAttempts; attempt++ {
+		if _, err = s.q.UpdateConcept2Tokens(ctx, p); err == nil {
+			return nil
+		}
+		if attempt == tokenSaveAttempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(gap):
+		}
+		gap *= 2
+	}
+	return fmt.Errorf("update concept2 tokens: %w", err)
 }
 
 // maxConcept2PostErrorLen caps the error text kept on a post.
@@ -331,15 +371,15 @@ func (s *Concept2Service) retryGap(attempts int32) time.Duration {
 }
 
 // retryPost keeps cause on the post and leaves it pending until the retry
-// gap has passed, or fails it once it has used MaxAttempts.
+// gap has passed. A transient failure never fails a post, however many times
+// it repeats; the gap stops growing at RetryMax.
 func (s *Concept2Service) retryPost(ctx context.Context, post db.ClaimDueConcept2PostsRow, cause error) error {
 	gap := s.retryGap(post.Attempts)
 	msg := postErrorText(cause.Error())
 	slog.WarnContext(ctx, "concept2 result post failed", "post_id", post.ID, "user_id", post.UserID,
-		"race_id", post.RaceID, "attempt", post.Attempts, "final", post.Attempts >= int32(s.cfg.MaxAttempts),
-		"retry_in", gap, "error", msg.String)
+		"race_id", post.RaceID, "attempt", post.Attempts, "retry_in", gap, "error", msg.String)
 	if _, err := s.q.RecordConcept2PostError(ctx, db.RecordConcept2PostErrorParams{
-		ID: post.ID, UserID: post.UserID, MaxAttempts: int32(s.cfg.MaxAttempts), LastError: msg,
+		ID: post.ID, UserID: post.UserID, LastError: msg,
 		RetryAt: pgtype.Timestamptz{Time: s.cfg.Now().Add(gap), Valid: true},
 	}); err != nil {
 		return fmt.Errorf("record concept2 post error: %w", err)

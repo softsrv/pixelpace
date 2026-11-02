@@ -17,9 +17,12 @@ type Querier interface {
 	// Leases up to max_posts due pending posts: each claimed row is counted as an
 	// attempt and not due again until lease_until, so concurrent posters (SKIP
 	// LOCKED) never claim the same row, and a poster that stops mid-post leaves
-	// the row to be retried once the lease ends. Posts of a connection that needs
-	// reconnecting wait, unclaimed and with attempts unchanged, until the user
-	// reconnects.
+	// the row to be retried once the lease ends. Only posts of a connection that
+	// has auto_post on now and does not need reconnecting are claimed: a post
+	// queued before the user switched auto-post off is not sent, and posts of a
+	// connection that needs reconnecting wait, unclaimed and with attempts
+	// unchanged, until the user reconnects. A post whose user has disconnected
+	// is still claimed, so the poster can settle it.
 	ClaimDueConcept2Posts(ctx context.Context, arg ClaimDueConcept2PostsParams) ([]ClaimDueConcept2PostsRow, error)
 	CountRecentPasswordResetsByEmail(ctx context.Context, email string) (int64, error)
 	CountRecentVerificationCodesByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
@@ -86,8 +89,10 @@ type Querier interface {
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
 	// ── Result posts ─────────────────────────────────────────────────────────────
 	// Every query below is keyed by the post's user_id as well as its id.
-	// The race's finished participants whose connection has auto_post on and does
-	// not need reconnecting. Unconnected and DNF participants are never listed.
+	// The race's finished participants whose connection has auto_post on.
+	// Unconnected and DNF participants are never listed. A connection that needs
+	// reconnecting is still listed: its post waits, unclaimed, until the user
+	// reconnects (ClaimDueConcept2Posts holds it), so no finish is lost.
 	ListConcept2PostCandidates(ctx context.Context, raceID uuid.UUID) ([]uuid.UUID, error)
 	// The post's racer's samples of its race, up to their recorded finish, in
 	// rowing order: the stroke data, splits and totals one post sends.
@@ -126,8 +131,8 @@ type Querier interface {
 	MarkVerificationCodeUsed(ctx context.Context, id uuid.UUID) error
 	ReassignRoomHost(ctx context.Context, arg ReassignRoomHostParams) error
 	RecentFinishesByRaceType(ctx context.Context, arg RecentFinishesByRaceTypeParams) ([]RecentFinishesByRaceTypeRow, error)
-	// Keeps the post pending for another attempt at retry_at, or fails it once it
-	// has used max_attempts.
+	// Keeps the post pending for another attempt at retry_at. A transient failure
+	// never fails a post: only a permanent rejection does (MarkConcept2PostFailed).
 	RecordConcept2PostError(ctx context.Context, arg RecordConcept2PostErrorParams) (int64, error)
 	// Gives back the attempt the claim counted, because nothing was sent: the
 	// post waits, pending and due, until the user reconnects (ClaimDue skips it

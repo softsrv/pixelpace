@@ -1355,3 +1355,231 @@ func TestIntegration_Concept2Poster_DateInConnectionTimezone(t *testing.T) {
 		})
 	}
 }
+
+// A post queued while auto_post was on is not sent once the user switches it
+// off: the claim re-reads the toggle. Switching it back on sends it.
+func TestIntegration_Concept2Poster_AutoPostOffAfterQueueingSendsNothing(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	ctx := context.Background()
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "late-toggle")
+	})
+	if p := postStateOf(t, f.pool, f.race.ID); p.Status != "pending" {
+		t.Fatalf("post after finalize = %+v, want pending", p)
+	}
+	if _, err := poster.SetAutoPost(ctx, f.users[0], false); err != nil {
+		t.Fatal(err)
+	}
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue with auto_post off = %d, want 0", n)
+	}
+	if got := lb.received(""); len(got) != 0 {
+		t.Fatalf("Logbook got %d requests with auto_post off, want 0", len(got))
+	}
+	if p := postStateOf(t, f.pool, f.race.ID); p.Status != "pending" || p.Attempts != 0 {
+		t.Fatalf("post with auto_post off = %+v, want pending and unclaimed", p)
+	}
+	if _, err := poster.SetAutoPost(ctx, f.users[0], true); err != nil {
+		t.Fatal(err)
+	}
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("PostDue after auto_post back on = %d, want 1", n)
+	}
+}
+
+// A race that finishes while the connection needs reconnecting is still
+// queued; the post waits unclaimed, and is sent once the user reconnects.
+func TestIntegration_Concept2Poster_FinishWhileNeedsReconnectIsQueuedAndHeld(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "flagged")
+		if _, err := f.pool.Exec(context.Background(),
+			"UPDATE concept2_connections SET needs_reconnect = true WHERE user_id = $1", f.users[0]); err != nil {
+			t.Fatal(err)
+		}
+	})
+	posts := resultPosts(t, f.pool, f.race.ID)
+	if len(posts) != 1 || posts[0].Status != "pending" {
+		t.Fatalf("posts after a finish while flagged = %+v, want one pending", posts)
+	}
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue while flagged = %d, want 0", n)
+	}
+	if got := lb.received(""); len(got) != 0 {
+		t.Fatalf("Logbook got %d requests while flagged, want 0", len(got))
+	}
+	if p := postStateOf(t, f.pool, f.race.ID); p.Attempts != 0 {
+		t.Fatalf("post while flagged = %+v, want unclaimed", p)
+	}
+	connectConcept2(t, f.pool, f.users[0], "flagged") // reconnect clears the flag
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("PostDue after reconnect = %d, want 1", n)
+	}
+}
+
+// Transient Logbook failures never fail a post: well past the old limit of 5
+// attempts it is still pending, and it posts once the Logbook recovers.
+func TestIntegration_Concept2Poster_TransientFailuresNeverFailThePost(t *testing.T) {
+	const failures = 12
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	for i := 0; i < failures; i++ {
+		status := []int{http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusBadGateway}[i%3]
+		lb.results = append(lb.results, scriptedAnswer{status, `{"message":"try later"}`})
+	}
+	lb.results = append(lb.results, scriptedAnswer{http.StatusCreated, `{"data":{"id":9100}}`})
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "patient")
+	})
+	for i := 1; i <= failures; i++ {
+		if n := postDue(t, poster); n != 0 {
+			t.Fatalf("pass %d posted %d, want 0", i, n)
+		}
+		p := postStateOf(t, f.pool, f.race.ID)
+		if p.Status != "pending" || p.Attempts != i {
+			t.Fatalf("after failure %d post = %+v, want pending with %d attempts", i, p, i)
+		}
+		if gap := p.NextAttemptAt.Sub(clock.Now()); gap > time.Hour+time.Millisecond {
+			t.Fatalf("after failure %d retry gap %v exceeds the 1h cap", i, gap)
+		}
+		clock.Advance(time.Hour)
+	}
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("pass after recovery posted %d, want 1", n)
+	}
+	if p := postStateOf(t, f.pool, f.race.ID); p.Status != "posted" {
+		t.Fatalf("post = %+v, want posted", p)
+	}
+}
+
+// A 2xx token reply that issues no access token is a refused renewal: the
+// connection needs reconnecting, the post stays pending with attempts
+// unchanged and nothing is POSTed.
+func TestIntegration_Concept2Poster_RefreshWithoutAccessTokenNeedsReconnect(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	lb.tokens = []scriptedAnswer{{http.StatusOK, `{"error":"invalid_grant"}`}}
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "no-token")
+		if _, err := f.pool.Exec(context.Background(),
+			"UPDATE concept2_connections SET expires_at = $2 WHERE user_id = $1", f.users[0], clock.Now().Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue = %d, want 0", n)
+	}
+	if !needsReconnect(t, f.pool, f.users[0]) {
+		t.Fatal("connection not set needs_reconnect")
+	}
+	if p := postStateOf(t, f.pool, f.race.ID); p.Status != "pending" || p.Attempts != 0 {
+		t.Fatalf("post = %+v, want pending with attempts unchanged (0)", p)
+	}
+	if got := lb.received(resultsPath); len(got) != 0 {
+		t.Fatalf("Logbook got %d posts, want none", len(got))
+	}
+}
+
+// A 2xx Add Result reply with no readable result id is not counted as posted:
+// the post stays pending, and a repeat the Logbook answers 409 settles it.
+func TestIntegration_Concept2Poster_UnreadableCreatedReplyIsRetried(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	lb.results = []scriptedAnswer{
+		{http.StatusCreated, `<html>ok</html>`},
+		{http.StatusConflict, `{"message":"duplicate result"}`},
+	}
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "garbled")
+	})
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue on an unreadable 201 = %d, want 0", n)
+	}
+	if p := postStateOf(t, f.pool, f.race.ID); p.Status != "pending" || p.LastError == nil {
+		t.Fatalf("post after an unreadable 201 = %+v, want pending with an error", p)
+	}
+	clock.Advance(time.Hour)
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("PostDue on the 409 repeat = %d, want 1", n)
+	}
+	if p := postStateOf(t, f.pool, f.race.ID); p.Status != "posted" {
+		t.Fatalf("post = %+v, want posted", p)
+	}
+}
+
+// When the refreshed tokens cannot be saved, the rotation is not dropped
+// silently: the connection is flagged needs_reconnect, the result is still
+// posted with the new access token, and the pass is not aborted.
+func TestIntegration_Concept2Poster_TokenSaveFailureFlagsReconnect(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	lb.tokens = []scriptedAnswer{{http.StatusOK, `{"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":7200}`}}
+	logs := captureLogs(t)
+	ctx := context.Background()
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "unsaved")
+		if _, err := f.pool.Exec(ctx,
+			"UPDATE concept2_connections SET expires_at = $2 WHERE user_id = $1", f.users[0], clock.Now().Add(-time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// Make every token write for this user fail, as a database fault would.
+	fn := "test_block_c2_tokens_" + strings.ReplaceAll(f.users[0].String(), "-", "")
+	for _, stmt := range []string{
+		fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.user_id = '%s' AND NEW.access_token_enc IS DISTINCT FROM OLD.access_token_enc THEN
+    RAISE EXCEPTION 'token write blocked by test';
+  END IF;
+  RETURN NEW;
+END $$`, fn, f.users[0]),
+		fmt.Sprintf("CREATE TRIGGER %s BEFORE UPDATE ON concept2_connections FOR EACH ROW EXECUTE FUNCTION %s()", fn, fn),
+	} {
+		if _, err := f.pool.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = f.pool.Exec(ctx, fmt.Sprintf("DROP TRIGGER IF EXISTS %s ON concept2_connections", fn))
+		_, _ = f.pool.Exec(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s()", fn))
+	})
+
+	n, err := poster.PostDue(ctx)
+	if err != nil {
+		t.Fatalf("PostDue aborted the pass: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("PostDue = %d, want 1 (posted with the new token)", n)
+	}
+	if got := lb.received(resultsPath); len(got) != 1 || got[0].Authorization != "Bearer fresh-access" {
+		t.Fatalf("Logbook posts = %+v, want one bearing the new access token", got)
+	}
+	if !needsReconnect(t, f.pool, f.users[0]) {
+		t.Fatal("connection not flagged needs_reconnect after the token save failed")
+	}
+	for _, secret := range []string{"fresh-access", "fresh-refresh", "refresh-unsaved", "access-unsaved"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("logs carry token %q:\n%s", secret, logs)
+		}
+	}
+}

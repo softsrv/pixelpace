@@ -22,7 +22,7 @@ WHERE id IN (
     WHERE d.status = 'pending' AND d.next_attempt_at <= $2::timestamptz
       AND NOT EXISTS (
           SELECT 1 FROM concept2_connections c
-          WHERE c.user_id = d.user_id AND c.needs_reconnect
+          WHERE c.user_id = d.user_id AND (c.needs_reconnect OR NOT c.auto_post)
       )
     ORDER BY d.next_attempt_at, d.id
     LIMIT $3::int
@@ -47,9 +47,12 @@ type ClaimDueConcept2PostsRow struct {
 // Leases up to max_posts due pending posts: each claimed row is counted as an
 // attempt and not due again until lease_until, so concurrent posters (SKIP
 // LOCKED) never claim the same row, and a poster that stops mid-post leaves
-// the row to be retried once the lease ends. Posts of a connection that needs
-// reconnecting wait, unclaimed and with attempts unchanged, until the user
-// reconnects.
+// the row to be retried once the lease ends. Only posts of a connection that
+// has auto_post on now and does not need reconnecting are claimed: a post
+// queued before the user switched auto-post off is not sent, and posts of a
+// connection that needs reconnecting wait, unclaimed and with attempts
+// unchanged, until the user reconnects. A post whose user has disconnected
+// is still claimed, so the poster can settle it.
 func (q *Queries) ClaimDueConcept2Posts(ctx context.Context, arg ClaimDueConcept2PostsParams) ([]ClaimDueConcept2PostsRow, error) {
 	rows, err := q.db.Query(ctx, claimDueConcept2Posts, arg.LeaseUntil, arg.Now, arg.MaxPosts)
 	if err != nil {
@@ -196,14 +199,15 @@ JOIN concept2_connections c ON c.user_id = rp.user_id
 WHERE rp.race_id = $1
   AND rp.status = 'finished'
   AND c.auto_post
-  AND NOT c.needs_reconnect
 ORDER BY rp.user_id
 `
 
 // ── Result posts ─────────────────────────────────────────────────────────────
 // Every query below is keyed by the post's user_id as well as its id.
-// The race's finished participants whose connection has auto_post on and does
-// not need reconnecting. Unconnected and DNF participants are never listed.
+// The race's finished participants whose connection has auto_post on.
+// Unconnected and DNF participants are never listed. A connection that needs
+// reconnecting is still listed: its post waits, unclaimed, until the user
+// reconnects (ClaimDueConcept2Posts holds it), so no finish is lost.
 func (q *Queries) ListConcept2PostCandidates(ctx context.Context, raceID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, listConcept2PostCandidates, raceID)
 	if err != nil {
@@ -347,26 +351,23 @@ func (q *Queries) MarkConcept2PostPosted(ctx context.Context, arg MarkConcept2Po
 const recordConcept2PostError = `-- name: RecordConcept2PostError :execrows
 UPDATE concept2_result_posts SET
     last_error      = $1,
-    status          = CASE WHEN attempts >= $2::int THEN 'failed' ELSE 'pending' END,
-    next_attempt_at = $3::timestamptz,
+    next_attempt_at = $2::timestamptz,
     updated_at      = NOW()
-WHERE id = $4 AND user_id = $5 AND status = 'pending'
+WHERE id = $3 AND user_id = $4 AND status = 'pending'
 `
 
 type RecordConcept2PostErrorParams struct {
-	LastError   pgtype.Text        `json:"last_error"`
-	MaxAttempts int32              `json:"max_attempts"`
-	RetryAt     pgtype.Timestamptz `json:"retry_at"`
-	ID          uuid.UUID          `json:"id"`
-	UserID      uuid.UUID          `json:"user_id"`
+	LastError pgtype.Text        `json:"last_error"`
+	RetryAt   pgtype.Timestamptz `json:"retry_at"`
+	ID        uuid.UUID          `json:"id"`
+	UserID    uuid.UUID          `json:"user_id"`
 }
 
-// Keeps the post pending for another attempt at retry_at, or fails it once it
-// has used max_attempts.
+// Keeps the post pending for another attempt at retry_at. A transient failure
+// never fails a post: only a permanent rejection does (MarkConcept2PostFailed).
 func (q *Queries) RecordConcept2PostError(ctx context.Context, arg RecordConcept2PostErrorParams) (int64, error) {
 	result, err := q.db.Exec(ctx, recordConcept2PostError,
 		arg.LastError,
-		arg.MaxAttempts,
 		arg.RetryAt,
 		arg.ID,
 		arg.UserID,

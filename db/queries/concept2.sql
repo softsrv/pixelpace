@@ -54,15 +54,16 @@ RETURNING *;
 -- Every query below is keyed by the post's user_id as well as its id.
 
 -- name: ListConcept2PostCandidates :many
--- The race's finished participants whose connection has auto_post on and does
--- not need reconnecting. Unconnected and DNF participants are never listed.
+-- The race's finished participants whose connection has auto_post on.
+-- Unconnected and DNF participants are never listed. A connection that needs
+-- reconnecting is still listed: its post waits, unclaimed, until the user
+-- reconnects (ClaimDueConcept2Posts holds it), so no finish is lost.
 SELECT rp.user_id
 FROM race_participants rp
 JOIN concept2_connections c ON c.user_id = rp.user_id
 WHERE rp.race_id = sqlc.arg(race_id)
   AND rp.status = 'finished'
   AND c.auto_post
-  AND NOT c.needs_reconnect
 ORDER BY rp.user_id;
 
 -- name: EnqueueConcept2ResultPost :execrows
@@ -75,9 +76,12 @@ ON CONFLICT (user_id, race_id) DO NOTHING;
 -- Leases up to max_posts due pending posts: each claimed row is counted as an
 -- attempt and not due again until lease_until, so concurrent posters (SKIP
 -- LOCKED) never claim the same row, and a poster that stops mid-post leaves
--- the row to be retried once the lease ends. Posts of a connection that needs
--- reconnecting wait, unclaimed and with attempts unchanged, until the user
--- reconnects.
+-- the row to be retried once the lease ends. Only posts of a connection that
+-- has auto_post on now and does not need reconnecting are claimed: a post
+-- queued before the user switched auto-post off is not sent, and posts of a
+-- connection that needs reconnecting wait, unclaimed and with attempts
+-- unchanged, until the user reconnects. A post whose user has disconnected
+-- is still claimed, so the poster can settle it.
 UPDATE concept2_result_posts SET
     attempts        = attempts + 1,
     next_attempt_at = sqlc.arg(lease_until)::timestamptz,
@@ -87,7 +91,7 @@ WHERE id IN (
     WHERE d.status = 'pending' AND d.next_attempt_at <= sqlc.arg(now)::timestamptz
       AND NOT EXISTS (
           SELECT 1 FROM concept2_connections c
-          WHERE c.user_id = d.user_id AND c.needs_reconnect
+          WHERE c.user_id = d.user_id AND (c.needs_reconnect OR NOT c.auto_post)
       )
     ORDER BY d.next_attempt_at, d.id
     LIMIT sqlc.arg(max_posts)::int
@@ -136,11 +140,10 @@ UPDATE concept2_result_posts SET
 WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id) AND status = 'pending';
 
 -- name: RecordConcept2PostError :execrows
--- Keeps the post pending for another attempt at retry_at, or fails it once it
--- has used max_attempts.
+-- Keeps the post pending for another attempt at retry_at. A transient failure
+-- never fails a post: only a permanent rejection does (MarkConcept2PostFailed).
 UPDATE concept2_result_posts SET
     last_error      = sqlc.arg(last_error),
-    status          = CASE WHEN attempts >= sqlc.arg(max_attempts)::int THEN 'failed' ELSE 'pending' END,
     next_attempt_at = sqlc.arg(retry_at)::timestamptz,
     updated_at      = NOW()
 WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id) AND status = 'pending';

@@ -276,9 +276,7 @@ test('open race socket sends one converted sample per notification while retaini
     distance_millimeters: 3800,
     stroke_rate: 26,
     power: 0,
-    stroke_count: 0,
-    calories: 0,
-    heart_rate: 0,
+    calories: 0, // reported by the mock's additional status 2: a real 0
     drag_factor: 120,
     sampled_at: '2026-10-08T12:00:02.000Z'
   });
@@ -299,12 +297,13 @@ test('every real PM5 notification renders and streams a complete latest-reading 
   stream.socket.open();
 
   // General status: 1234 hundredths of a second, 427 tenths of a meter.
+  // No stroke count, calories, heart rate or drag factor reported yet: the
+  // sample leaves those keys out rather than sending zeros.
   app.notify('31', [210, 4, 0, 171, 1, 0]);
   assert.equal(stream.socket.frames.length, 1);
   assert.deepEqual(JSON.parse(stream.socket.frames[0]), {
     elapsed_milliseconds: 12340, distance_millimeters: 42700,
     stroke_rate: 0, power: 0,
-    stroke_count: 0, calories: 0, heart_rate: 0, drag_factor: 0,
     sampled_at: '2026-10-08T12:00:00.000Z'
   });
   assert.equal(app.metricEls.distance.textContent, '43 m');
@@ -321,7 +320,7 @@ test('every real PM5 notification renders and streams a complete latest-reading 
   assert.deepEqual(JSON.parse(stream.socket.frames[2]), {
     elapsed_milliseconds: 12350, distance_millimeters: 42700,
     stroke_rate: 27, power: 183,
-    stroke_count: 6, calories: 0, heart_rate: 142, drag_factor: 0,
+    stroke_count: 6, heart_rate: 142,
     sampled_at: '2026-10-08T12:00:00.000Z'
   });
   assert.equal(app.metricEls.power.textContent, '183 W');

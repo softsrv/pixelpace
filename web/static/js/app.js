@@ -226,15 +226,17 @@ document.body.addEventListener('token-expired', async function () {
   var mockPm5StrokeTimer = null;
   var activeRaceStream = null;
   // PM5 characteristics report partial updates; retain the latest known readings.
+  // Stroke count, calories, heart rate and drag factor stay null until the
+  // monitor reports them, so a sample never passes off a missing reading as 0.
   var streamMetrics = {
     elapsedTime: 0,
     distance: 0,
     strokeRate: 0,
     power: 0,
-    strokeCount: 0,
-    calories: 0,
-    heartRate: 0,
-    dragFactor: 0
+    strokeCount: null,
+    calories: null,
+    heartRate: null,
+    dragFactor: null
   };
   // A race measures from its own start: the readings at that moment are
   // subtracted from every streamed sample, so a machine that was already
@@ -417,13 +419,23 @@ document.body.addEventListener('token-expired', async function () {
       elapsed_milliseconds: Math.max(0, Math.round((streamMetrics.elapsedTime - raceBaseline.elapsedTime) * 1000)),
       distance_millimeters: Math.max(0, Math.round((streamMetrics.distance - raceBaseline.distance) * 1000)),
       stroke_rate: Math.round(streamMetrics.strokeRate),
-      power: Math.round(streamMetrics.power),
-      stroke_count: Math.max(0, Math.round(streamMetrics.strokeCount - (raceBaseline.strokeCount || 0))),
-      calories: Math.max(0, Math.round(streamMetrics.calories - (raceBaseline.calories || 0))),
-      heart_rate: Math.round(streamMetrics.heartRate),
-      drag_factor: Math.round(streamMetrics.dragFactor),
-      sampled_at: new Date().toISOString()
+      power: Math.round(streamMetrics.power)
     };
+    // A reading the PM5 has not reported is left out (stored NULL), not sent
+    // as 0. A heart rate or drag factor of 0 is the monitor saying it has none.
+    if (typeof streamMetrics.strokeCount === 'number') {
+      sample.stroke_count = Math.max(0, Math.round(streamMetrics.strokeCount - (raceBaseline.strokeCount || 0)));
+    }
+    if (typeof streamMetrics.calories === 'number') {
+      sample.calories = Math.max(0, Math.round(streamMetrics.calories - (raceBaseline.calories || 0)));
+    }
+    if (typeof streamMetrics.heartRate === 'number' && streamMetrics.heartRate > 0) {
+      sample.heart_rate = Math.round(streamMetrics.heartRate);
+    }
+    if (typeof streamMetrics.dragFactor === 'number' && streamMetrics.dragFactor > 0) {
+      sample.drag_factor = Math.round(streamMetrics.dragFactor);
+    }
+    sample.sampled_at = new Date().toISOString();
     activeRaceStream.buffer.push(sample);
     // Lets the race view move our own rower without waiting for the server echo.
     document.dispatchEvent(new CustomEvent('pixelpace:local-telemetry', { detail: sample }));

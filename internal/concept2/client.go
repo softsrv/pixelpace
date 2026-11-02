@@ -36,6 +36,11 @@ var (
 
 	// ErrUnauthorized indicates Concept2 rejected credentials or token (HTTP 401).
 	ErrUnauthorized = errors.New("concept2: unauthorized")
+
+	// ErrNoAccessToken indicates a 2xx token reply that grants no access
+	// token: Concept2 answered but did not issue one, so the grant (a code
+	// or a refresh token) was refused. It also matches ErrMalformed.
+	ErrNoAccessToken = errors.New("concept2: token reply has no access_token")
 )
 
 // APIError represents an HTTP error response from the Concept2 API.
@@ -221,7 +226,7 @@ func (c *Client) postToken(ctx context.Context, form url.Values, secretPayload s
 	}
 
 	if tr.AccessToken == "" {
-		return nil, fmt.Errorf("%w: missing access_token", ErrMalformed)
+		return nil, fmt.Errorf("%w: %w", ErrMalformed, ErrNoAccessToken)
 	}
 
 	now := time.Now()
@@ -385,8 +390,9 @@ type postResultResponse struct {
 // PostResult adds r to the Logbook of the user the access token belongs to and
 // returns the new result's Logbook id. A non-2xx response is an *APIError
 // (409 is a duplicate result, 401 matches ErrUnauthorized); the token never
-// appears in an error. A 2xx response whose body has no readable id still
-// means the result was created, so it returns id 0 and no error.
+// appears in an error. A 2xx response whose body has no readable result id
+// confirms nothing, so it is ErrMalformed: the caller retries, and a repeat
+// of a result the Logbook did create answers 409.
 func (c *Client) PostResult(ctx context.Context, accessToken string, r Result) (int64, error) {
 	if accessToken == "" {
 		return 0, &APIError{StatusCode: http.StatusUnauthorized, Message: "missing access token"}
@@ -417,11 +423,11 @@ func (c *Client) PostResult(ctx context.Context, accessToken string, r Result) (
 	dec := json.NewDecoder(io.LimitReader(resp.Body, maxErrorBodyBytes))
 	dec.UseNumber()
 	if err := dec.Decode(&created); err != nil {
-		return 0, nil
+		return 0, c.wrapMalformed(err, accessToken)
 	}
 	id, err := created.Data.ID.Int64()
-	if err != nil {
-		return 0, nil
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("%w: created result has no id", ErrMalformed)
 	}
 	return id, nil
 }

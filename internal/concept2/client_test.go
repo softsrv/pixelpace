@@ -370,6 +370,53 @@ func TestMalformedBodies(t *testing.T) {
 	}
 }
 
+// A 2xx token reply that issues no access token is a refused grant: it is
+// told apart (ErrNoAccessToken) from a reply that cannot be read at all.
+func TestTokenReplyWithoutAccessTokenIsRefused(t *testing.T) {
+	for _, body := range []string{`{}`, `{"error":"invalid_grant"}`, `{"access_token":""}`} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(body))
+		}))
+		client := concept2.New(server.URL, "id", "sec", "http://localhost/cb")
+		_, err := client.Refresh("refresh-tok")
+		if !errors.Is(err, concept2.ErrNoAccessToken) {
+			t.Errorf("Refresh(%s): expected ErrNoAccessToken, got: %v", body, err)
+		}
+		server.Close()
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer server.Close()
+	_, err := concept2.New(server.URL, "id", "sec", "http://localhost/cb").Refresh("refresh-tok")
+	if !errors.Is(err, concept2.ErrMalformed) || errors.Is(err, concept2.ErrNoAccessToken) {
+		t.Errorf("Refresh(not json): expected ErrMalformed only, got: %v", err)
+	}
+}
+
+// A 2xx Add Result reply that carries no readable result id confirms nothing:
+// PostResult reports ErrMalformed, never the token, so the caller retries.
+func TestPostResultUnreadableCreatedBodyIsMalformed(t *testing.T) {
+	const access = "confidential-bearer-tok-555"
+	for _, body := range []string{"", "not json", `{}`, `{"data":{"id":"x"}}`, `{"data":{}}`} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(body))
+		}))
+		client := concept2.New(server.URL, "id", "sec", "http://localhost/cb")
+		id, err := client.PostResult(context.Background(), access, concept2.Result{Type: "rower"})
+		if !errors.Is(err, concept2.ErrMalformed) || id != 0 {
+			t.Errorf("PostResult(%q) = %d, %v; want 0, ErrMalformed", body, id, err)
+		}
+		if err != nil && strings.Contains(err.Error(), access) {
+			t.Errorf("PostResult(%q) error carries the token: %v", body, err)
+		}
+		server.Close()
+	}
+}
+
 func TestSecretsNotLeakedInErrors(t *testing.T) {
 	const (
 		sensitiveSecret  = "super-confidential-secret-key-999"

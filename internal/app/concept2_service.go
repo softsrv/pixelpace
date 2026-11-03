@@ -188,7 +188,20 @@ func (s *Concept2Service) PostDue(ctx context.Context) (int, error) {
 
 // postOne posts one claimed post. It reports whether the post ended posted,
 // and returns an error only when recording the outcome fails.
-func (s *Concept2Service) postOne(ctx context.Context, post db.ClaimDueConcept2PostsRow) (bool, error) {
+func (s *Concept2Service) postOne(ctx context.Context, post db.ClaimDueConcept2PostsRow) (posted bool, err error) {
+	// Refreshed tokens that could not be saved leave the stored refresh token
+	// dead, so the connection must be flagged needs_reconnect. The flag is set
+	// only after this post's send: stillSendable refuses a connection that
+	// needs reconnecting, and this result can still go out with the new token.
+	tokensUnsaved := false
+	defer func() {
+		if !tokensUnsaved {
+			return
+		}
+		if _, merr := s.q.MarkConcept2NeedsReconnect(ctx, post.UserID); merr != nil {
+			err = errors.Join(err, fmt.Errorf("mark concept2 needs reconnect after token save failed: %w", merr))
+		}
+	}()
 	payload, err := s.q.GetConcept2PostPayload(ctx, db.GetConcept2PostPayloadParams{ID: post.ID, UserID: post.UserID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// The user disconnected, or the finish is gone: nothing can be posted.
@@ -222,7 +235,8 @@ func (s *Concept2Service) postOne(ctx context.Context, post db.ClaimDueConcept2P
 	}
 	refreshed := false
 	if !conn.ExpiresAt.Valid || !conn.ExpiresAt.Time.After(s.cfg.Now()) {
-		token, done, err := s.refreshTokens(ctx, post, conn)
+		token, unsaved, done, err := s.refreshTokens(ctx, post, conn)
+		tokensUnsaved = tokensUnsaved || unsaved
 		if done || err != nil {
 			return false, err
 		}
@@ -234,7 +248,8 @@ func (s *Concept2Service) postOne(ctx context.Context, post db.ClaimDueConcept2P
 	c2ResultID, err := s.cfg.Client.PostResult(ctx, string(access), result)
 	if errors.Is(err, concept2.ErrUnauthorized) && !refreshed {
 		// The Logbook refused a token that had not expired: refresh it once.
-		token, done, rerr := s.refreshTokens(ctx, post, conn)
+		token, unsaved, done, rerr := s.refreshTokens(ctx, post, conn)
+		tokensUnsaved = tokensUnsaved || unsaved
 		if done || rerr != nil {
 			return false, rerr
 		}
@@ -291,23 +306,25 @@ func permanentLogbookError(status int) bool {
 // saves the sealed access token, rotated refresh token and expiry in one
 // write. It returns the new access token. done reports that the post's
 // outcome is already recorded (refused refresh: needs_reconnect; Logbook
-// unavailable: retry), so the caller must not post.
-func (s *Concept2Service) refreshTokens(ctx context.Context, post db.ClaimDueConcept2PostsRow, conn db.Concept2Connection) (access []byte, done bool, err error) {
+// unavailable: retry), so the caller must not post. unsaved reports that the
+// new tokens could not be stored: the caller still posts with the returned
+// access token, then flags the connection needs_reconnect.
+func (s *Concept2Service) refreshTokens(ctx context.Context, post db.ClaimDueConcept2PostsRow, conn db.Concept2Connection) (access []byte, unsaved, done bool, err error) {
 	refresh, err := s.cfg.Sealer.Open(conn.RefreshTokenEnc, post.UserID)
 	if err != nil {
-		return nil, true, s.awaitReconnect(ctx, post, "concept2 tokens could not be opened", true)
+		return nil, false, true, s.awaitReconnect(ctx, post, "concept2 tokens could not be opened", true)
 	}
 	tok, err := s.cfg.Client.RefreshContext(ctx, string(refresh))
 	var apiErr *concept2.APIError
 	switch {
 	case err == nil:
 	case errors.As(err, &apiErr) && permanentLogbookError(apiErr.StatusCode):
-		return nil, true, s.awaitReconnect(ctx, post, "concept2 refused the token refresh", true)
+		return nil, false, true, s.awaitReconnect(ctx, post, "concept2 refused the token refresh", true)
 	case errors.Is(err, concept2.ErrNoAccessToken):
 		// Concept2 answered but issued no access token: the renewal was refused.
-		return nil, true, s.awaitReconnect(ctx, post, "concept2 refused the token refresh", true)
+		return nil, false, true, s.awaitReconnect(ctx, post, "concept2 refused the token refresh", true)
 	default:
-		return nil, true, s.retryPost(ctx, post, err)
+		return nil, false, true, s.retryPost(ctx, post, err)
 	}
 	newRefresh := tok.RefreshToken
 	if newRefresh == "" {
@@ -319,26 +336,25 @@ func (s *Concept2Service) refreshTokens(ctx context.Context, post db.ClaimDueCon
 	}
 	accessEnc, err := s.cfg.Sealer.Seal([]byte(tok.AccessToken), post.UserID)
 	if err != nil {
-		return nil, true, fmt.Errorf("seal concept2 access token: %w", err)
+		return nil, false, true, fmt.Errorf("seal concept2 access token: %w", err)
 	}
 	refreshEnc, err := s.cfg.Sealer.Seal([]byte(newRefresh), post.UserID)
 	if err != nil {
-		return nil, true, fmt.Errorf("seal concept2 refresh token: %w", err)
+		return nil, false, true, fmt.Errorf("seal concept2 refresh token: %w", err)
 	}
 	if err := s.saveRefreshedTokens(ctx, db.UpdateConcept2TokensParams{
 		UserID: post.UserID, AccessTokenEnc: accessEnc, RefreshTokenEnc: refreshEnc,
 		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
 	}); err != nil {
 		// Concept2 has rotated the refresh token, so the stored one is dead.
-		// Ask the user to reconnect rather than leave the connection silently
-		// broken, and still post this result with the new access token.
+		// The caller asks the user to reconnect rather than leave the
+		// connection silently broken, and still posts this result with the
+		// new access token.
 		slog.ErrorContext(ctx, "concept2 refreshed tokens could not be saved; connection needs reconnecting",
 			"user_id", post.UserID, "post_id", post.ID, "error", err)
-		if _, merr := s.q.MarkConcept2NeedsReconnect(ctx, post.UserID); merr != nil {
-			return nil, true, fmt.Errorf("mark concept2 needs reconnect after token save failed: %w", errors.Join(err, merr))
-		}
+		return []byte(tok.AccessToken), true, false, nil
 	}
-	return []byte(tok.AccessToken), false, nil
+	return []byte(tok.AccessToken), false, false, nil
 }
 
 // tokenSaveAttempts bounds how many times refreshed tokens are written before

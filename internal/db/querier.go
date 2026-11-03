@@ -166,6 +166,10 @@ type Querier interface {
 	SetRoomRaceStartsAt(ctx context.Context, arg SetRoomRaceStartsAtParams) error
 	SetUserDisplayName(ctx context.Context, arg SetUserDisplayNameParams) error
 	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
+	// The racer's own fastest finished Time Trial at a race type, from races that
+	// started before the given instant (the minimum elapsed time). No row when
+	// there is none. A Time Trial's pacer rows at this time.
+	TimeTrialPersonalBest(ctx context.Context, arg TimeTrialPersonalBestParams) (pgtype.Int4, error)
 	UpdateConcept2Tokens(ctx context.Context, arg UpdateConcept2TokensParams) (int64, error)
 	UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error

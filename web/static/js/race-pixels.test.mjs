@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  BOAT_COLS, BOAT_POSES, BOAT_ROWS, SELF_HULL,
+  BOAT_COLS, BOAT_POSES, BOAT_ROWS, PACER_HULL, SELF_HULL,
   advanceStroke, boatCells, cellColor, hullColor, pixelScale, shade, snap, strokePose, textCells
 } from './race-pixels.mjs';
 
@@ -68,6 +68,8 @@ test('our own boat is pink and rivals cycle through distinct colours', function 
   var rivals = [0, 1, 2, 3, 4, 5, 6].map(function (i) { return hullColor(false, i); });
   assert.equal(new Set(rivals).size, rivals.length, 'seven rivals get seven colours');
   assert.ok(!rivals.includes(SELF_HULL), 'no rival looks like us');
+  assert.notEqual(PACER_HULL, SELF_HULL, 'pacer is not self');
+  assert.ok(!rivals.includes(PACER_HULL), 'no rival looks like the pacer');
   assert.equal(hullColor(false, 7), rivals[0], 'colours repeat after the palette');
   assert.equal(hullColor(false, undefined), rivals[0]);
 });

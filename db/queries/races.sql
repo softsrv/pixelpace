@@ -100,7 +100,7 @@ LEFT JOIN LATERAL (
 WHERE p.race_id = $1 ORDER BY p.id;
 
 -- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, rt.kind, rt.target_value, rt.label, races.id AS race_id
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id

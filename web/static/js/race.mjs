@@ -16,10 +16,16 @@
 // The look is pixel art: sprites and the countdown font live in
 // race-pixels.mjs and are drawn as solid squares on an un-antialiased canvas.
 // Each boat's oars sweep at that racer's live stroke rate.
+//
+// In a Time Trial with an earlier finished time, the page also lists a pacer
+// lane (data-pacer, data-pacer-ms): a boat labelled "Your best" that rows the
+// race at that personal best, placed from the server clock. It is never an
+// entrant: telemetry never moves it, it takes no rival colour, and the results
+// never list it. The status poll adds it (pacer set) or removes it (pacer null).
 
-import { countdownLabel, laneCenterX, progressFraction, trackY } from './race-track.mjs';
+import { countdownLabel, laneCenterX, pacerDistance, progressFraction, trackY } from './race-track.mjs';
 import {
-  BOAT_POSES, BOAT_ROWS, BOAT_COLS, COLORS, GLYPH_ROWS,
+  BOAT_POSES, BOAT_ROWS, BOAT_COLS, COLORS, GLYPH_ROWS, PACER_HULL,
   advanceStroke, boatCells, cellColor, hullColor, pixelScale, snap, strokePose, textCells
 } from './race-pixels.mjs';
 
@@ -35,6 +41,9 @@ var FINISH_POLL_MS = 5000; // while racing, how often to check whether the race 
 var READY_RETRY_MS = 2000;
 var UNREADY_ALPHA = 0.35; // rivals still connecting their equipment are dimmed
 var EASE_PER_FRAME = 0.15; // share of the remaining gap a rower closes each 60fps frame
+var PACER_STROKE_RATE = 24; // the pacer has no live stroke rate; its oars sweep at this one
+var PACER_ID = 'pacer';
+var PACER_LABEL = 'Your best';
 var LABEL_FONT = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 
 var REMOVED_MESSAGE = 'You were removed from this race because your rowing machine was not connected in time.';
@@ -60,11 +69,17 @@ export async function startRaceView(trackEl, PIXI) {
   var finishPollMs = trackEl.dataset.finishPollMs ? Number(trackEl.dataset.finishPollMs) : FINISH_POLL_MS;
   var statusEl = document.getElementById('race-status');
   var modalEl = document.getElementById('race-finish-modal');
+  var lanesListEl = document.getElementById('race-lanes');
+  var pacerNoteEl = document.getElementById('race-pacer-note');
   var lanes = Array.from(document.querySelectorAll('#race-lanes [data-user-id]'), function (el) {
+    var isPacer = el.dataset.pacer === 'true';
     return {
       userId: el.dataset.userId,
-      label: el.textContent.trim(),
-      isSelf: el.dataset.self === 'true',
+      label: isPacer ? PACER_LABEL : el.textContent.trim(),
+      isSelf: !isPacer && el.dataset.self === 'true',
+      isPacer: isPacer,
+      pacerMs: isPacer ? Number(el.dataset.pacerMs) : 0,
+      el: el,
       distanceMillimeters: 0,
       strokeRate: 0,
       strokePhase: 0,
@@ -72,8 +87,9 @@ export async function startRaceView(trackEl, PIXI) {
       sprite: null
     };
   });
+  // Racers only: the pacer is never a racer, so telemetry can never reach it.
   var lanesById = Object.create(null);
-  lanes.forEach(function (lane) { lanesById[lane.userId] = lane; });
+  lanes.forEach(function (lane) { if (!lane.isPacer) lanesById[lane.userId] = lane; });
   var self = lanesById[selfId];
   var raceId = trackEl.dataset.raceId || null;
   var startsAt = null; // server-scheduled start, in server-clock milliseconds
@@ -121,8 +137,9 @@ export async function startRaceView(trackEl, PIXI) {
   app.stage.addChild(water, ripples, course, startText, finishText);
   var scale = pixelScale(app.screen.width / Math.max(1, lanes.length));
   var rivalIndex = 0;
+  // The pacer takes no rival slot, so rivals keep the colours they have without it.
   lanes.forEach(function (lane) {
-    lane.sprite = createRower(PIXI, lane, lane.isSelf ? 0 : rivalIndex++, scale);
+    lane.sprite = createRower(PIXI, lane, lane.isSelf || lane.isPacer ? 0 : rivalIndex++, scale);
     app.stage.addChild(lane.sprite);
   });
   app.stage.addChild(countdownText.view);
@@ -154,13 +171,19 @@ export async function startRaceView(trackEl, PIXI) {
     }
     var ease = 1 - Math.pow(1 - EASE_PER_FRAME, ticker.deltaTime);
     var elapsedMs = ticker.deltaMS || ticker.deltaTime * (1000 / 60);
+    var serverNow = Date.now() + clockOffset;
     lanes.forEach(function (lane, index) {
+      // The pacer rows its personal best from the start on the server clock:
+      // still before GO, and already partway down the course on a mid-race load.
+      if (lane.isPacer) lane.distanceMillimeters = startsAt === null ? 0 : pacerDistance(serverNow - startsAt, lane.pacerMs, targetMillimeters);
       var fraction = progressFraction(lane.distanceMillimeters, targetMillimeters);
       var targetY = trackY(fraction, geometry.startY, geometry.finishY);
-      lane.y = lane.y === null ? targetY : lane.y + (targetY - lane.y) * ease;
+      // The pacer's position is exact at every frame, so it needs no easing.
+      lane.y = lane.y === null || lane.isPacer ? targetY : lane.y + (targetY - lane.y) * ease;
       lane.sprite.position.set(snap(laneCenterX(index, lanes.length, geometry.width), scale), snap(lane.y, scale));
       // Oars sweep at the racer's own stroke rate; across the line they rest.
-      var rowing = racing && fraction < 1 ? lane.strokeRate : 0;
+      var rate = lane.isPacer ? PACER_STROKE_RATE : lane.strokeRate;
+      var rowing = racing && fraction < 1 ? rate : 0;
       lane.strokePhase = advanceStroke(lane.strokePhase, rowing, elapsedMs);
       lane.sprite.setPose(strokePose(lane.strokePhase), rowing > 0);
     });
@@ -186,7 +209,7 @@ export async function startRaceView(trackEl, PIXI) {
     // Our own rower follows local telemetry; the echo can lag behind it.
     if (!sample || sample.user_id === selfId) return;
     var lane = lanesById[sample.user_id];
-    if (!lane) return;
+    if (!lane) return; // lanesById holds racers only, so 'pacer' never matches
     lane.distanceMillimeters = sample.distance_millimeters;
     if (typeof sample.stroke_rate === 'number') lane.strokeRate = sample.stroke_rate;
   });
@@ -236,6 +259,20 @@ export async function startRaceView(trackEl, PIXI) {
     var serverTime = Date.parse(status.server_time);
     if (!Number.isNaN(serverTime)) clockOffset = serverTime - (sentAt + receivedAt) / 2;
     if (Array.isArray(status.racers)) syncLanes(status.racers);
+    pacerNoteEl = pacerNoteEl || document.getElementById('race-pacer-note');
+    // An absent key leaves the pacer as it is; null means there is none.
+    if (status.pacer === null) {
+      removePacer();
+      if (Array.isArray(status.racers)) {
+        if (status.racers.length === 1) setHidden(pacerNoteEl, false);
+        else if (status.racers.length >= 2) setHidden(pacerNoteEl, true);
+      }
+    } else if (status.pacer && Number(status.pacer.elapsed_milliseconds) > 0) {
+      setPacer(Number(status.pacer.elapsed_milliseconds));
+      setHidden(pacerNoteEl, true);
+    } else if (Array.isArray(status.racers) && status.racers.length >= 2) {
+      setHidden(pacerNoteEl, true);
+    }
     if (status.race_starts_at && startsAt === null) {
       startsAt = Date.parse(status.race_starts_at);
       if (!racing) setStatus('Everyone is ready. Get set!');
@@ -250,14 +287,15 @@ export async function startRaceView(trackEl, PIXI) {
   }
 
   // Drops lanes for racers removed from the start, and dims rivals who are
-  // still connecting their equipment.
+  // still connecting their equipment. The pacer is never among the racers and
+  // is never dropped here.
   function syncLanes(racers) {
     var present = {};
     racers.forEach(function (racer) {
       present[racer.user_id] = racer;
     });
     var kept = lanes.filter(function (lane) {
-      if (present[lane.userId]) return true;
+      if (lane.isPacer || present[lane.userId]) return true;
       app.stage.removeChild(lane.sprite);
       lane.sprite.destroy({ children: true });
       delete lanesById[lane.userId];
@@ -268,8 +306,48 @@ export async function startRaceView(trackEl, PIXI) {
       drawnWidth = 0; // redraw the lane dividers
     }
     lanes.forEach(function (lane) {
-      lane.sprite.alpha = racing || lane.isSelf || present[lane.userId].equipment_ready ? 1 : UNREADY_ALPHA;
+      lane.sprite.alpha = racing || lane.isSelf || lane.isPacer || present[lane.userId].equipment_ready ? 1 : UNREADY_ALPHA;
     });
+  }
+
+  function pacerLane() {
+    return lanes.find(function (lane) { return lane.isPacer; }) || null;
+  }
+
+  // Adds the pacer lane (last, after the racers, as the page renders it) or
+  // updates its time, keeping the screen-reader lane list in step.
+  function setPacer(pacerMs) {
+    var lane = pacerLane();
+    if (lane) {
+      lane.pacerMs = pacerMs;
+      if (lane.el) lane.el.dataset.pacerMs = String(pacerMs);
+      return;
+    }
+    var el = document.createElement('li');
+    el.dataset.userId = PACER_ID;
+    el.dataset.pacer = 'true';
+    el.dataset.pacerMs = String(pacerMs);
+    el.textContent = PACER_LABEL;
+    if (lanesListEl) lanesListEl.appendChild(el);
+    lane = {
+      userId: PACER_ID, label: PACER_LABEL, isSelf: false, isPacer: true, pacerMs: pacerMs, el: el,
+      distanceMillimeters: 0, strokeRate: 0, strokePhase: 0, y: null, sprite: null
+    };
+    lane.sprite = createRower(PIXI, lane, 0, scale);
+    app.stage.addChild(lane.sprite);
+    app.stage.addChild(countdownText.view); // keep the countdown drawn above every boat
+    lanes.push(lane);
+    drawnWidth = 0; // redraw the lane dividers
+  }
+
+  function removePacer() {
+    var lane = pacerLane();
+    if (!lane) return;
+    app.stage.removeChild(lane.sprite);
+    lane.sprite.destroy({ children: true });
+    if (lane.el && typeof lane.el.remove === 'function') lane.el.remove();
+    lanes = lanes.filter(function (other) { return other !== lane; });
+    drawnWidth = 0;
   }
 
   // The countdown has reached zero: from here our telemetry moves the boat.
@@ -414,8 +492,11 @@ function pm5Connected() {
 
 function setHidden(el, hidden) {
   if (!el) return;
-  if (hidden) el.classList.add('hidden');
-  else el.classList.remove('hidden');
+  el.hidden = !!hidden;
+  if (el.classList) {
+    if (hidden) el.classList.add('hidden');
+    else el.classList.remove('hidden');
+  }
 }
 
 // fetch that silently refreshes the short-lived access token once on 401.
@@ -509,7 +590,7 @@ function paintCells(graphics, cells, size, colorOf, offsetX, offsetY) {
 // sprite's origin, so it touches the start line at 0% and the finish at 100%.
 function createRower(PIXI, lane, rivalIndex, scale) {
   var rower = new PIXI.Container();
-  var hull = hullColor(lane.isSelf, rivalIndex);
+  var hull = lane.isPacer ? PACER_HULL : hullColor(lane.isSelf, rivalIndex);
   var poses = {};
   BOAT_POSES.forEach(function (pose) {
     poses[pose] = new PIXI.Graphics();
@@ -520,7 +601,7 @@ function createRower(PIXI, lane, rivalIndex, scale) {
   var label = new PIXI.Text({
     text: lane.isSelf ? lane.label + ' (you)' : lane.label,
     style: {
-      fill: lane.isSelf ? hull : COLORS.white,
+      fill: lane.isSelf || lane.isPacer ? hull : COLORS.white,
       fontSize: 12,
       fontFamily: LABEL_FONT,
       fontWeight: 'bold',

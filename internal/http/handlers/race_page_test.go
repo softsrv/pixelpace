@@ -191,6 +191,120 @@ func TestRacePageStatusReportsReadinessStartAndRace(t *testing.T) {
 	}
 }
 
+func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID := uuid.New()
+	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:  nil,
+		}, nil
+	}}
+
+	// 1-entrant race: note is present, no data-pacer element
+	rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	wantNote := "No personal best yet: set your first time."
+	if !strings.Contains(body, wantNote) {
+		t.Errorf("page body missing %q; body=%q", wantNote, body)
+	}
+	if !strings.Contains(body, `id="race-pacer-note"`) {
+		t.Errorf("page body missing id=\"race-pacer-note\"; body=%q", body)
+	}
+	if strings.Contains(body, "data-pacer") {
+		t.Errorf("page body unexpectedly contains data-pacer: %q", body)
+	}
+
+	// Status returns JSON with pacer null
+	statusRR := serveRacePage(t, viewer, user, roomID.String(), raceStatusEndpoint)
+	if statusRR.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", statusRR.Code)
+	}
+	var statusData map[string]any
+	if err := json.Unmarshal(statusRR.Body.Bytes(), &statusData); err != nil {
+		t.Fatalf("unmarshal status JSON: %v", err)
+	}
+	pacerVal, ok := statusData["pacer"]
+	if !ok {
+		t.Errorf("pacer key missing from status JSON: %s", statusRR.Body.String())
+	}
+	if pacerVal != nil {
+		t.Errorf("pacer = %v, want null", pacerVal)
+	}
+
+	// 2-entrant race: note is absent
+	rival := uuid.New()
+	twoRacerViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Racers: []app.RaceRacer{racer(user.ID, "Me", true), racer(rival, "Rival", true)},
+			Pacer:  nil,
+		}, nil
+	}}
+	rrTwo := serveRaceWith(t, newProductionRenderer(t), twoRacerViewer, user, roomID.String(), racePageEndpoint)
+	if rrTwo.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rrTwo.Code)
+	}
+	if strings.Contains(rrTwo.Body.String(), "set your first time") {
+		t.Errorf("2-entrant race unexpectedly has note: %q", rrTwo.Body.String())
+	}
+}
+
+func TestRacePageWithPacerRendersPacerLaneAndStatusPacerJSON(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID := uuid.New()
+	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:  &app.RacePacer{ElapsedMilliseconds: 110000},
+		}, nil
+	}}
+
+	rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	wantPacerLI := `<li data-user-id="pacer" data-pacer="true" data-pacer-ms="110000">Your best</li>`
+	if !strings.Contains(body, wantPacerLI) {
+		t.Errorf("page body missing %q; body=%q", wantPacerLI, body)
+	}
+	if !strings.Contains(body, "Your best") {
+		t.Errorf("page body missing text 'Your best'; body=%q", body)
+	}
+	if !strings.Contains(body, "2 lanes") {
+		t.Errorf("page body missing lane-count tag counting 2 lanes; body=%q", body)
+	}
+	if strings.Contains(body, "set your first time") {
+		t.Errorf("page body unexpectedly contains note 'set your first time'; body=%q", body)
+	}
+
+	// Status returns JSON with pacer.elapsed_milliseconds == 110000
+	statusRR := serveRacePage(t, viewer, user, roomID.String(), raceStatusEndpoint)
+	if statusRR.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", statusRR.Code)
+	}
+	var statusData struct {
+		Pacer *struct {
+			ElapsedMilliseconds int64 `json:"elapsed_milliseconds"`
+		} `json:"pacer"`
+	}
+	if err := json.Unmarshal(statusRR.Body.Bytes(), &statusData); err != nil {
+		t.Fatalf("unmarshal status JSON: %v", err)
+	}
+	if statusData.Pacer == nil {
+		t.Fatalf("status JSON pacer is nil; body=%s", statusRR.Body.String())
+	}
+	if statusData.Pacer.ElapsedMilliseconds != 110000 {
+		t.Errorf("pacer.elapsed_milliseconds = %d, want 110000", statusData.Pacer.ElapsedMilliseconds)
+	}
+}
+
 func TestRacePageReadyMarksCallersEquipment(t *testing.T) {
 	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
 	roomID := uuid.New()

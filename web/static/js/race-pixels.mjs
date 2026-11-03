@@ -26,6 +26,7 @@ export var COLORS = {
 // Our own boat is pink, like "YOU" on the landing page; rivals take the other
 // Dracula accents in lane order.
 export var SELF_HULL = 0xff79c6;
+export var PACER_HULL = 0x6272a4;
 var RIVAL_HULLS = [0x8be9fd, 0x50fa7b, 0xffb86c, 0xbd93f9, 0xf1fa8c, 0xff5555, 0xf8f8f2];
 
 export function hullColor(isSelf, rivalIndex) {

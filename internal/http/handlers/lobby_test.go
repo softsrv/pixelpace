@@ -354,3 +354,38 @@ func TestLobbyAcceptAndDeclineInvite(t *testing.T) {
 		t.Errorf("failed decline status = %d", rr.Code)
 	}
 }
+
+// A solo host is told about the pacer only on a distance race; timed races
+// never get one.
+func TestLobbyPanelSoloHintMentionsPacerOnlyForDistanceRaces(t *testing.T) {
+	const pacerLine = "a pacer boat rows at your best"
+	roomID := uuid.New()
+	for _, tc := range []struct {
+		name      string
+		distance  bool
+		wantPacer bool
+	}{
+		{"distance race", true, true},
+		{"timed race", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &stubLobbyService{lobbyFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomLobby, error) {
+				lobby := waitingLobby(roomID)
+				lobby.Participants = lobby.Participants[:1]
+				lobby.DistanceRace = tc.distance
+				return lobby, nil
+			}}
+			h := handlers.NewLobbyHandler(svc, svc, newProductionRenderer(t), "https://pixelpace.test/")
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.SetPathValue("id", roomID.String())
+			rr := serveAuthenticated(t, lobbyUser, http.HandlerFunc(h.Panel), req)
+			body := rr.Body.String()
+			if rr.Code != http.StatusOK || !strings.Contains(body, "Rowing solo counts as a time trial") {
+				t.Fatalf("status = %d, body = %q; want the solo hint", rr.Code, body)
+			}
+			if got := strings.Contains(body, pacerLine); got != tc.wantPacer {
+				t.Errorf("pacer line shown = %v, want %v; body = %q", got, tc.wantPacer, body)
+			}
+		})
+	}
+}

@@ -1,13 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { GO_DISPLAY_MS, countdownLabel, laneCenterX, progressFraction, trackY } from './race-track.mjs';
+import { GO_DISPLAY_MS, countdownLabel, laneCenterX, pacerDistance, progressFraction, trackY } from './race-track.mjs';
 
 test('progress is distance rowed over the race target distance', function () {
   assert.equal(progressFraction(0, 2000000), 0);
   assert.equal(progressFraction(500000, 2000000), 0.25);
   assert.equal(progressFraction(1000000, 2000000), 0.5);
   assert.equal(progressFraction(2000000, 2000000), 1);
+});
+
+test('pacer distance advances steadily to target at personal best and stays capped', function () {
+  var target = 2000000;
+  var pacerMs = 120000;
+
+  assert.equal(pacerDistance(-1000, pacerMs, target), 0, 'negative elapsed gives 0');
+  assert.equal(pacerDistance(0, pacerMs, target), 0, '0 elapsed gives 0');
+  assert.equal(pacerDistance(pacerMs / 2, pacerMs, target), target / 2, 'pacerMs/2 gives target/2');
+  assert.equal(pacerDistance(pacerMs, pacerMs, target), target, 'pacerMs gives target');
+  assert.equal(pacerDistance(2 * pacerMs, pacerMs, target), target, '2*pacerMs gives target');
+  assert.equal(pacerDistance(pacerMs / 2, 0, target), 0, '0 pacerMs gives 0');
+  assert.equal(pacerDistance(pacerMs / 2, undefined, target), 0, 'missing pacerMs gives 0');
+  assert.equal(pacerDistance(pacerMs / 2, NaN, target), 0, 'NaN pacerMs gives 0');
 });
 
 test('progress is clamped to the course and tolerates missing data', function () {

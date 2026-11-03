@@ -36,6 +36,16 @@ type RaceServiceConfig struct {
 	// ResultPoster, when set, is told of each finalized race inside the
 	// finalize transaction, after the finish is recorded. Nil posts nothing.
 	ResultPoster RaceResultPoster
+	// PersonalBests looks up a Time Trial racer's personal best for the
+	// pacer in RoomRace. Nil uses the service's queries.
+	PersonalBests PersonalBestLookup
+}
+
+// PersonalBestLookup finds a racer's fastest finished Time Trial at a race
+// type from races started before arg.Before. pgx.ErrNoRows means there is
+// none.
+type PersonalBestLookup interface {
+	TimeTrialPersonalBest(ctx context.Context, arg db.TimeTrialPersonalBestParams) (pgtype.Int4, error)
 }
 
 // RaceResultPoster queues a finalized race's results for posting elsewhere.
@@ -99,6 +109,9 @@ func NewRaceService(q *db.Queries, pool pgxBeginner, broadcaster realtime.Broadc
 	}
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleepRaceCountdown
+	}
+	if cfg.PersonalBests == nil {
+		cfg.PersonalBests = q
 	}
 	return &RaceService{q: q, pool: pool, broadcaster: broadcaster, cfg: cfg}
 }
@@ -383,7 +396,9 @@ type RaceRacer struct {
 // equipment; RaceID is nil until the countdown has ended and Begin has created
 // the race. Racers are in the order Begin seeds race participants, so lanes
 // stay stable throughout. Finished is true once the race has ended and the
-// room is marked finished.
+// room is marked finished. Pacer is set only for a Time Trial whose racer has
+// an earlier finished Time Trial at the race type; it is a lane, never an
+// entrant.
 type RoomRace struct {
 	RoomID            uuid.UUID
 	RaceID            *uuid.UUID
@@ -392,6 +407,13 @@ type RoomRace struct {
 	TargetMillimeters int64
 	Racers            []RaceRacer
 	Finished          bool
+	Pacer             *RacePacer
+}
+
+// RacePacer is a Time Trial's pacer boat: it rows the target distance at the
+// racer's personal best elapsed time.
+type RacePacer struct {
+	ElapsedMilliseconds int64 `json:"elapsed_milliseconds"`
 }
 
 // RoomRace returns the race view for a room participant. Rooms that are still
@@ -437,7 +459,29 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 		raceID := uuid.UUID(row.RaceID.Bytes)
 		view.RaceID = &raceID
 	}
+	if len(lineup) == 1 && row.RaceStartsAt.Valid {
+		view.Pacer = s.timeTrialPacer(ctx, roomID, row.RaceTypeID, lineup[0].ID, row.RaceStartsAt)
+	}
 	return view, nil
+}
+
+// timeTrialPacer returns the solo racer's pacer at their personal best from
+// Time Trials started before this race, or nil when there is none. A lookup
+// failure is logged and costs only the pacer, never the race view.
+func (s *RaceService) timeTrialPacer(ctx context.Context, roomID, raceTypeID, userID uuid.UUID, before pgtype.Timestamptz) *RacePacer {
+	best, err := s.cfg.PersonalBests.TimeTrialPersonalBest(ctx, db.TimeTrialPersonalBestParams{
+		RaceTypeID: raceTypeID, UserID: userID, Before: before,
+	})
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.ErrorContext(ctx, "look up time trial personal best", "room_id", roomID, "user_id", userID, "error", err)
+		}
+		return nil
+	}
+	if !best.Valid {
+		return nil
+	}
+	return &RacePacer{ElapsedMilliseconds: int64(best.Int32)}
 }
 
 // Ingest stores each sample, including zero measurements, and publishes it once

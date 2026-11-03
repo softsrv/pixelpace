@@ -9,6 +9,19 @@ export function progressFraction(distanceMillimeters, targetMillimeters) {
   return Math.min(1, distance / target);
 }
 
+// Distance covered by a pacer rowing at a steady personal-best pace:
+// zero at or before the start, target * elapsed / pacerMs while racing,
+// and capped at the target distance once finished. Returns 0 if pacerMs
+// is missing or non-positive.
+export function pacerDistance(elapsedMs, pacerMs, targetMm) {
+  var elapsed = Number(elapsedMs);
+  var pacer = Number(pacerMs);
+  var target = Number(targetMm);
+  if (!(pacer > 0) || !(target > 0) || !(elapsed > 0)) return 0;
+  if (elapsed >= pacer) return target;
+  return (target * elapsed) / pacer;
+}
+
 // Screen y for a rower who has covered `fraction` of the race: the same share of
 // the way from the start line (bottom, larger y) to the finish line (top).
 export function trackY(fraction, startY, finishY) {

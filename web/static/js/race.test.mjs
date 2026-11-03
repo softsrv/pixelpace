@@ -5,6 +5,7 @@ import { access } from 'node:fs/promises';
 // race.mjs guards its top-level DOM access, so it imports under node with no
 // document; each test then builds the page it needs and calls startRaceView.
 import { startRaceView } from './race.mjs';
+import { PACER_HULL, hullColor } from './race-pixels.mjs';
 
 var REMOVED = 'You were removed from this race because your rowing machine was not connected in time.';
 var raceResultsAvailable = await access(new URL('./race-results.mjs', import.meta.url)).then(function () { return true; }, function () { return false; });
@@ -14,6 +15,7 @@ function fakeElement(tag) {
   var classes = new Set();
   var el = {
     tagName: tag,
+    hidden: false,
     textContent: '',
     dataset: {},
     attributes: {},
@@ -27,7 +29,11 @@ function fakeElement(tag) {
     addEventListener: target.addEventListener.bind(target),
     removeEventListener: target.removeEventListener.bind(target),
     dispatchEvent: target.dispatchEvent.bind(target),
-    appendChild: function (child) { el.children.push(child); return child; },
+    appendChild: function (child) { el.children.push(child); child.parent = el; return child; },
+    remove: function () {
+      if (el.parent) el.parent.children = el.parent.children.filter(function (c) { return c !== el; });
+      el.parent = null;
+    },
     setAttribute: function (name, value) { el.attributes[name] = value; },
     querySelector: function () { return null; }
   };
@@ -64,7 +70,9 @@ function makePixi() {
   var stageChildren = [];
   function chain() {
     var g = {};
-    ['moveTo', 'lineTo', 'stroke', 'rect', 'fill', 'roundRect', 'clear'].forEach(function (m) { g[m] = function () { return g; }; });
+    g.fills = [];
+    ['moveTo', 'lineTo', 'stroke', 'rect', 'roundRect', 'clear'].forEach(function (m) { g[m] = function () { return g; }; });
+    g.fill = function (color) { g.fills.push(color); return g; };
     g.destroy = function () {};
     return g;
   }
@@ -72,13 +80,17 @@ function makePixi() {
     Application: function () {
       this.init = function () { return initGate; };
       this.canvas = fakeElement('canvas');
-      this.stage = { addChild: function () { stageChildren.push.apply(stageChildren, arguments); }, removeChild: function () {} };
+      this.stage = {
+        addChild: function () { stageChildren.push.apply(stageChildren, arguments); },
+        removeChild: function (child) { var i = stageChildren.indexOf(child); if (i >= 0) stageChildren.splice(i, 1); }
+      };
       this.ticker = { add: function (fn) { ticks.push(fn); } };
       this.screen = { width: 300, height: 600 };
     },
     Graphics: function () { var g = chain(); graphics.push(g); return g; },
     Container: function () {
-      var c = { children: [], position: { set: function () {} }, destroy: function () {}, alpha: 1 };
+      var c = { children: [], destroy: function () {}, alpha: 1, x: null, y: null };
+      c.position = { set: function (x, y) { c.x = x; c.y = y; } };
       c.addChild = function () { c.children.push.apply(c.children, arguments); };
       return c;
     },
@@ -93,7 +105,13 @@ function makePixi() {
     var view = stageChildren.find(function (c) { return c && c.pixelLabel; });
     return view ? view.pixelLabel.text : undefined;
   }
-  return { PIXI: PIXI, releaseInit: release, texts: texts, ticks: ticks, graphics: graphics, countdownText: countdownText };
+  // The rower on the stage whose name label reads `label`.
+  function rower(label) {
+    return stageChildren.find(function (c) {
+      return c && Array.isArray(c.children) && c.children.some(function (child) { return child && child.text === label; });
+    });
+  }
+  return { PIXI: PIXI, releaseInit: release, texts: texts, ticks: ticks, graphics: graphics, countdownText: countdownText, rower: rower };
 }
 
 // Sets up the race page globals. responses maps a URL to a function returning
@@ -102,19 +120,25 @@ function setupPage(options) {
   var doc = new EventTarget();
   var track = fakeElement('div');
   Object.assign(track.dataset, {
-    selfId: 'u-self', targetMm: '500000',
+    selfId: 'u-self', targetMm: options.targetMm || '500000',
     statusUrl: '/rooms/r1/race/status', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
     resultsUrl: '/rooms/r1/race/results', dashboardUrl: '/dashboard',
-    finished: options.finished ? 'true' : 'false', raceId: options.finished ? 'race-1' : ''
+    finished: options.finished ? 'true' : 'false', raceId: options.finished ? 'race-1' : '',
+    finishPollMs: options.finishPollMs || '1'
   });
   var status = fakeElement('p');
   var parts = fakeModal();
+  var laneList = fakeElement('ol');
+  var pacerNote = options.pacerNote === true ? fakeElement('p') : (options.pacerNote || null);
+  if (pacerNote && !pacerNote.textContent) pacerNote.textContent = 'No personal best yet: set your first time.';
+  (options.lanes || [
+    { dataset: { userId: 'u-self', self: 'true' }, textContent: 'Me' },
+    { dataset: { userId: 'u-2', self: 'false' }, textContent: 'Rival' }
+  ]).forEach(function (item) { laneList.appendChild(item); });
   doc.getElementById = function (id) {
-    return { 'race-track': track, 'race-status': status, 'race-finish-modal': parts.modal }[id] || null;
+    return { 'race-track': track, 'race-status': status, 'race-finish-modal': parts.modal, 'race-lanes': laneList, 'race-pacer-note': pacerNote }[id] || null;
   };
-  doc.querySelectorAll = function () {
-    return [{ dataset: { userId: 'u-self', self: 'true' }, textContent: 'Me' }, { dataset: { userId: 'u-2', self: 'false' }, textContent: 'Rival' }];
-  };
+  doc.querySelectorAll = function () { return laneList.children.slice(); };
   doc.createElement = fakeElement;
   var calls = [];
   var assigned = [];
@@ -129,11 +153,14 @@ function setupPage(options) {
   globalThis.fetch = function (url) {
     calls.push(url);
     var respond = options.responses[url];
-    if (!respond) return new Promise(function () {}); // never settles: no further polling
+    if (!respond) {
+      if (url.endsWith('/race/results')) return jsonResponse(200, RESULTS);
+      return new Promise(function () {}); // never settles: no further polling
+    }
     return respond();
   };
   return {
-    doc: doc, track: track, status: status, parts: parts, calls: calls, assigned: assigned,
+    doc: doc, track: track, status: status, parts: parts, calls: calls, assigned: assigned, laneList: laneList, pacerNote: pacerNote,
     streamStops: function () { return streamStops; }
   };
 }
@@ -307,6 +334,7 @@ test('finishing your own row says you are waiting for the others', async functio
   page.doc.dispatchEvent(new CustomEvent('pixelpace:local-telemetry', { detail: { distance_millimeters: 500000 } }));
   assert.match(page.status.textContent, /waiting for the other rowers/i);
   assert.equal(page.parts.modal.open, false, 'the modal waits for the race to end');
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });
 
 // Starts a race whose countdown has already passed, so the view is racing and
@@ -374,4 +402,303 @@ test('while racing, a 404 status check shows the removal notice and stops checki
   await new Promise(function (resolve) { setTimeout(resolve, 20); });
   assert.equal(statusCount(page), checks, 'no more checks after removal');
   assert.equal(page.parts.modal.open, false);
+});
+
+// ── Pacer ────────────────────────────────────────────────────────────────────
+
+function laneItem(userId, label, isSelf) {
+  return { dataset: { userId: userId, self: isSelf ? 'true' : 'false' }, textContent: label };
+}
+
+function pacerItem(pacerMs) {
+  return { dataset: { userId: 'pacer', pacer: 'true', pacerMs: String(pacerMs) }, textContent: 'Your best' };
+}
+
+// Answers each status call with the next body in turn; once they run out the
+// call never settles, so polling stops.
+function statusQueue(bodies) {
+  return function () {
+    var body = bodies.shift();
+    return body ? jsonResponse(200, body) : new Promise(function () {});
+  };
+}
+
+async function until(check) {
+  for (var i = 0; i < 300 && !check(); i++) await new Promise(function (resolve) { setTimeout(resolve, 10); });
+  assert.ok(check(), 'timed out waiting');
+}
+
+// Every fill a rower's art used, in order: the pose sprites first, whose first
+// cell is the bow, painted in the hull colour.
+function hullsOf(rower) {
+  var colors = [];
+  rower.children.forEach(function (child) { if (child && child.fills) colors.push.apply(colors, child.fills); });
+  return colors;
+}
+
+function hullOf(rower) {
+  return rower.children[0].fills[0];
+}
+
+function pacerLanes(page) {
+  return page.laneList.children.filter(function (el) { return el.dataset.pacer === 'true'; });
+}
+
+// The course runs from the start line (600 - 112) up to the finish line (40),
+// and positions are snapped to the art grid (at most 4px).
+var START_Y = 488;
+var FINISH_Y = 40;
+function assertNear(actual, expected, message) {
+  assert.ok(Math.abs(actual - expected) <= 4, message + ': y = ' + actual + ', want about ' + expected);
+}
+
+test('the pacer boat is labelled Your best in the pacer hull, takes no rival colour, and ignores race-telemetry', async function () {
+  async function draw(lanes) {
+    var page = setupPage({
+      finished: false, lanes: lanes,
+      responses: { '/rooms/r1/race/status': statusQueue([{ server_time: new Date().toISOString(), race_starts_at: new Date(Date.now() + 60000).toISOString(), racers: [{ user_id: 'u-self', equipment_ready: true }, { user_id: 'u-2', equipment_ready: true }] }]) }
+    });
+    var pixi = makePixi();
+    pixi.releaseInit();
+    await startRaceView(page.track, pixi.PIXI);
+    await settle();
+    return { page: page, pixi: pixi };
+  }
+  var without = await draw([laneItem('u-self', 'Me', true), laneItem('u-2', 'Rival', false)]);
+  var rivalHullAlone = hullsOf(without.pixi.rower('Rival'));
+  assert.equal(hullOf(without.pixi.rower('Rival')), hullColor(false, 0));
+  var withPacer = await draw([laneItem('u-self', 'Me', true), laneItem('u-2', 'Rival', false), pacerItem(100000)]);
+
+  var pacer = withPacer.pixi.rower('Your best');
+  assert.ok(pacer, 'a boat is drawn for the pacer lane, labelled Your best');
+  assert.equal(hullOf(pacer), PACER_HULL, 'the pacer hull is PACER_HULL');
+  assert.equal(pacer.children.find(function (c) { return c.text === 'Your best'; }).style.fill, PACER_HULL, 'its label is in the pacer colour');
+  var rivalHull = hullsOf(withPacer.pixi.rower('Rival'));
+  assert.equal(hullOf(withPacer.pixi.rower('Rival')), hullColor(false, 0), 'the rival keeps rival colour 0');
+  assert.deepEqual(rivalHull, rivalHullAlone, 'the rival is drawn exactly as it is without a pacer');
+  // Even listed ahead of a rival, the pacer takes no rival slot.
+  var pacerFirst = await draw([laneItem('u-self', 'Me', true), pacerItem(100000), laneItem('u-2', 'Rival', false)]);
+  assert.equal(hullOf(pacerFirst.pixi.rower('Rival')), hullColor(false, 0), 'a rival after the pacer still gets rival colour 0');
+
+  var tick = withPacer.pixi.ticks[0];
+  tick({ deltaTime: 1 });
+  var before = pacer.y;
+  withPacer.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-telemetry', { detail: { user_id: 'pacer', distance_millimeters: 400000, stroke_rate: 30 } }));
+  withPacer.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-telemetry', { detail: { user_id: 'u-2', distance_millimeters: 400000, stroke_rate: 30 } }));
+  for (var i = 0; i < 60; i++) tick({ deltaTime: 1 });
+  assert.equal(pacer.y, before, 'race-telemetry for user_id pacer does not move the pacer');
+  assert.ok(withPacer.pixi.rower('Rival').y < before - 100, 'a rival still follows its race-telemetry');
+  without.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+  withPacer.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+  pacerFirst.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('the pacer rows from the start on the server clock: still before GO, mid-course on a mid-race load, at the finish at its time', async function () {
+  var realNow = Date.now;
+  var startsAt = Date.parse('2026-10-26T12:00:10Z');
+  var localNow = realNow(); // the local clock is wildly off the server's
+  Date.now = function () { return localNow; };
+  try {
+    // Countdown: 5s before the start on the server clock.
+    var page = setupPage({
+      finished: false, targetMm: '1000000',
+      lanes: [laneItem('u-self', 'Me', true), pacerItem(100000)],
+      responses: { '/rooms/r1/race/status': statusQueue([{ server_time: new Date(startsAt - 5000).toISOString(), race_starts_at: new Date(startsAt).toISOString(), racers: [{ user_id: 'u-self', equipment_ready: true }] }]) }
+    });
+    var pixi = makePixi();
+    pixi.releaseInit();
+    await startRaceView(page.track, pixi.PIXI);
+    await settle();
+    var pacer = pixi.rower('Your best');
+    pixi.ticks[0]({ deltaTime: 1 });
+    localNow += 4000;
+    pixi.ticks[0]({ deltaTime: 1 });
+    assertNear(pacer.y, START_Y, 'before GO the pacer waits on the start line');
+    assert.equal(pacer.y, pixi.rower('Me (you)').y, 'level with our own boat at the start');
+    page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+
+    // A reload 50s into a 100s personal best over 1000m.
+    localNow = realNow();
+    page = setupPage({
+      finished: false, targetMm: '1000000',
+      lanes: [laneItem('u-self', 'Me', true), pacerItem(100000)],
+      responses: { '/rooms/r1/race/status': statusQueue([{ server_time: new Date(startsAt + 50000).toISOString(), race_starts_at: new Date(startsAt).toISOString(), race_id: 'race-1', racers: [{ user_id: 'u-self', equipment_ready: true }] }]) }
+    });
+    pixi = makePixi();
+    pixi.releaseInit();
+    await startRaceView(page.track, pixi.PIXI);
+    await settle();
+    pacer = pixi.rower('Your best');
+    pixi.ticks[0]({ deltaTime: 1 });
+    assertNear(pacer.y, START_Y - 0.5 * (START_Y - FINISH_Y), 'a mid-race load shows the pacer at 500m, not the start line');
+
+    localNow += 50000; // server clock now at startsAt + 100000
+    pixi.ticks[0]({ deltaTime: 1 });
+    assertNear(pacer.y, FINISH_Y, 'at its personal best time the pacer reaches the target');
+    localNow += 30000;
+    pixi.ticks[0]({ deltaTime: 1 });
+    assertNear(pacer.y, FINISH_Y, 'and stays at the finish line');
+    // End this racing view so its finish check stops polling later tests' fetch.
+    page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test('a status with a pacer adds its lane, racer syncing keeps it while dropping absent racers, and pacer null removes it', async function () {
+  var ahead = new Date(Date.now() + 60000).toISOString();
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  // The test moves the server through these states; every poll reads the
+  // current one, so a stray fetch from an earlier test's view changes nothing.
+  var phases = [
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 95000 } },
+    { server_time: new Date().toISOString(), race_starts_at: ahead, racers: self },
+    { server_time: new Date().toISOString(), race_starts_at: ahead, racers: self, pacer: null }
+  ];
+  var phase = 0;
+  var served = [0, 0, 0];
+  var page = setupPage({
+    finished: false,
+    responses: { '/rooms/r1/race/status': function () { served[phase]++; return jsonResponse(200, phases[phase]); } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  assert.equal(pacerLanes(page).length, 0, 'no pacer lane to begin with');
+
+  await until(function () { return pacerLanes(page).length === 1; });
+  assert.equal(pacerLanes(page)[0].dataset.pacerMs, '95000', 'the added lane carries the pacer time');
+  assert.equal(pacerLanes(page)[0].textContent, 'Your best');
+  var pacer = pixi.rower('Your best');
+  assert.ok(pacer && hullOf(pacer) === PACER_HULL, 'and a pacer boat is drawn in the pacer hull');
+  assert.equal(pixi.rower('Rival'), undefined, 'the racer absent from status.racers is still removed');
+  pixi.ticks[0]({ deltaTime: 1 });
+  assert.notEqual(pacer.y, null, 'the ticker places the added pacer');
+
+  phase = 1;
+  await until(function () { return served[1] >= 1; });
+  await settle();
+  assert.equal(pacerLanes(page).length, 1, 'syncing against racers that omit the pacer keeps its lane');
+  assert.equal(pixi.rower('Your best'), pacer, 'and its boat');
+
+  phase = 2;
+  await until(function () { return pacerLanes(page).length === 0; });
+  assert.equal(pixi.rower('Your best'), undefined, 'pacer null removes the boat');
+  assert.ok(pixi.rower('Me (you)'), 'our own boat stays');
+  pixi.ticks[0]({ deltaTime: 1 }); // the ticker runs on without the removed lane
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished')); // stop this view's polling
+});
+
+test('with a pacer lane, the results modal lists only the racers, never Your best', async function () {
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true), laneItem('u-2', 'Rival', false), pacerItem(100000)],
+    responses: { '/rooms/r1/race/results': function () { return jsonResponse(200, RESULTS); } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+  await until(function () { return page.parts.tbody.children.length > 0; });
+  var names = page.parts.tbody.children.map(function (tr) { return tr.children[1] && tr.children[1].textContent; });
+  assert.deepEqual(names, ['Rival', 'Me']);
+  assert.ok(!names.includes('Your best'), 'the pacer is not in the results');
+});
+
+test('note hidden once status brings a pacer', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var page = setupPage({
+    finished: false,
+    pacerNote: true,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        return jsonResponse(200, {
+          server_time: new Date().toISOString(),
+          racers: self,
+          pacer: { elapsed_milliseconds: 110000 }
+        });
+      }
+    }
+  });
+  assert.equal(page.pacerNote.hidden, false, 'note starts visible');
+  assert.equal(pacerLanes(page).length, 0, 'no pacer lane to begin with');
+
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+
+  await until(function () { return pacerLanes(page).length === 1 && page.pacerNote.hidden; });
+  assert.equal(page.pacerNote.hidden, true, 'note is hidden once status brings a pacer');
+  assert.equal(page.pacerNote.classList.contains('hidden'), true);
+  assert.equal(pacerLanes(page).length, 1, 'pacer lane exists');
+  assert.equal(pacerLanes(page)[0].dataset.pacerMs, '110000');
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('note shown again on pacer null in a solo race', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var phases = [
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 110000 } },
+    { server_time: new Date().toISOString(), racers: self, pacer: null }
+  ];
+  var phase = 0;
+  var served = [0, 0];
+  var page = setupPage({
+    finished: false,
+    pacerNote: true,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        served[phase]++;
+        return jsonResponse(200, phases[phase]);
+      }
+    }
+  });
+
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+
+  // Status with pacer: note hides, pacer lane appears
+  await until(function () { return pacerLanes(page).length === 1 && page.pacerNote.hidden; });
+  assert.equal(page.pacerNote.hidden, true);
+
+  // Status with pacer null and 1 racer: note shows again
+  phase = 1;
+  await until(function () { return pacerLanes(page).length === 0 && !page.pacerNote.hidden; });
+  assert.equal(page.pacerNote.hidden, false, 'note is shown again on pacer null in a solo race');
+  assert.equal(page.pacerNote.classList.contains('hidden'), false);
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('note hidden in a multi-racer race', async function () {
+  var twoRacers = [{ user_id: 'u-self', equipment_ready: true }, { user_id: 'u-2', equipment_ready: true }];
+  var page = setupPage({
+    finished: false,
+    pacerNote: true,
+    lanes: [laneItem('u-self', 'Me', true), laneItem('u-2', 'Rival', false)],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        return jsonResponse(200, {
+          server_time: new Date().toISOString(),
+          racers: twoRacers,
+          pacer: null
+        });
+      }
+    }
+  });
+  assert.equal(page.pacerNote.hidden, false, 'note starts visible');
+
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+
+  await until(function () { return page.pacerNote.hidden; });
+  assert.equal(page.pacerNote.hidden, true, 'note is hidden with two racers and pacer null');
+  assert.equal(page.pacerNote.classList.contains('hidden'), true);
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });

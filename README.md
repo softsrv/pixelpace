@@ -17,14 +17,23 @@ make dev-logs   # follow the app and build output
 make dev-stop   # stop and remove the app container
 ```
 
-Inside the container, `localhost` in `DATABASE_URL`, `VALKEY_ADDR` and `SMTP_HOST` is rewritten to `host.docker.internal`, so services running on your machine stay reachable.
+`.env` is mounted read-only into the container at `/config/.env`, where the app reads it. Only `DATABASE_URL`, `VALKEY_ADDR` and `SMTP_HOST` are also passed as variables, with `localhost` rewritten to `host.docker.internal` so services running on your machine stay reachable. Variables in the environment override the file.
+
+### Configuration file
+
+The app loads its settings from a dotenv file at startup (via [godotenv](https://github.com/joho/godotenv)):
+
+- `CONFIG_FILE` names the file. When it is set, the file must exist, or the app exits at startup.
+- With `CONFIG_FILE` unset or empty, the app reads `./.env` if there is one, so `make run` and `go run ./cmd/app` pick up the repo's `.env`.
+- Variables already set in the environment win over the file, so a single value can still be overridden at launch.
+- The production image sets `CONFIG_FILE=/config/.env` and expects the file mounted there: `docker run -v "$PWD/.env":/config/.env:ro …` (`make docker-run` does this). The image runs as uid 65532, so on Linux the file must be readable by that user. Set `CONFIG_FILE` to another path to move it, or to an empty string to configure the container with environment variables alone.
 
 ### Prerequisites
 
 Before running `make dev`, make sure you have:
 
 - **A reachable PostgreSQL database.** This project does not provision a local database for you — supply the connection string for an externally hosted/online Postgres instance (e.g. a managed cloud database) via `DATABASE_URL`. Migrations run against that database on every `make dev`.
-- **A `.env` file.** Copy `.env.example` to `.env` and fill in the required values — the Makefile auto-loads `.env` (`-include .env`), and `.env` is gitignored so your local values stay local:
+- **A `.env` file.** Copy `.env.example` to `.env` and fill in the required values. The app reads it itself (see [Configuration file](#configuration-file)), the Makefile also loads it (`-include .env`) for targets such as `make migrate-up`, and `.env` is gitignored so your local values stay local:
 
   ```sh
   cp .env.example .env
@@ -42,7 +51,7 @@ Before running `make dev`, make sure you have:
 
 `docker-compose.yml` runs the published `trriplejay/pixelpace` image with a private Valkey for live race updates. Postgres stays external, as in development.
 
-1. Create `.env` from `.env.example`. Use your hosted `DATABASE_URL`, `APP_ENV=production` and the public HTTPS origin as `APP_BASE_URL`. Set `VALKEY_ADDR=valkey:6379` to use the Valkey that compose starts.
+1. Create `.env` from `.env.example`. Use your hosted `DATABASE_URL`, `APP_ENV=production` and the public HTTPS origin as `APP_BASE_URL`. Set `VALKEY_ADDR=valkey:6379` to use the Valkey that compose starts. Compose mounts the file read-only at `/config/.env`, where the app reads it; on Linux, make it readable by uid 65532, the user the app runs as. To use a file other than `./.env`, set `PIXELPACE_CONFIG=/path/to/file`, and pass `--env-file /path/to/file` to the `migrate` command, since compose takes `DATABASE_URL` for it from `./.env`.
 2. Apply migrations (they never run on startup):
 
    ```sh

@@ -37,27 +37,27 @@ dev-deps:
 # .env points at on this machine are reached through host.docker.internal.
 dockerhost = $(subst 127.0.0.1,host.docker.internal,$(subst localhost,host.docker.internal,$(1)))
 
-DEV_ENV_VARS := APP_ENV PORT APP_BASE_URL TRUSTED_PROXY_COUNT \
-                DATABASE_URL DB_MAX_CONNS DB_MIN_CONNS VALKEY_ADDR \
-                JWT_SECRET JWT_ACCESS_EXPIRY REFRESH_TOKEN_EXPIRY \
-                BCRYPT_COST PASSWORD_MIN_LENGTH \
-                SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD SMTP_FROM_EMAIL SMTP_FROM_NAME \
-                CONCEPT2_CLIENT_ID CONCEPT2_CLIENT_SECRET CONCEPT2_BASE_URL
+# The app reads .env itself, mounted at /config/.env (CONFIG_FILE in
+# Dockerfile.dev). Only the host-service addresses are passed as variables,
+# rewritten for the container; the environment overrides the file.
+DEV_HOST_VARS := DATABASE_URL VALKEY_ADDR SMTP_HOST
 
 dev-container: export DATABASE_URL := $(call dockerhost,$(DATABASE_URL))
 dev-container: export VALKEY_ADDR := $(call dockerhost,$(or $(VALKEY_ADDR),localhost:$(VALKEY_PORT)))
 dev-container: export SMTP_HOST := $(call dockerhost,$(SMTP_HOST))
 dev-container:
+	@test -f .env || { echo "no .env: copy .env.example to .env first" >&2; exit 1; }
 	@docker build -q -t $(DEV_IMAGE) - < Dockerfile.dev >/dev/null
 	@docker rm -fv $(DEV_NAME) >/dev/null 2>&1 || true
 	@docker run -d --init --name $(DEV_NAME) \
 	  --add-host=host.docker.internal:host-gateway \
 	  -p $(or $(PORT),8080):$(or $(PORT),8080) \
 	  -v "$(CURDIR)":/src \
+	  -v "$(CURDIR)/.env":/config/.env:ro \
 	  -v /src/tmp \
 	  -v $(APP_NAME)-dev-gomod:/go/pkg/mod \
 	  -v $(APP_NAME)-dev-gocache:/root/.cache/go-build \
-	  $(addprefix -e ,$(DEV_ENV_VARS)) \
+	  $(addprefix -e ,$(DEV_HOST_VARS)) \
 	  $(DEV_IMAGE)
 
 dev-logs:
@@ -179,7 +179,7 @@ docker-build:
 
 docker-run:
 	docker run --rm -d \
-	  --env-file .env \
+	  -v "$(CURDIR)/.env":/config/.env:ro \
 	  -p $(or $(PORT),8080):$(or $(PORT),8080) \
 	  $(APP_NAME):dev
 

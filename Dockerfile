@@ -53,6 +53,12 @@ COPY --from=builder --chown=65532:65532 /build/bin/app ./app
 # Copy web assets (templates + static files)
 COPY --from=builder --chown=65532:65532 /build/web ./web
 
+# The app reads its settings from a dotenv file, expected mounted read-only at
+# this path (it must be readable by uid 65532). Point CONFIG_FILE elsewhere to
+# move it, or set it empty to rely on environment variables alone. Variables
+# set in the environment override the file.
+ENV CONFIG_FILE=/config/.env
+
 EXPOSE 8080
 
 ENTRYPOINT ["./app"]

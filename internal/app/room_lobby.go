@@ -27,6 +27,9 @@ type RoomLobby struct {
 	RaceTypeID   uuid.UUID
 	RaceLabel    string
 	Participants []RoomRosterEntry
+	// DistanceRace reports whether the race type is a fixed distance; only
+	// those races get a Time Trial pacer.
+	DistanceRace bool
 	// InvitedIDs are the users already holding an invite to this room.
 	InvitedIDs map[uuid.UUID]bool
 	IsHost     bool
@@ -73,7 +76,7 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 	}
 	lobby := RoomLobby{
 		RoomID: room.ID, Status: room.Status, JoinCode: room.JoinCode,
-		RaceTypeID: room.RaceTypeID, RaceLabel: room.RaceLabel,
+		RaceTypeID: room.RaceTypeID, RaceLabel: room.RaceLabel, DistanceRace: room.RaceKind == "distance",
 		IsHost: callerUserID == room.HostUserID, InvitedIDs: map[uuid.UUID]bool{},
 	}
 	member := false

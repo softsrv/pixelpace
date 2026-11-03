@@ -144,7 +144,7 @@
   {{if and .IsHost (not .CanStart)}}
   <p class="pp-hint">You can start once everyone is ready.</p>
   {{else if and .IsHost (eq (len .Participants) 1)}}
-  <p class="pp-hint">Rowing solo counts as a time trial, with its own leaderboard. Once you have a time at this distance, a pacer boat rows at your best. Invite a friend to race instead.</p>
+  <p class="pp-hint">Rowing solo counts as a time trial, with its own leaderboard.{{if .DistanceRace}} Once you have a time at this distance, a pacer boat rows at your best.{{end}} Invite a friend to race instead.</p>
   {{end}}
 </div>
 {{end}}

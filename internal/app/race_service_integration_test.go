@@ -1031,6 +1031,25 @@ func TestRaceServiceRoomRacePacerIgnoresThisAndLaterRaces(t *testing.T) {
 	}
 }
 
+// An earlier-started, faster Time Trial of the racer's that finishes during
+// this race never becomes this race's pacer: the pacer stays fixed at the best
+// finished before this race started.
+func TestRaceServiceRoomRacePacerIgnoresTimeTrialFinishedMidRace(t *testing.T) {
+	f := seedRaceRoom(t, 1, 500000, time.Minute)
+	ctx := context.Background()
+	f.begin(t)
+	start := f.race.StartedAt.Time
+	f.seedHistory(t, 0,
+		pastResult{f.raceType(t), start.Add(-time.Hour), true, "finished", 110000},
+		// Started a minute before this race, finished 40s into it.
+		pastResult{f.raceType(t), start.Add(-time.Minute), true, "finished", 100000},
+	)
+	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil || view.Pacer == nil || view.Pacer.ElapsedMilliseconds != 110000 {
+		t.Fatalf("pacer = %+v err=%v, want 110000ms (the mid-race finish must not count)", view.Pacer, err)
+	}
+}
+
 func racerIDs(racers []app.RaceRacer) []uuid.UUID {
 	ids := make([]uuid.UUID, len(racers))
 	for i, racer := range racers {

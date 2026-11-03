@@ -74,6 +74,7 @@ WHERE r.race_type_id = $1
   AND rp.status = 'finished'
   AND rp.elapsed_milliseconds IS NOT NULL
   AND r.started_at < $3::timestamptz
+  AND rp.finished_at < $3::timestamptz
 ORDER BY rp.elapsed_milliseconds ASC
 LIMIT 1
 `
@@ -85,8 +86,9 @@ type TimeTrialPersonalBestParams struct {
 }
 
 // The racer's own fastest finished Time Trial at a race type, from races that
-// started before the given instant (the minimum elapsed time). No row when
-// there is none. A Time Trial's pacer rows at this time.
+// started and were finished by the racer before the given instant (the minimum
+// elapsed time). No row when there is none. A Time Trial's pacer rows at this
+// time; bounding on the finish keeps it fixed for the whole race.
 func (q *Queries) TimeTrialPersonalBest(ctx context.Context, arg TimeTrialPersonalBestParams) (pgtype.Int4, error) {
 	row := q.db.QueryRow(ctx, timeTrialPersonalBest, arg.RaceTypeID, arg.UserID, arg.Before)
 	var elapsed_milliseconds pgtype.Int4

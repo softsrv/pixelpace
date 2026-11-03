@@ -12,8 +12,9 @@ GROUP BY rp.user_id, u.display_name
 ORDER BY elapsed_milliseconds ASC, rp.user_id ASC;
 
 -- The racer's own fastest finished Time Trial at a race type, from races that
--- started before the given instant (the minimum elapsed time). No row when
--- there is none. A Time Trial's pacer rows at this time.
+-- started and were finished by the racer before the given instant (the minimum
+-- elapsed time). No row when there is none. A Time Trial's pacer rows at this
+-- time; bounding on the finish keeps it fixed for the whole race.
 -- name: TimeTrialPersonalBest :one
 SELECT rp.elapsed_milliseconds
 FROM race_participants AS rp
@@ -24,5 +25,6 @@ WHERE r.race_type_id = @race_type_id
   AND rp.status = 'finished'
   AND rp.elapsed_milliseconds IS NOT NULL
   AND r.started_at < @before::timestamptz
+  AND rp.finished_at < @before::timestamptz
 ORDER BY rp.elapsed_milliseconds ASC
 LIMIT 1;

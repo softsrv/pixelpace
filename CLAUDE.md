@@ -5,7 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-make dev              # Hot-reload: air (Go) + Tailwind watch + smtp4dev container, all in parallel
+make dev              # Detached app-dev container (Dockerfile.dev) running air with the repo mounted; prints the container ID
+make dev-logs         # Follow the dev container's output
+make dev-stop         # Stop and remove the dev container
 make run              # Run without hot-reload
 make build            # Compile to ./bin/app
 make test             # Run unit tests
@@ -24,7 +26,7 @@ make sqlc-generate                # Regenerate internal/db/ from db/queries/
 # CSS
 make daisyui-install  # Download DaisyUI .mjs bundles (re-run on DaisyUI upgrades)
 make tailwind         # One-shot CSS build
-make tailwind-watch   # Watch mode (called by make dev)
+make tailwind-watch   # Watch mode (make dev rebuilds CSS through air instead)
 
 # Docker
 make docker-build     # Build dev image

@@ -192,8 +192,8 @@ func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow
 
 const insertRaceTelemetry = `-- name: InsertRaceTelemetry :exec
 INSERT INTO telemetry_samples
-(id, race_id, user_id, elapsed_milliseconds, distance_millimeters, stroke_rate, power, sampled_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+(id, race_id, user_id, elapsed_milliseconds, distance_millimeters, stroke_rate, power, sampled_at, stroke_count, calories, heart_rate, drag_factor)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 type InsertRaceTelemetryParams struct {
@@ -205,6 +205,10 @@ type InsertRaceTelemetryParams struct {
 	StrokeRate          pgtype.Int4        `json:"stroke_rate"`
 	Power               pgtype.Int4        `json:"power"`
 	SampledAt           pgtype.Timestamptz `json:"sampled_at"`
+	StrokeCount         pgtype.Int4        `json:"stroke_count"`
+	Calories            pgtype.Int4        `json:"calories"`
+	HeartRate           pgtype.Int4        `json:"heart_rate"`
+	DragFactor          pgtype.Int4        `json:"drag_factor"`
 }
 
 func (q *Queries) InsertRaceTelemetry(ctx context.Context, arg InsertRaceTelemetryParams) error {
@@ -217,6 +221,10 @@ func (q *Queries) InsertRaceTelemetry(ctx context.Context, arg InsertRaceTelemet
 		arg.StrokeRate,
 		arg.Power,
 		arg.SampledAt,
+		arg.StrokeCount,
+		arg.Calories,
+		arg.HeartRate,
+		arg.DragFactor,
 	)
 	return err
 }
@@ -532,6 +540,38 @@ type MarkRoomEquipmentReadyParams struct {
 
 func (q *Queries) MarkRoomEquipmentReady(ctx context.Context, arg MarkRoomEquipmentReadyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markRoomEquipmentReady, arg.RoomID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setRaceParticipantMonitor = `-- name: SetRaceParticipantMonitor :execrows
+UPDATE race_participants SET
+    pm5_serial_number     = $1,
+    pm5_firmware_version  = $2,
+    pm5_hardware_revision = $3
+WHERE race_id = $4 AND user_id = $5 AND status = 'racing'
+`
+
+type SetRaceParticipantMonitorParams struct {
+	SerialNumber     pgtype.Text `json:"serial_number"`
+	FirmwareVersion  pgtype.Text `json:"firmware_version"`
+	HardwareRevision pgtype.Text `json:"hardware_revision"`
+	RaceID           uuid.UUID   `json:"race_id"`
+	UserID           uuid.UUID   `json:"user_id"`
+}
+
+// Records the PM5 a participant rows on, only while they are still racing:
+// once finished or DNF the row's monitor details are fixed.
+func (q *Queries) SetRaceParticipantMonitor(ctx context.Context, arg SetRaceParticipantMonitorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setRaceParticipantMonitor,
+		arg.SerialNumber,
+		arg.FirmwareVersion,
+		arg.HardwareRevision,
+		arg.RaceID,
+		arg.UserID,
+	)
 	if err != nil {
 		return 0, err
 	}

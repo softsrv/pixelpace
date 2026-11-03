@@ -130,6 +130,13 @@ function runDashboardApp(devMode = true, protocol = 'https:', options = {}) {
     }
   }
   var window = { isSecureContext: true, location: { protocol: protocol, host: 'pixelpace.test:8080' } };
+  // The fake PM5's Device Information service (ce060010): strings keyed by
+  // characteristic short id (0012 serial, 0013 hardware, 0014 firmware). By
+  // default nothing is readable, so samples are the only frames sent.
+  var deviceInfoServiceUuid = 'ce060010-43e5-11e4-916c-0800200c9a66';
+  var deviceInfo = Object.assign({ values: {} }, options.deviceInfo);
+  var deviceRequests = [];
+  var deviceListeners = {};
   runInNewContext(appJs, {
     document: {
       addEventListener: function (type, fn) {
@@ -148,15 +155,31 @@ function runDashboardApp(devMode = true, protocol = 'https:', options = {}) {
     window: window,
     navigator: {
       bluetooth: {
-        requestDevice: async function () {
+        requestDevice: async function (requestOptions) {
+          deviceRequests.push(requestOptions);
           return {
             name: 'PM5',
-            addEventListener: function () {},
+            addEventListener: function (type, fn) { deviceListeners[type] = fn; },
             gatt: {
               connect: async function () {
                 return {
                   connected: true,
-                  getPrimaryService: async function () {
+                  getPrimaryService: async function (serviceUuid) {
+                    if (serviceUuid === deviceInfoServiceUuid) {
+                      if (deviceInfo.serviceFails) throw new Error('Device information unavailable');
+                      return {
+                        getCharacteristic: async function (uuid) {
+                          return {
+                            readValue: async function () {
+                              if (deviceInfo.readFails) throw new Error('Read failed');
+                              var text = deviceInfo.values[uuid.slice(4, 8)];
+                              if (typeof text !== 'string') throw new Error('Not readable');
+                              return new DataView(Uint8Array.from(text, function (c) { return c.charCodeAt(0); }).buffer);
+                            }
+                          };
+                        }
+                      };
+                    }
                     return {
                       getCharacteristic: async function (uuid) {
                         return {
@@ -173,6 +196,7 @@ function runDashboardApp(devMode = true, protocol = 'https:', options = {}) {
         }
       }
     },
+    console: { error: function () {}, warn: function () {}, log: function () {} },
     htmx: { trigger: function () {} },
     Math: Math,
     Number: Number,
@@ -203,6 +227,8 @@ function runDashboardApp(devMode = true, protocol = 'https:', options = {}) {
     start: window.startRaceStream,
     window: window,
     connectPm5: function () { return click(); },
+    deviceRequests: deviceRequests,
+    disconnectPm5: function () { deviceListeners.gattserverdisconnected(); },
     notify: function (characteristic, bytes) {
       var uuid = 'ce0600' + characteristic + '-43e5-11e4-916c-0800200c9a66';
       notifications[uuid]({ target: { uuid: uuid, value: new DataView(Uint8Array.from(bytes).buffer) } });
@@ -250,6 +276,8 @@ test('open race socket sends one converted sample per notification while retaini
     distance_millimeters: 3800,
     stroke_rate: 26,
     power: 0,
+    calories: 0, // reported by the mock's additional status 2: a real 0
+    drag_factor: 120,
     sampled_at: '2026-10-08T12:00:02.000Z'
   });
   assert.equal(app.dateReads(), 3, 'capture time only once per emission');
@@ -269,11 +297,14 @@ test('every real PM5 notification renders and streams a complete latest-reading 
   stream.socket.open();
 
   // General status: 1234 hundredths of a second, 427 tenths of a meter.
+  // No stroke count, calories, heart rate or drag factor reported yet: the
+  // sample leaves those keys out rather than sending zeros.
   app.notify('31', [210, 4, 0, 171, 1, 0]);
   assert.equal(stream.socket.frames.length, 1);
   assert.deepEqual(JSON.parse(stream.socket.frames[0]), {
     elapsed_milliseconds: 12340, distance_millimeters: 42700,
-    stroke_rate: 0, power: 0, sampled_at: '2026-10-08T12:00:00.000Z'
+    stroke_rate: 0, power: 0,
+    sampled_at: '2026-10-08T12:00:00.000Z'
   });
   assert.equal(app.metricEls.distance.textContent, '43 m');
   assert.equal(app.metricEls.elapsedTime.textContent, '0:12');
@@ -288,7 +319,9 @@ test('every real PM5 notification renders and streams a complete latest-reading 
   assert.equal(stream.socket.frames.length, 3);
   assert.deepEqual(JSON.parse(stream.socket.frames[2]), {
     elapsed_milliseconds: 12350, distance_millimeters: 42700,
-    stroke_rate: 27, power: 183, sampled_at: '2026-10-08T12:00:00.000Z'
+    stroke_rate: 27, power: 183,
+    stroke_count: 6, heart_rate: 142,
+    sampled_at: '2026-10-08T12:00:00.000Z'
   });
   assert.equal(app.metricEls.power.textContent, '183 W');
   app.notify('31', []);
@@ -664,4 +697,139 @@ test('the race-started event does not touch real PM5 readings', function () {
   stream.socket.open();
   app.dispatch('pixelpace:race-started');
   assert.equal(stream.socket.frames.length, 0);
+});
+
+test('each streamed sample carries drag factor, heart rate, and baseline-relative stroke count and calories', async function () {
+  var app = runDashboardApp(false, 'http:');
+  await app.connectPm5();
+  var stream = app.start('race-clm12');
+  assert.equal(stream.socket.url, 'ws://pixelpace.test:8080/races/race-clm12/ws');
+  stream.socket.open();
+
+  // Baseline readings before race start:
+  // General status (0x31) with 19 bytes, byte 18 = 115 (drag factor)
+  var gBytes = new Array(19).fill(0);
+  gBytes[0] = 100; gBytes[1] = 0; gBytes[2] = 0; // elapsed 1.00s
+  gBytes[3] = 30; gBytes[4] = 0; gBytes[5] = 0;  // distance 3.0m
+  gBytes[18] = 115;                              // drag factor 115
+  app.notify('31', gBytes);
+
+  // Additional status 1 (0x32): stroke rate 24, heart rate 130
+  app.notify('32', [100, 0, 0, 0, 0, 24, 130, 120, 0]);
+
+  // Additional status 2 (0x33): calories 12, elapsed 1.00s
+  var a2Bytes = new Array(20).fill(0);
+  a2Bytes[0] = 100; a2Bytes[1] = 0; a2Bytes[2] = 0;
+  a2Bytes[6] = 12; a2Bytes[7] = 0;
+  app.notify('33', a2Bytes);
+
+  // Additional stroke data (0x36): power 150, stroke count 8
+  app.notify('36', [0, 0, 0, 150, 0, 0, 0, 8, 0]);
+
+  // Establish race baseline
+  app.dispatch('pixelpace:race-started');
+
+  // Next readings after race start:
+  gBytes[0] = 50; gBytes[1] = 1; gBytes[2] = 0; // elapsed 3.06s (delta 2.06s = 2060ms)
+  gBytes[3] = 80; gBytes[4] = 0; gBytes[5] = 0;  // distance 8.0m (delta 5.0m = 5000mm)
+  gBytes[18] = 122;                             // drag factor 122
+  app.notify('31', gBytes);
+
+  app.notify('32', [50, 1, 0, 0, 0, 28, 148, 110, 0]); // heart rate 148, SPM 28
+
+  a2Bytes[0] = 50; a2Bytes[1] = 1; a2Bytes[2] = 0; // elapsed 3.06s
+  a2Bytes[6] = 19; a2Bytes[7] = 0; // calories 19 (delta 7)
+  app.notify('33', a2Bytes);
+
+  app.notify('36', [0, 0, 0, 195, 0, 0, 0, 15, 0]); // power 195, stroke count 15 (delta 7)
+
+  var lastFrame = JSON.parse(stream.socket.frames[stream.socket.frames.length - 1]);
+  assert.deepEqual(lastFrame, {
+    elapsed_milliseconds: 2060,
+    distance_millimeters: 5000,
+    stroke_rate: 28,
+    power: 195,
+    stroke_count: 7,
+    calories: 7,
+    heart_rate: 148,
+    drag_factor: 122,
+    sampled_at: '2026-10-08T12:00:00.000Z'
+  });
+});
+
+var pm5Details = { values: { '0012': '431234567\u0000\u0000', '0013': ' 907 ', '0014': '171' } };
+
+test('connecting asks for the PM5 device-information service and sends its details first on every socket open', async function () {
+  var app = runDashboardApp(false, 'http:', { deviceInfo: pm5Details });
+  await app.connectPm5();
+  assert.deepEqual(Array.from(app.deviceRequests[0].optionalServices), [
+    'ce060030-43e5-11e4-916c-0800200c9a66', 'ce060010-43e5-11e4-916c-0800200c9a66'
+  ]);
+  var stream = app.start('race-monitor');
+  var first = stream.socket;
+  first.finishClose();
+  app.notify('31', [210, 4, 0, 171, 1, 0]); // buffered while disconnected
+  app.retry();
+  var second = stream.socket;
+  second.open();
+  var monitor = { type: 'monitor', serial_number: '431234567', hardware_revision: '907', firmware_version: '171' };
+  assert.deepEqual(JSON.parse(second.frames[0]), monitor, 'the monitor frame precedes the buffered sample');
+  assert.equal(JSON.parse(second.frames[1]).distance_millimeters, 42700);
+  assert.equal(JSON.parse(second.frames[1]).type, undefined, 'samples stay untyped');
+  assert.equal(second.frames.length, 2, 'one monitor frame per open');
+  app.notify('31', [210, 4, 0, 171, 1, 0]);
+  assert.equal(second.frames.filter(function (f) { return JSON.parse(f).type === 'monitor'; }).length, 1, 'samples do not resend it');
+
+  second.finishClose();
+  app.retry();
+  stream.socket.open();
+  assert.deepEqual(JSON.parse(stream.socket.frames[0]), monitor, 'sent again on reconnect');
+
+  // After the PM5 disconnects its details are forgotten.
+  app.disconnectPm5();
+  stream.socket.finishClose();
+  app.retry();
+  stream.socket.open();
+  assert.equal(stream.socket.frames.length, 0);
+});
+
+test('a race socket already open when the details are read receives the monitor frame then', async function () {
+  var app = runDashboardApp(false, 'http:', { deviceInfo: pm5Details });
+  var stream = app.start('race-early');
+  stream.socket.open();
+  assert.equal(stream.socket.frames.length, 0);
+  await app.connectPm5();
+  assert.deepEqual(stream.socket.frames.map(function (f) { return JSON.parse(f).type; }), ['monitor']);
+});
+
+test('a characteristic that cannot be read is left out of the monitor frame', async function () {
+  var app = runDashboardApp(false, 'http:', { deviceInfo: { values: { '0014': '171' } } });
+  await app.connectPm5();
+  var stream = app.start('race-partial');
+  stream.socket.open();
+  assert.deepEqual(JSON.parse(stream.socket.frames[0]), { type: 'monitor', firmware_version: '171' });
+});
+
+test('a failed device-information read sends no monitor frame and leaves connecting and streaming unchanged', async function () {
+  for (var failure of [{ values: pm5Details.values, readFails: true }, { values: pm5Details.values, serviceFails: true }]) {
+    var app = runDashboardApp(false, 'http:', { deviceInfo: failure });
+    await app.connectPm5();
+    assert.equal(app.window.isPm5Connected(), true, 'the PM5 still connects');
+    var stream = app.start('race-fail');
+    stream.socket.open();
+    app.notify('31', [210, 4, 0, 171, 1, 0]);
+    assert.equal(stream.socket.frames.length, 1);
+    assert.equal(JSON.parse(stream.socket.frames[0]).type, undefined, 'only the sample is sent');
+  }
+});
+
+test('the dev mock PM5 sends no monitor frame', function () {
+  var app = runDashboardApp(true, 'https:', { race: true, deviceInfo: pm5Details });
+  var stream = app.start('race-mock');
+  stream.socket.open();
+  app.tick();
+  assert.ok(stream.socket.frames.length > 0);
+  stream.socket.frames.forEach(function (frame) {
+    assert.equal(JSON.parse(frame).type, undefined);
+  });
 });

@@ -52,6 +52,26 @@ document.addEventListener('htmx:response:error', function (evt) {
   if (found && found.target) found.target.textContent = found.source.getAttribute('data-error-message') || 'Something went wrong.';
 });
 
+// ── Concept2 Logbook connect: send the browser's timezone ─────────────────────
+
+// The Concept2 panel is loaded by htmx after page load, so this is a document
+// delegate. It fills the connect form's hidden tz with the browser's IANA
+// timezone; if Intl is unavailable or throws it stays empty (the server
+// stores UTC).
+document.addEventListener('submit', function (evt) {
+  var form = evt.target;
+  if (!form || !form.matches || !form.matches('form[data-concept2-connect]')) return;
+  var input = form.querySelector('input[name="tz"]');
+  if (!input) return;
+  var tz = '';
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (_) {
+    tz = '';
+  }
+  input.value = tz;
+});
+
 // ── Token expiry handling ─────────────────────────────────────────────────────
 
 // When the server fires the token-expired event, attempt a silent refresh.
@@ -95,10 +115,24 @@ document.body.addEventListener('token-expired', async function () {
   // reachable via GATT after connecting, so it must be listed in optionalServices.
   var concept2DiscoveryServiceUuid = 'ce060000-43e5-11e4-916c-0800200c9a66';
   var concept2RowingServiceUuid = 'ce060030-43e5-11e4-916c-0800200c9a66';
+  // Concept2 PM5 Bluetooth Smart Interface Definition: Device Information
+  // service and its serial number, hardware revision and firmware revision
+  // string characteristics. Also GATT-only, so listed in optionalServices.
+  var concept2DeviceInfoServiceUuid = 'ce060010-43e5-11e4-916c-0800200c9a66';
+  var pm5DeviceInfoCharacteristics = {
+    serial_number: 'ce060012-43e5-11e4-916c-0800200c9a66',
+    hardware_revision: 'ce060013-43e5-11e4-916c-0800200c9a66',
+    firmware_version: 'ce060014-43e5-11e4-916c-0800200c9a66'
+  };
+  var PM5_DEVICE_INFO_MAX_LENGTH = 32;
+  // The connected PM5's details, read once after connecting; null when none
+  // could be read (or with the dev mock). Sent on every race socket open.
+  var monitorInfo = null;
   var PM5_GENERAL_STATUS_ELAPSED_TIME_OFFSET = 0;
   var PM5_GENERAL_STATUS_ELAPSED_TIME_SCALE_SECONDS = 0.01;
   var PM5_GENERAL_STATUS_DISTANCE_OFFSET = 3;
   var PM5_GENERAL_STATUS_DISTANCE_SCALE_METERS = 0.1;
+  var PM5_GENERAL_STATUS_DRAG_FACTOR_OFFSET = 18;
   var PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_OFFSET = 0;
   var PM5_ADDITIONAL_STATUS_1_ELAPSED_TIME_SCALE_SECONDS = 0.01;
   var PM5_ADDITIONAL_STATUS_1_STROKE_RATE_OFFSET = 5;
@@ -125,7 +159,9 @@ document.body.addEventListener('token-expired', async function () {
       elapsedTimeOffset: PM5_GENERAL_STATUS_ELAPSED_TIME_OFFSET,
       elapsedTimeScaleSeconds: PM5_GENERAL_STATUS_ELAPSED_TIME_SCALE_SECONDS,
       distanceOffset: PM5_GENERAL_STATUS_DISTANCE_OFFSET,
-      distanceScaleMeters: PM5_GENERAL_STATUS_DISTANCE_SCALE_METERS
+      distanceScaleMeters: PM5_GENERAL_STATUS_DISTANCE_SCALE_METERS,
+      dragFactorOffset: PM5_GENERAL_STATUS_DRAG_FACTOR_OFFSET,
+      dragOffset: PM5_GENERAL_STATUS_DRAG_FACTOR_OFFSET
     },
     // Concept2 PM5 Bluetooth Smart Interface Definition: Rowing Additional Status 1.
     additionalStatus1: {
@@ -190,15 +226,31 @@ document.body.addEventListener('token-expired', async function () {
   var mockPm5StrokeTimer = null;
   var activeRaceStream = null;
   // PM5 characteristics report partial updates; retain the latest known readings.
-  var streamMetrics = { elapsedTime: 0, distance: 0, strokeRate: 0, power: 0 };
+  // Stroke count, calories, heart rate and drag factor stay null until the
+  // monitor reports them, so a sample never passes off a missing reading as 0.
+  var streamMetrics = {
+    elapsedTime: 0,
+    distance: 0,
+    strokeRate: 0,
+    power: 0,
+    strokeCount: null,
+    calories: null,
+    heartRate: null,
+    dragFactor: null
+  };
   // A race measures from its own start: the readings at that moment are
   // subtracted from every streamed sample, so a machine that was already
   // rowing (or the dev mock) starts the race at zero.
-  var raceBaseline = { elapsedTime: 0, distance: 0 };
+  var raceBaseline = { elapsedTime: 0, distance: 0, strokeCount: 0, calories: 0 };
   var pm5Connected = false;
 
   document.addEventListener('pixelpace:race-started', function () {
-    raceBaseline = { elapsedTime: streamMetrics.elapsedTime, distance: streamMetrics.distance };
+    raceBaseline = {
+      elapsedTime: streamMetrics.elapsedTime,
+      distance: streamMetrics.distance,
+      strokeCount: streamMetrics.strokeCount,
+      calories: streamMetrics.calories
+    };
   });
 
   // The race page waits for live rowing data before reporting its racer ready.
@@ -304,6 +356,8 @@ document.body.addEventListener('token-expired', async function () {
       socket.onopen = function () {
         if (activeRaceStream !== stream || stream.socket !== socket) return;
         retryDelay = 1000;
+        // The monitor frame precedes any buffered sample on every open.
+        if (!sendMonitorInfo(socket)) return;
         flushRaceStream(stream);
       };
       socket.onmessage = function (event) {
@@ -321,6 +375,21 @@ document.body.addEventListener('token-expired', async function () {
 
     connect();
     return stream;
+  }
+
+  // Sends the PM5's details as one {type:'monitor'} frame when they are known.
+  // Returns false only when the send failed and the socket was closed.
+  function sendMonitorInfo(socket) {
+    if (!monitorInfo || !socket || socket.readyState !== WebSocket.OPEN) return true;
+    var frame = { type: 'monitor' };
+    Object.keys(monitorInfo).forEach(function (key) { frame[key] = monitorInfo[key]; });
+    try {
+      socket.send(JSON.stringify(frame));
+      return true;
+    } catch (_) {
+      socket.close();
+      return false;
+    }
   }
 
   function flushRaceStream(stream) {
@@ -350,9 +419,23 @@ document.body.addEventListener('token-expired', async function () {
       elapsed_milliseconds: Math.max(0, Math.round((streamMetrics.elapsedTime - raceBaseline.elapsedTime) * 1000)),
       distance_millimeters: Math.max(0, Math.round((streamMetrics.distance - raceBaseline.distance) * 1000)),
       stroke_rate: Math.round(streamMetrics.strokeRate),
-      power: Math.round(streamMetrics.power),
-      sampled_at: new Date().toISOString()
+      power: Math.round(streamMetrics.power)
     };
+    // A reading the PM5 has not reported is left out (stored NULL), not sent
+    // as 0. A heart rate or drag factor of 0 is the monitor saying it has none.
+    if (typeof streamMetrics.strokeCount === 'number') {
+      sample.stroke_count = Math.max(0, Math.round(streamMetrics.strokeCount - (raceBaseline.strokeCount || 0)));
+    }
+    if (typeof streamMetrics.calories === 'number') {
+      sample.calories = Math.max(0, Math.round(streamMetrics.calories - (raceBaseline.calories || 0)));
+    }
+    if (typeof streamMetrics.heartRate === 'number' && streamMetrics.heartRate > 0) {
+      sample.heart_rate = Math.round(streamMetrics.heartRate);
+    }
+    if (typeof streamMetrics.dragFactor === 'number' && streamMetrics.dragFactor > 0) {
+      sample.drag_factor = Math.round(streamMetrics.dragFactor);
+    }
+    sample.sampled_at = new Date().toISOString();
     activeRaceStream.buffer.push(sample);
     // Lets the race view move our own rower without waiting for the server echo.
     document.dispatchEvent(new CustomEvent('pixelpace:local-telemetry', { detail: sample }));
@@ -794,6 +877,11 @@ document.body.addEventListener('token-expired', async function () {
       metrics.calories = dv.getUint16(def.totalCaloriesOffset, true);
     }
 
+    var dragOffset = typeof def.dragFactorOffset === 'number' ? def.dragFactorOffset : def.dragOffset;
+    if (typeof dragOffset === 'number' && hasBytes(dv, dragOffset, 1)) {
+      metrics.dragFactor = dv.getUint8(dragOffset);
+    }
+
     if (typeof def.strokePowerOffset === 'number' && hasBytes(dv, def.strokePowerOffset, 2)) {
       metrics.power = dv.getUint16(def.strokePowerOffset, true);
     }
@@ -833,6 +921,45 @@ document.body.addEventListener('token-expired', async function () {
     }
   }
 
+  // Decodes a PM5 string characteristic: printable ASCII up to the first NUL,
+  // trimmed and at most PM5_DEVICE_INFO_MAX_LENGTH characters.
+  function decodePm5String(dv) {
+    var text = '';
+    for (var i = 0; dv && i < dv.byteLength; i++) {
+      var code = dv.getUint8(i);
+      if (code === 0) break;
+      if (code >= 0x20 && code <= 0x7e) text += String.fromCharCode(code);
+    }
+    return text.trim().slice(0, PM5_DEVICE_INFO_MAX_LENGTH);
+  }
+
+  // Reads the PM5's serial number, firmware and hardware revision once, best
+  // effort: each one that cannot be read is left out, and null means none
+  // could be. It never throws, so a failed read leaves connecting unchanged.
+  async function readPm5MonitorInfo(server) {
+    var info = {};
+    var found = false;
+    try {
+      var svc = await server.getPrimaryService(concept2DeviceInfoServiceUuid);
+      var keys = Object.keys(pm5DeviceInfoCharacteristics);
+      for (var i = 0; i < keys.length; i++) {
+        try {
+          var ch = await svc.getCharacteristic(pm5DeviceInfoCharacteristics[keys[i]]);
+          var value = decodePm5String(await ch.readValue());
+          if (value) {
+            info[keys[i]] = value;
+            found = true;
+          }
+        } catch (_) {
+          // This detail stays unknown; the others may still be read.
+        }
+      }
+    } catch (err) {
+      console.warn('[PM5] monitor details could not be read:', err);
+    }
+    return found ? info : null;
+  }
+
   connectBtn.addEventListener('click', async function () {
     // In development, check the page first: browsers that do support Web
     // Bluetooth (Chrome included) hide navigator.bluetooth on insecure pages,
@@ -852,7 +979,7 @@ document.body.addEventListener('token-expired', async function () {
     try {
       var device = await navigator.bluetooth.requestDevice({
         filters: [{ services: [concept2DiscoveryServiceUuid] }],
-        optionalServices: [concept2RowingServiceUuid]
+        optionalServices: [concept2RowingServiceUuid, concept2DeviceInfoServiceUuid]
       });
 
       device.addEventListener('gattserverdisconnected', function () {
@@ -860,6 +987,7 @@ document.body.addEventListener('token-expired', async function () {
         hideRowerCanvas();
         showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — Disconnected');
         setPm5Connected(false);
+        monitorInfo = null;
       });
 
       var server = await device.gatt.connect();
@@ -875,6 +1003,10 @@ document.body.addEventListener('token-expired', async function () {
         console.error('[PM5] failed to start live rowing data:', err);
         showConnectionInfo((device.name || 'Concept2 rowing machine') + ' — ' + status + '. Connected, but live rowing data could not be started.');
       }
+
+      monitorInfo = await readPm5MonitorInfo(server);
+      // A race socket that opened before the read finished gets it now.
+      if (activeRaceStream) sendMonitorInfo(activeRaceStream.socket);
     } catch (err) {
       if (err && err.name === 'NotFoundError') {
         showConnectionInfo('No rowing machine selected. Choose a Concept2 rowing machine to connect.');

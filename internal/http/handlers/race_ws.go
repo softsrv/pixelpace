@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -17,6 +18,13 @@ import (
 
 type telemetryIngester interface {
 	Ingest(ctx context.Context, raceID, userID uuid.UUID, sample app.TelemetrySample) error
+	RecordMonitor(ctx context.Context, raceID, userID uuid.UUID, info app.MonitorInfo) error
+}
+
+// inboundEnvelope names an inbound frame's kind. Samples carry no type; a
+// "monitor" frame carries the PM5's details; any other type is dropped.
+type inboundEnvelope struct {
+	Type *string `json:"type"`
 }
 
 // raceParticipation decides who may open a race's live channel and names the
@@ -146,6 +154,30 @@ func (h *RaceWSHandler) readTelemetry(ctx context.Context, conn *websocket.Conn,
 		_, payload, err := conn.Read(ctx)
 		if err != nil {
 			return
+		}
+		var envelope inboundEnvelope
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			continue
+		}
+		if envelope.Type != nil {
+			if *envelope.Type != "monitor" {
+				continue
+			}
+			// Identity comes from the authenticated connection, never the frame.
+			var info app.MonitorInfo
+			if err := json.Unmarshal(payload, &info); err != nil {
+				continue
+			}
+			if err := h.ingester.RecordMonitor(ctx, key.raceID, key.racerID, info); err != nil {
+				if errors.Is(err, app.ErrInvalidMonitorInfo) {
+					slog.WarnContext(ctx, "monitor frame dropped", "error", err)
+					continue
+				}
+				slog.ErrorContext(ctx, "record monitor failed", "error", err)
+				_ = conn.Close(websocket.StatusInternalError, "Telemetry unavailable")
+				return
+			}
+			continue
 		}
 		var sample app.TelemetrySample
 		if err := json.Unmarshal(payload, &sample); err != nil {

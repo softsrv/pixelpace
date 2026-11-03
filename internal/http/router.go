@@ -13,6 +13,7 @@ import (
 
 	"github.com/softsrv/starter/internal/app"
 	"github.com/softsrv/starter/internal/auth"
+	"github.com/softsrv/starter/internal/concept2"
 	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/http/handlers"
 	"github.com/softsrv/starter/internal/http/middleware"
@@ -22,16 +23,22 @@ import (
 
 // RouterConfig holds all dependencies required to build the router.
 type RouterConfig struct {
-	Queries           middleware.UserFetcher
-	Pool              handlers.DBPinger
-	AuthSvc           *app.AuthService
-	UserSvc           *app.UserService
-	RoomSvc           *app.RoomService
-	RaceSvc           *app.RaceService
-	Broadcaster       realtime.Broadcaster
-	QuickMatchSvc     *app.QuickMatchService
-	FriendSvc         *app.FriendService
-	LeaderboardSvc    *app.LeaderboardService
+	Queries        middleware.UserFetcher
+	Pool           handlers.DBPinger
+	AuthSvc        *app.AuthService
+	UserSvc        *app.UserService
+	RoomSvc        *app.RoomService
+	RaceSvc        *app.RaceService
+	Broadcaster    realtime.Broadcaster
+	QuickMatchSvc  *app.QuickMatchService
+	FriendSvc      *app.FriendService
+	LeaderboardSvc *app.LeaderboardService
+	// Concept2Svc stores Concept2 Logbook connections and owns token sealing,
+	// so no handler sees the key. nil disables Concept2: the profile hides the
+	// section and the /profile/concept2/* routes answer 404.
+	Concept2Svc *app.Concept2Service
+	// Concept2Client is the Logbook OAuth client; nil when Concept2 is disabled.
+	Concept2Client    *concept2.Client
 	Renderer          *handlers.TemplateRenderer
 	JWTSecret         string
 	AppBaseURL        string // prefixes shareable links, e.g. room join links
@@ -130,6 +137,17 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	leaderboardH := handlers.NewLeaderboardHandler(cfg.LeaderboardSvc)
 	leaderboardPageH := handlers.NewLeaderboardPageHandler(cfg.LeaderboardSvc, cfg.RoomSvc, cfg.Renderer)
 	profileH := handlers.NewProfileHandler(cfg.AuthSvc, cfg.UserSvc, cfg.Renderer, cfg.Secure)
+	concept2Enabled := cfg.Concept2Svc != nil && cfg.Concept2Client != nil
+	profileH.SetConcept2Enabled(concept2Enabled)
+	// With Concept2 disabled every /profile/concept2/* route answers 404.
+	concept2Panel, concept2Connect, concept2Callback, concept2Disconnect, concept2AutoPost :=
+		http.NotFound, http.NotFound, http.NotFound, http.NotFound, http.NotFound
+	if concept2Enabled {
+		concept2H := handlers.NewConcept2Handler(cfg.Concept2Svc, cfg.Concept2Client, cfg.Renderer, cfg.Secure)
+		concept2Panel, concept2Connect = concept2H.Panel, concept2H.Connect
+		concept2Callback, concept2Disconnect = concept2H.Callback, concept2H.Disconnect
+		concept2AutoPost = concept2H.AutoPost
+	}
 	roomH := handlers.NewRoomHandler(ctx, cfg.RoomSvc, cfg.RaceSvc, cfg.Renderer, cfg.Secure)
 	racePageH := handlers.NewRacePageHandler(cfg.RaceSvc, cfg.Renderer, cfg.DevMode)
 	lobbyH := handlers.NewLobbyHandler(cfg.RoomSvc, cfg.FriendSvc, cfg.Renderer, cfg.AppBaseURL)
@@ -213,6 +231,11 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux.Handle("POST /profile/change-password", verifiedMW(http.HandlerFunc(profileH.ChangePassword)))
 	mux.Handle("POST /profile/display-name", verifiedMW(http.HandlerFunc(profileH.SetDisplayName)))
 	mux.Handle("POST /profile/delete", verifiedMW(http.HandlerFunc(profileH.DeleteAccount)))
+	mux.Handle("GET /profile/concept2", verifiedMW(http.HandlerFunc(concept2Panel)))
+	mux.Handle("GET /profile/concept2/connect", verifiedMW(http.HandlerFunc(concept2Connect)))
+	mux.Handle("GET /profile/concept2/callback", verifiedMW(http.HandlerFunc(concept2Callback)))
+	mux.Handle("POST /profile/concept2/disconnect", verifiedMW(http.HandlerFunc(concept2Disconnect)))
+	mux.Handle("POST /profile/concept2/auto-post", verifiedMW(http.HandlerFunc(concept2AutoPost)))
 
 	mux.Handle("POST /quick-match", verifiedMW(http.HandlerFunc(quickMatchH.Enqueue)))
 	mux.Handle("POST /quick-match/leave", verifiedMW(http.HandlerFunc(quickMatchH.Leave)))

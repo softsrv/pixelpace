@@ -23,7 +23,9 @@ Before running `make dev`, make sure you have:
   cp .env.example .env
   ```
 
-  The app fails fast at startup (exits non-zero) if any of these required variables is missing or empty: `APP_BASE_URL`, `DATABASE_URL`, `JWT_SECRET` (must be at least 32 bytes), `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM_EMAIL`.
+  The app fails fast at startup (exits non-zero) if any of these required variables is missing or empty: `APP_BASE_URL`, `DATABASE_URL`, `JWT_SECRET` (must be at least 32 bytes), `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM_EMAIL`. Note that `JWT_SECRET` also derives the encryption key for Concept2 OAuth tokens at rest; rotating it forces every Concept2 connection to reconnect.
+
+  Optional variables include `CONCEPT2_CLIENT_ID`, `CONCEPT2_CLIENT_SECRET`, and `CONCEPT2_BASE_URL` (defaults to `https://log-dev.concept2.com` until trusted client approval from Concept2; switch to `https://log.concept2.com` after approval). When configuring Concept2 integration, register `<APP_BASE_URL>/profile/concept2/callback` as the OAuth redirect URI with Concept2.
 - **Docker, installed and running.** `make dev` starts the `rnwood/smtp4dev` container for local email testing — SMTP on `localhost:2525`, web UI at [http://localhost:5000](http://localhost:5000).
 - **Required CLI tooling on your `PATH`:**
   - [Go](https://go.dev/) (to build/run the app)

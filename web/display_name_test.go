@@ -19,6 +19,9 @@ func renderTemplate(t *testing.T, page string, data any) string {
 	if err != nil {
 		t.Fatalf("parse base.html: %v", err)
 	}
+	if _, err := base.ParseFS(FS, "templates/partials/*.html"); err != nil {
+		t.Fatalf("parse partials: %v", err)
+	}
 	tmpl, err := base.ParseFS(FS, "templates/"+page)
 	if err != nil {
 		t.Fatalf("parse %s: %v", page, err)
@@ -99,6 +102,9 @@ func renderContent(t *testing.T, page string, data any) string {
 	base, err := template.ParseFS(FS, "templates/base.html")
 	if err != nil {
 		t.Fatalf("parse base.html: %v", err)
+	}
+	if _, err := base.ParseFS(FS, "templates/partials/*.html"); err != nil {
+		t.Fatalf("parse partials: %v", err)
 	}
 	tmpl, err := base.ParseFS(FS, "templates/"+page)
 	if err != nil {

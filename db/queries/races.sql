@@ -15,6 +15,15 @@ SELECT user_id FROM room_participants WHERE room_id = $1 ORDER BY id;
 INSERT INTO race_participants (id, race_id, user_id, status)
 VALUES ($1, $2, $3, 'racing');
 
+-- name: SetRaceParticipantMonitor :execrows
+-- Records the PM5 a participant rows on, only while they are still racing:
+-- once finished or DNF the row's monitor details are fixed.
+UPDATE race_participants SET
+    pm5_serial_number     = sqlc.narg(serial_number),
+    pm5_firmware_version  = sqlc.narg(firmware_version),
+    pm5_hardware_revision = sqlc.narg(hardware_revision)
+WHERE race_id = sqlc.arg(race_id) AND user_id = sqlc.arg(user_id) AND status = 'racing';
+
 -- name: ListRaceRoster :many
 SELECT u.id, u.display_name
 FROM race_participants p JOIN users u ON u.id = p.user_id
@@ -30,8 +39,8 @@ SELECT EXISTS (SELECT 1 FROM race_participants WHERE race_id = $1 AND user_id = 
 
 -- name: InsertRaceTelemetry :exec
 INSERT INTO telemetry_samples
-(id, race_id, user_id, elapsed_milliseconds, distance_millimeters, stroke_rate, power, sampled_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+(id, race_id, user_id, elapsed_milliseconds, distance_millimeters, stroke_rate, power, sampled_at, stroke_count, calories, heart_rate, drag_factor)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);
 
 -- name: ListRaceStandings :many
 SELECT p.id, p.user_id, p.status,

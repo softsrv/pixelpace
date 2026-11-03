@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -233,4 +234,147 @@ func TestIntegration_SetDisplayName_ChangeReclaimAndSelfRecase(t *testing.T) {
 		t.Fatalf("A re-case own name %q: %v", strings.ToUpper(newName), err)
 	}
 	wantStoredName(t, svc, a.ID, strings.ToUpper(newName))
+}
+
+// CLM-10 / CLM-14: Deleting a PixelPace account deletes that user's concept2_connections
+// and concept2_result_posts (if present) row with it (ON DELETE CASCADE), and leaves other users' connections intact.
+func TestIntegration_DeleteAccount_Concept2Cascade(t *testing.T) {
+	pool := testDB(t)
+	queries := db.New(pool)
+	userSvc := app.NewUserService(queries)
+	ctx := context.Background()
+
+	a := newNamedTestUser(t, pool)
+	b := newNamedTestUser(t, pool)
+
+	// Seed concept2_connections row for user A directly via queries.
+	_, err := queries.UpsertConcept2Connection(ctx, db.UpsertConcept2ConnectionParams{
+		UserID:          a.ID,
+		C2UserID:        1001,
+		C2Username:      "athlete_a",
+		AccessTokenEnc:  []byte("enc-access-token-a"),
+		RefreshTokenEnc: []byte("enc-refresh-token-a"),
+		ExpiresAt:       pgtype.Timestamptz{Time: time.Now().Add(time.Hour).UTC(), Valid: true},
+		Scope:           "user:read,results:write",
+		Timezone:        "UTC",
+	})
+	if err != nil {
+		t.Fatalf("seed concept2_connections for A: %v", err)
+	}
+
+	// Seed concept2_connections row for user B directly via queries.
+	_, err = queries.UpsertConcept2Connection(ctx, db.UpsertConcept2ConnectionParams{
+		UserID:          b.ID,
+		C2UserID:        1002,
+		C2Username:      "athlete_b",
+		AccessTokenEnc:  []byte("enc-access-token-b"),
+		RefreshTokenEnc: []byte("enc-refresh-token-b"),
+		ExpiresAt:       pgtype.Timestamptz{Time: time.Now().Add(time.Hour).UTC(), Valid: true},
+		Scope:           "user:read,results:write",
+		Timezone:        "Europe/Berlin",
+	})
+	if err != nil {
+		t.Fatalf("seed concept2_connections for B: %v", err)
+	}
+
+	// Seed concept2_result_posts to verify cascade on user deletion.
+	var raceTypeID uuid.UUID
+	if err := pool.QueryRow(ctx, "SELECT id FROM race_types LIMIT 1").Scan(&raceTypeID); err != nil {
+		t.Fatalf("query race_types: %v", err)
+	}
+
+	roomID, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("uuid.NewV7 room: %v", err)
+	}
+	const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+	var code [6]byte
+	entropy := uuid.Must(uuid.NewV7())
+	for i := range code {
+		code[i] = alphabet[int(entropy[10+i])%len(alphabet)]
+	}
+
+	// Host the room with user B so deleting user A does not cascade to the room or race.
+	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'in_progress', $4)",
+		roomID, raceTypeID, b.ID, string(code[:])); err != nil {
+		t.Fatalf("insert room: %v", err)
+	}
+
+	raceID, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("uuid.NewV7 race: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at) VALUES ($1, $2, $3, NOW())",
+		raceID, roomID, raceTypeID); err != nil {
+		t.Fatalf("insert race: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM concept2_result_posts WHERE race_id = $1", raceID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM races WHERE id = $1", raceID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID)
+	})
+
+	postIDA, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("uuid.NewV7 post A: %v", err)
+	}
+	postIDB, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("uuid.NewV7 post B: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO concept2_result_posts (id, user_id, race_id, status) VALUES ($1, $2, $3, 'pending')", postIDA, a.ID, raceID); err != nil {
+		t.Fatalf("insert concept2_result_posts for A: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "INSERT INTO concept2_result_posts (id, user_id, race_id, status) VALUES ($1, $2, $3, 'pending')", postIDB, b.ID, raceID); err != nil {
+		t.Fatalf("insert concept2_result_posts for B: %v", err)
+	}
+
+	// Delete user A's account via UserService.DeleteAccount.
+	if err := userSvc.DeleteAccount(ctx, a.ID); err != nil {
+		t.Fatalf("DeleteAccount(A): %v", err)
+	}
+
+	// Assert user A's concept2_connections row is gone.
+	var countA int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM concept2_connections WHERE user_id = $1", a.ID).Scan(&countA); err != nil {
+		t.Fatalf("check concept2_connections for A: %v", err)
+	}
+	if countA != 0 {
+		t.Fatalf("expected 0 concept2_connections rows for deleted user A, got %d", countA)
+	}
+
+	// Assert user B's concept2_connections row remains intact.
+	var countB int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM concept2_connections WHERE user_id = $1", b.ID).Scan(&countB); err != nil {
+		t.Fatalf("check concept2_connections for B: %v", err)
+	}
+	if countB != 1 {
+		t.Fatalf("expected 1 concept2_connections row for user B, got %d", countB)
+	}
+
+	// Verify user B's stored connection details remain intact.
+	connB, err := queries.GetConcept2Connection(ctx, b.ID)
+	if err != nil {
+		t.Fatalf("GetConcept2Connection(B): %v", err)
+	}
+	if connB.C2UserID != 1002 || connB.C2Username != "athlete_b" || string(connB.AccessTokenEnc) != "enc-access-token-b" {
+		t.Fatalf("user B connection corrupted: %+v", connB)
+	}
+
+	var postCountA int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM concept2_result_posts WHERE user_id = $1", a.ID).Scan(&postCountA); err != nil {
+		t.Fatalf("check concept2_result_posts for A: %v", err)
+	}
+	if postCountA != 0 {
+		t.Fatalf("expected 0 concept2_result_posts rows for deleted user A, got %d", postCountA)
+	}
+
+	var postCountB int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM concept2_result_posts WHERE user_id = $1", b.ID).Scan(&postCountB); err != nil {
+		t.Fatalf("check concept2_result_posts for B: %v", err)
+	}
+	if postCountB != 1 {
+		t.Fatalf("expected 1 concept2_result_posts row for user B, got %d", postCountB)
+	}
 }

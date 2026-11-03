@@ -12,11 +12,15 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+	// Embed the IANA timezone database: the distroless runtime image has no
+	// zoneinfo, and Concept2 connections store the user's IANA timezone.
+	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/softsrv/starter/internal/app"
+	"github.com/softsrv/starter/internal/concept2"
 	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/email"
 	internalhttp "github.com/softsrv/starter/internal/http"
@@ -81,8 +85,32 @@ func main() {
 	valkeyClient := redis.NewClient(&redis.Options{Addr: cfg.ValkeyAddr})
 	defer func() { _ = valkeyClient.Close() }()
 	broadcaster := realtime.NewValkeyBroadcaster(valkeyClient)
-	raceSvc := app.NewRaceService(queries, pool, broadcaster, app.RaceServiceConfig{})
 	quickMatchSvc := app.NewQuickMatchService(queries, pool, roomSvc, app.QuickMatchServiceConfig{})
+
+	// Concept2 Logbook is optional: without CONCEPT2_CLIENT_ID and
+	// CONCEPT2_CLIENT_SECRET both stay nil and the router hides it.
+	var (
+		concept2Svc    *app.Concept2Service
+		concept2Client *concept2.Client
+	)
+	if cfg.Concept2Enabled() {
+		concept2Client = concept2.New(cfg.Concept2BaseURL, cfg.Concept2ClientID, cfg.Concept2ClientSecret, cfg.Concept2RedirectURL())
+		concept2Svc = app.NewConcept2Service(queries, app.Concept2ServiceConfig{
+			Sealer: concept2.NewSealer([]byte(cfg.JWTSecret)),
+			Client: concept2Client,
+			// Only production posts to Concept2: staging and development
+			// queue and send nothing.
+			DevMode: devModeForAppEnv(cfg.AppEnv),
+		})
+		slog.Info("concept2 logbook enabled", "base_url", cfg.Concept2BaseURL)
+	}
+	raceCfg := app.RaceServiceConfig{}
+	if concept2Svc != nil {
+		// Set only when enabled: a nil *Concept2Service in the interface
+		// would not be a nil ResultPoster.
+		raceCfg.ResultPoster = concept2Svc
+	}
+	raceSvc := app.NewRaceService(queries, pool, broadcaster, raceCfg)
 
 	// ── Templates ─────────────────────────────────────────────────────────────
 	// Build a base template containing only the layout and shared partials.
@@ -117,6 +145,8 @@ func main() {
 		QuickMatchSvc:     quickMatchSvc,
 		FriendSvc:         friendSvc,
 		LeaderboardSvc:    leaderboardSvc,
+		Concept2Svc:       concept2Svc,
+		Concept2Client:    concept2Client,
 		Renderer:          renderer,
 		JWTSecret:         cfg.JWTSecret,
 		AppBaseURL:        cfg.AppBaseURL,
@@ -142,6 +172,18 @@ func main() {
 		slog.Error("resume unfinished races", "error", err)
 	}
 
+	// ── Concept2 result poster ──────────────────────────────────────────────
+	// Posts queued results, including those a previous run left pending.
+	posterDone := make(chan struct{})
+	if concept2Svc != nil {
+		go func() {
+			defer close(posterDone)
+			_ = concept2Svc.RunPoster(cleanupCtx, concept2PostInterval)
+		}()
+	} else {
+		close(posterDone)
+	}
+
 	// ── Graceful shutdown ─────────────────────────────────────────────────────
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -164,8 +206,14 @@ func main() {
 		slog.Error("graceful shutdown", "error", err)
 	}
 
-	// Stop background goroutines (token cleanup, rate-limiter sweepers).
+	// Stop background goroutines (token cleanup, rate-limiter sweepers,
+	// Concept2 poster).
 	stopCleanup()
+	select {
+	case <-posterDone:
+	case <-shutdownCtx.Done():
+		slog.Error("concept2 poster stop timed out", "error", shutdownCtx.Err())
+	}
 
 	// Wait for in-flight race begins to finish or reset their rooms.
 	waitDone := make(chan struct{})
@@ -189,41 +237,55 @@ func main() {
 // ── Config ────────────────────────────────────────────────────────────────────
 
 type config struct {
-	AppEnv             string
-	Port               string
-	AppBaseURL         string
-	DatabaseURL        string
-	ValkeyAddr         string
-	DBMaxConns         int
-	DBMinConns         int
-	TrustedProxyCount  int
-	JWTSecret          string
-	JWTAccessExpiry    time.Duration
-	RefreshTokenExpiry time.Duration
-	BCryptCost         int
-	PasswordMinLen     int
-	SMTPHost           string
-	SMTPPort           string
-	SMTPUsername       string
-	SMTPPassword       string
-	SMTPFromEmail      string
-	SMTPFromName       string
+	AppEnv               string
+	Port                 string
+	AppBaseURL           string
+	DatabaseURL          string
+	ValkeyAddr           string
+	DBMaxConns           int
+	DBMinConns           int
+	TrustedProxyCount    int
+	JWTSecret            string
+	JWTAccessExpiry      time.Duration
+	RefreshTokenExpiry   time.Duration
+	BCryptCost           int
+	PasswordMinLen       int
+	SMTPHost             string
+	SMTPPort             string
+	SMTPUsername         string
+	SMTPPassword         string
+	SMTPFromEmail        string
+	SMTPFromName         string
+	Concept2ClientID     string
+	Concept2ClientSecret string
+	Concept2BaseURL      string
+}
+
+func (c config) Concept2Enabled() bool {
+	return c.Concept2ClientID != "" && c.Concept2ClientSecret != ""
+}
+
+func (c config) Concept2RedirectURL() string {
+	return c.AppBaseURL + "/profile/concept2/callback"
 }
 
 func mustLoadConfig() config {
 	cfg := config{
-		AppEnv:        getEnvOrDefault("APP_ENV", "development"),
-		Port:          getEnvOrDefault("PORT", "8080"),
-		AppBaseURL:    mustGetEnv("APP_BASE_URL"),
-		DatabaseURL:   mustGetEnv("DATABASE_URL"),
-		ValkeyAddr:    getEnvOrDefault("VALKEY_ADDR", "localhost:6379"),
-		JWTSecret:     mustGetEnv("JWT_SECRET"),
-		SMTPHost:      mustGetEnv("SMTP_HOST"),
-		SMTPPort:      mustGetEnv("SMTP_PORT"),
-		SMTPUsername:  os.Getenv("SMTP_USERNAME"),
-		SMTPPassword:  os.Getenv("SMTP_PASSWORD"),
-		SMTPFromEmail: mustGetEnv("SMTP_FROM_EMAIL"),
-		SMTPFromName:  getEnvOrDefault("SMTP_FROM_NAME", "App"),
+		AppEnv:               getEnvOrDefault("APP_ENV", "development"),
+		Port:                 getEnvOrDefault("PORT", "8080"),
+		AppBaseURL:           mustGetEnv("APP_BASE_URL"),
+		DatabaseURL:          mustGetEnv("DATABASE_URL"),
+		ValkeyAddr:           getEnvOrDefault("VALKEY_ADDR", "localhost:6379"),
+		JWTSecret:            mustGetEnv("JWT_SECRET"),
+		SMTPHost:             mustGetEnv("SMTP_HOST"),
+		SMTPPort:             mustGetEnv("SMTP_PORT"),
+		SMTPUsername:         os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
+		SMTPFromEmail:        mustGetEnv("SMTP_FROM_EMAIL"),
+		SMTPFromName:         getEnvOrDefault("SMTP_FROM_NAME", "App"),
+		Concept2ClientID:     os.Getenv("CONCEPT2_CLIENT_ID"),
+		Concept2ClientSecret: os.Getenv("CONCEPT2_CLIENT_SECRET"),
+		Concept2BaseURL:      getEnvOrDefault("CONCEPT2_BASE_URL", "https://log-dev.concept2.com"),
 	}
 
 	if len(cfg.JWTSecret) < 32 {
@@ -286,6 +348,12 @@ func getEnvOrDefault(key, def string) string {
 	return def
 }
 
+// concept2PostInterval is how often the Concept2 poster looks for due posts.
+const concept2PostInterval = 30 * time.Second
+
+// devModeForAppEnv is the single owner of DevMode: every environment except
+// production is DevMode. It turns on dev-only routes, and turns off posting
+// results to Concept2 (Concept2ServiceConfig.DevMode).
 func devModeForAppEnv(appEnv string) bool {
 	return appEnv != "production"
 }

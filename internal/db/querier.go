@@ -14,6 +14,20 @@ import (
 type Querier interface {
 	BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error)
 	BeginRoomRace(ctx context.Context, id uuid.UUID) error
+	// Leases up to max_posts due pending posts: each claimed row is counted as an
+	// attempt and not due again until lease_until, so concurrent posters (SKIP
+	// LOCKED) never claim the same row, and a poster that stops mid-post leaves
+	// the row to be retried once the lease ends. Only posts of a connection that
+	// has auto_post on now and does not need reconnecting are claimed: a post
+	// queued before the user switched auto-post off is not sent, and posts of a
+	// connection that needs reconnecting wait, unclaimed and with attempts
+	// unchanged, until the user reconnects. A post whose user has disconnected
+	// is still claimed, so the poster can settle it.
+	ClaimDueConcept2Posts(ctx context.Context, arg ClaimDueConcept2PostsParams) ([]ClaimDueConcept2PostsRow, error)
+	// Asked immediately before each send: the claimed post is still pending (not
+	// cancelled by a disconnect or by auto-post being switched off since it was
+	// claimed) and its connection still has auto_post on and needs no reconnect.
+	Concept2PostStillSendable(ctx context.Context, arg Concept2PostStillSendableParams) (bool, error)
 	CountRecentPasswordResetsByEmail(ctx context.Context, email string) (int64, error)
 	CountRecentVerificationCodesByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
 	CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) (int64, error)
@@ -24,6 +38,11 @@ type Querier interface {
 	CreateRaceParticipant(ctx context.Context, arg CreateRaceParticipantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecideFriendRequest(ctx context.Context, arg DecideFriendRequestParams) (FriendRequest, error)
+	// Disconnect: deletes the connection and, in the same statement, the user's
+	// pending result posts, so a later reconnect (possibly to another Concept2
+	// account) never sends races finished before it. Posted and failed rows are
+	// kept: results already in the Logbook are left alone.
+	DeleteConcept2Connection(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 	DeleteRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
 	DeleteRoomInvite(ctx context.Context, arg DeleteRoomInviteParams) (int64, error)
@@ -32,12 +51,20 @@ type Querier interface {
 	DeleteStaleVerificationCodes(ctx context.Context) (int64, error)
 	DeleteUserByID(ctx context.Context, id uuid.UUID) error
 	DissolveRoom(ctx context.Context, id uuid.UUID) error
+	// Idempotent: a (user, race) pair already queued is left as it is.
+	EnqueueConcept2ResultPost(ctx context.Context, arg EnqueueConcept2ResultPostParams) (int64, error)
 	EnqueueQuickMatch(ctx context.Context, arg EnqueueQuickMatchParams) error
 	FinishRace(ctx context.Context, arg FinishRaceParams) error
 	FinishRaceParticipant(ctx context.Context, arg FinishRaceParticipantParams) error
 	FinishRaceRoom(ctx context.Context, id uuid.UUID) error
 	FriendshipExists(ctx context.Context, arg FriendshipExistsParams) (bool, error)
 	GetActiveRoomByJoinCode(ctx context.Context, joinCode string) (Room, error)
+	GetConcept2Connection(ctx context.Context, userID uuid.UUID) (Concept2Connection, error)
+	// What one post sends: the participant's recorded finish and PM5 details, the
+	// race target and the user's connection timezone. No row when the user has
+	// since disconnected. The tokens are read with GetConcept2Connection, the
+	// strokes with ListConcept2PostStrokes.
+	GetConcept2PostPayload(ctx context.Context, arg GetConcept2PostPayloadParams) (GetConcept2PostPayloadRow, error)
 	GetFriendRequest(ctx context.Context, id uuid.UUID) (FriendRequest, error)
 	GetOldestRecentVerificationCode(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (PasswordResetToken, error)
@@ -68,6 +95,16 @@ type Querier interface {
 	LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPersonalBestParams) ([]LeaderboardPersonalBestRow, error)
 	LeaveQuickMatch(ctx context.Context, arg LeaveQuickMatchParams) error
 	ListActiveRefreshTokensByUserID(ctx context.Context, userID uuid.UUID) ([]RefreshToken, error)
+	// ── Result posts ─────────────────────────────────────────────────────────────
+	// Every query below is keyed by the post's user_id as well as its id.
+	// The race's finished participants whose connection has auto_post on.
+	// Unconnected and DNF participants are never listed. A connection that needs
+	// reconnecting is still listed: its post waits, unclaimed, until the user
+	// reconnects (ClaimDueConcept2Posts holds it), so no finish is lost.
+	ListConcept2PostCandidates(ctx context.Context, raceID uuid.UUID) ([]uuid.UUID, error)
+	// The post's racer's samples of its race, up to their recorded finish, in
+	// rowing order: the stroke data, splits and totals one post sends.
+	ListConcept2PostStrokes(ctx context.Context, arg ListConcept2PostStrokesParams) ([]ListConcept2PostStrokesRow, error)
 	ListDistanceRaceTypes(ctx context.Context) ([]RaceType, error)
 	ListFriendEntries(ctx context.Context, userIDA uuid.UUID) ([]ListFriendEntriesRow, error)
 	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
@@ -90,6 +127,10 @@ type Querier interface {
 	ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
 	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)
+	MarkConcept2NeedsReconnect(ctx context.Context, userID uuid.UUID) (int64, error)
+	// Fails the post for good: a failed post is never claimed again.
+	MarkConcept2PostFailed(ctx context.Context, arg MarkConcept2PostFailedParams) (int64, error)
+	MarkConcept2PostPosted(ctx context.Context, arg MarkConcept2PostPostedParams) (int64, error)
 	MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) error
 	MarkRaceParticipantDNF(ctx context.Context, id uuid.UUID) error
 	MarkRoomEquipmentReady(ctx context.Context, arg MarkRoomEquipmentReadyParams) (int64, error)
@@ -98,6 +139,13 @@ type Querier interface {
 	MarkVerificationCodeUsed(ctx context.Context, id uuid.UUID) error
 	ReassignRoomHost(ctx context.Context, arg ReassignRoomHostParams) error
 	RecentFinishesByRaceType(ctx context.Context, arg RecentFinishesByRaceTypeParams) ([]RecentFinishesByRaceTypeRow, error)
+	// Keeps the post pending for another attempt at retry_at. A transient failure
+	// never fails a post: only a permanent rejection does (MarkConcept2PostFailed).
+	RecordConcept2PostError(ctx context.Context, arg RecordConcept2PostErrorParams) (int64, error)
+	// Gives back the attempt the claim counted, because nothing was sent: the
+	// post waits, pending and due, until the user reconnects (ClaimDue skips it
+	// while the connection needs reconnecting).
+	RequeueConcept2PostForReconnect(ctx context.Context, arg RequeueConcept2PostForReconnectParams) (int64, error)
 	ResetLoginAttempts(ctx context.Context, id uuid.UUID) error
 	ResetRoomCountdown(ctx context.Context, id uuid.UUID) error
 	ResetRoomEquipmentReadiness(ctx context.Context, roomID uuid.UUID) error
@@ -107,13 +155,26 @@ type Querier interface {
 	// The host starts the race, so only the other participants must be ready.
 	RoomHasUnreadyGuests(ctx context.Context, arg RoomHasUnreadyGuestsParams) (bool, error)
 	RoomParticipantExists(ctx context.Context, arg RoomParticipantExistsParams) (bool, error)
+	// Switching auto-post off also deletes the user's pending result posts in the
+	// same statement, so switching it back on never sends races finished while it
+	// was off (no back-posting). Switching it on deletes nothing.
+	SetConcept2AutoPost(ctx context.Context, arg SetConcept2AutoPostParams) (Concept2Connection, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
+	// Records the PM5 a participant rows on, only while they are still racing:
+	// once finished or DNF the row's monitor details are fixed.
+	SetRaceParticipantMonitor(ctx context.Context, arg SetRaceParticipantMonitorParams) (int64, error)
 	SetRoomRaceStartsAt(ctx context.Context, arg SetRoomRaceStartsAtParams) error
 	SetUserDisplayName(ctx context.Context, arg SetUserDisplayNameParams) error
 	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
+	UpdateConcept2Tokens(ctx context.Context, arg UpdateConcept2TokensParams) (int64, error)
 	UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error
 	UpdateRoomRaceType(ctx context.Context, arg UpdateRoomRaceTypeParams) error
+	// Every query here is keyed by the PixelPace user's id (user_id), so acting
+	// for one user can never read or change another user's connection.
+	// Connect or reconnect: a reconnect overwrites the stored tokens, account and
+	// timezone and clears needs_reconnect. auto_post and connected_at are kept.
+	UpsertConcept2Connection(ctx context.Context, arg UpsertConcept2ConnectionParams) (Concept2Connection, error)
 }
 
 var _ Querier = (*Queries)(nil)

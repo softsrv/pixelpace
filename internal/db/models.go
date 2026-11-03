@@ -11,6 +11,35 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Concept2Connection struct {
+	UserID          uuid.UUID          `json:"user_id"`
+	C2UserID        int64              `json:"c2_user_id"`
+	C2Username      string             `json:"c2_username"`
+	AccessTokenEnc  []byte             `json:"access_token_enc"`
+	RefreshTokenEnc []byte             `json:"refresh_token_enc"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	Scope           string             `json:"scope"`
+	AutoPost        bool               `json:"auto_post"`
+	NeedsReconnect  bool               `json:"needs_reconnect"`
+	Timezone        string             `json:"timezone"`
+	ConnectedAt     pgtype.Timestamptz `json:"connected_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Concept2ResultPost struct {
+	ID            uuid.UUID          `json:"id"`
+	UserID        uuid.UUID          `json:"user_id"`
+	RaceID        uuid.UUID          `json:"race_id"`
+	Status        string             `json:"status"`
+	Attempts      int32              `json:"attempts"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	LastError     pgtype.Text        `json:"last_error"`
+	C2ResultID    pgtype.Int8        `json:"c2_result_id"`
+	PostedAt      pgtype.Timestamptz `json:"posted_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type EmailVerificationCode struct {
 	ID        uuid.UUID          `json:"id"`
 	UserID    uuid.UUID          `json:"user_id"`
@@ -68,6 +97,9 @@ type RaceParticipant struct {
 	Status              string             `json:"status"`
 	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
 	ElapsedMilliseconds pgtype.Int4        `json:"elapsed_milliseconds"`
+	Pm5SerialNumber     pgtype.Text        `json:"pm5_serial_number"`
+	Pm5FirmwareVersion  pgtype.Text        `json:"pm5_firmware_version"`
+	Pm5HardwareRevision pgtype.Text        `json:"pm5_hardware_revision"`
 }
 
 type RaceType struct {
@@ -133,6 +165,10 @@ type TelemetrySample struct {
 	StrokeRate          pgtype.Int4        `json:"stroke_rate"`
 	Power               pgtype.Int4        `json:"power"`
 	SampledAt           pgtype.Timestamptz `json:"sampled_at"`
+	StrokeCount         pgtype.Int4        `json:"stroke_count"`
+	Calories            pgtype.Int4        `json:"calories"`
+	HeartRate           pgtype.Int4        `json:"heart_rate"`
+	DragFactor          pgtype.Int4        `json:"drag_factor"`
 }
 
 type User struct {

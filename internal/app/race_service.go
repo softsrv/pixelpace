@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,18 @@ type RaceServiceConfig struct {
 	RacePollInterval      time.Duration
 	Now                   func() time.Time
 	Sleep                 func(context.Context, time.Duration) error
+	// ResultPoster, when set, is told of each finalized race inside the
+	// finalize transaction, after the finish is recorded. Nil posts nothing.
+	ResultPoster RaceResultPoster
+}
+
+// RaceResultPoster queues a finalized race's results for posting elsewhere.
+// Enqueue runs with the finalize transaction's queries, so what it writes
+// commits with the finish or not at all; it must be idempotent, because a
+// race can be finalized again (Finalize, a resumed Run). An error rolls the
+// finalize back.
+type RaceResultPoster interface {
+	Enqueue(ctx context.Context, q *db.Queries, raceID uuid.UUID) error
 }
 
 // TelemetrySample contains measurements shared by all telemetry sources.
@@ -42,6 +55,10 @@ type TelemetrySample struct {
 	StrokeRate          int32     `json:"stroke_rate"`
 	Power               int32     `json:"power"`
 	SampledAt           time.Time `json:"sampled_at"`
+	StrokeCount         *int32    `json:"stroke_count,omitempty"`
+	Calories            *int32    `json:"calories,omitempty"`
+	HeartRate           *int32    `json:"heart_rate,omitempty"`
+	DragFactor          *int32    `json:"drag_factor,omitempty"`
 }
 
 // RaceStanding contains latest measurements for live standings, or time to
@@ -450,14 +467,29 @@ func (s *RaceService) Ingest(ctx context.Context, raceID, userID uuid.UUID, samp
 	if race.FinishedAt.Valid {
 		return nil
 	}
-	if err := q.InsertRaceTelemetry(ctx, db.InsertRaceTelemetryParams{
-		ID: uuid.Must(uuid.NewV7()), RaceID: raceID, UserID: userID,
+	params := db.InsertRaceTelemetryParams{
+		ID:                  uuid.Must(uuid.NewV7()),
+		RaceID:              raceID,
+		UserID:              userID,
 		ElapsedMilliseconds: pgtype.Int8{Int64: sample.ElapsedMilliseconds, Valid: true},
 		DistanceMillimeters: pgtype.Int8{Int64: sample.DistanceMillimeters, Valid: true},
 		StrokeRate:          pgtype.Int4{Int32: sample.StrokeRate, Valid: true},
 		Power:               pgtype.Int4{Int32: sample.Power, Valid: true},
 		SampledAt:           pgtype.Timestamptz{Time: sample.SampledAt, Valid: true},
-	}); err != nil {
+	}
+	if sample.StrokeCount != nil {
+		params.StrokeCount = pgtype.Int4{Int32: *sample.StrokeCount, Valid: true}
+	}
+	if sample.Calories != nil {
+		params.Calories = pgtype.Int4{Int32: *sample.Calories, Valid: true}
+	}
+	if sample.HeartRate != nil {
+		params.HeartRate = pgtype.Int4{Int32: *sample.HeartRate, Valid: true}
+	}
+	if sample.DragFactor != nil {
+		params.DragFactor = pgtype.Int4{Int32: *sample.DragFactor, Valid: true}
+	}
+	if err := q.InsertRaceTelemetry(ctx, params); err != nil {
 		return fmt.Errorf("insert telemetry: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -465,6 +497,59 @@ func (s *RaceService) Ingest(ctx context.Context, raceID, userID uuid.UUID, samp
 	}
 	if err := s.broadcaster.Publish(ctx, raceID.String(), payload); err != nil {
 		return fmt.Errorf("publish stored telemetry: %w", err)
+	}
+	return nil
+}
+
+// MonitorInfo identifies the PM5 a racer rows on, as the browser read it over
+// Bluetooth. Each field is optional; an empty one is stored as NULL.
+type MonitorInfo struct {
+	SerialNumber     string `json:"serial_number"`
+	FirmwareVersion  string `json:"firmware_version"`
+	HardwareRevision string `json:"hardware_revision"`
+}
+
+// maxMonitorFieldBytes bounds each MonitorInfo field.
+const maxMonitorFieldBytes = 32
+
+// ErrInvalidMonitorInfo reports a monitor field that is too long or holds
+// anything but printable ASCII. Nothing is stored.
+var ErrInvalidMonitorInfo = errors.New("invalid monitor info")
+
+// monitorField trims v and returns it as a nullable column value, or
+// ErrInvalidMonitorInfo when it is oversized or not printable ASCII.
+func monitorField(v string) (pgtype.Text, error) {
+	v = strings.TrimSpace(v)
+	if len(v) > maxMonitorFieldBytes {
+		return pgtype.Text{}, ErrInvalidMonitorInfo
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < 0x20 || v[i] > 0x7e {
+			return pgtype.Text{}, ErrInvalidMonitorInfo
+		}
+	}
+	return pgtype.Text{String: v, Valid: v != ""}, nil
+}
+
+// RecordMonitor stores the PM5 details on userID's participant row in raceID,
+// only while that racer is still racing; after they finish or DNF it changes
+// nothing and returns nil. It never writes telemetry and is idempotent.
+// Callers pass the authenticated racer and the path race, never identity taken
+// from the frame.
+func (s *RaceService) RecordMonitor(ctx context.Context, raceID, userID uuid.UUID, info MonitorInfo) error {
+	params := db.SetRaceParticipantMonitorParams{RaceID: raceID, UserID: userID}
+	var err error
+	if params.SerialNumber, err = monitorField(info.SerialNumber); err != nil {
+		return err
+	}
+	if params.FirmwareVersion, err = monitorField(info.FirmwareVersion); err != nil {
+		return err
+	}
+	if params.HardwareRevision, err = monitorField(info.HardwareRevision); err != nil {
+		return err
+	}
+	if _, err := s.q.SetRaceParticipantMonitor(ctx, params); err != nil {
+		return fmt.Errorf("record monitor: %w", err)
 	}
 	return nil
 }
@@ -608,6 +693,11 @@ func (s *RaceService) settle(ctx context.Context, q *db.Queries, race db.LockRac
 		}
 		if err := q.FinishRaceRoom(ctx, race.RoomID); err != nil {
 			return nil, fmt.Errorf("finish race room: %w", err)
+		}
+		if s.cfg.ResultPoster != nil {
+			if err := s.cfg.ResultPoster.Enqueue(ctx, q, race.ID); err != nil {
+				return nil, fmt.Errorf("enqueue race results: %w", err)
+			}
 		}
 	}
 	return standings, nil

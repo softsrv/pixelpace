@@ -32,6 +32,42 @@ func (f telemetryIngestFunc) Ingest(ctx context.Context, race, user uuid.UUID, s
 	return f(ctx, race, user, sample)
 }
 
+// RecordMonitor accepts and discards monitor frames, for tests about samples.
+func (f telemetryIngestFunc) RecordMonitor(context.Context, uuid.UUID, uuid.UUID, app.MonitorInfo) error {
+	return nil
+}
+
+// recordingIngester reports each call on its channels, so a test sees which
+// path a frame took.
+type recordingIngester struct {
+	samples  chan ingestCall
+	monitors chan monitorCall
+}
+
+type ingestCall struct {
+	race, user uuid.UUID
+	sample     app.TelemetrySample
+}
+
+type monitorCall struct {
+	race, user uuid.UUID
+	info       app.MonitorInfo
+}
+
+func newRecordingIngester() *recordingIngester {
+	return &recordingIngester{samples: make(chan ingestCall, 8), monitors: make(chan monitorCall, 8)}
+}
+
+func (r *recordingIngester) Ingest(_ context.Context, race, user uuid.UUID, sample app.TelemetrySample) error {
+	r.samples <- ingestCall{race, user, sample}
+	return nil
+}
+
+func (r *recordingIngester) RecordMonitor(_ context.Context, race, user uuid.UUID, info app.MonitorInfo) error {
+	r.monitors <- monitorCall{race, user, info}
+	return nil
+}
+
 // participationFunc decides participation; its roster is empty, for tests
 // about the transport rather than who is in the race.
 type participationFunc func(context.Context, uuid.UUID, uuid.UUID) (bool, error)
@@ -316,6 +352,54 @@ func TestRaceWSAuthenticatedIdentityAndDecode(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("no ingest")
 		}
+	}
+}
+
+// CLM-14: a monitor frame reaches RecordMonitor with the authenticated racer
+// and path race whatever identity it carries, and never Ingest; an unknown
+// type reaches neither path; an untyped frame stays a sample. Frames on one
+// socket are handled in order, so a trailing sample proves nothing else ran.
+func TestRaceWSRoutesFramesByType(t *testing.T) {
+	ctx := wsContext(t)
+	user, race := wsUser(), uuid.Must(uuid.NewV7())
+	rec := newRecordingIngester()
+	srv := wsServer(t, user, handlers.NewRaceWSHandler(rec, allowParticipants, realtime.NewFake()))
+	conn := wsDial(t, ctx, srv.URL+"/races/"+race.String()+"/ws", wsHeaders(t, user))
+	spoofed := uuid.Must(uuid.NewV7()).String()
+	for _, frame := range []string{
+		`{"type":"monitor","user_id":"` + spoofed + `","race_id":"` + spoofed + `","serial_number":"431234567","firmware_version":"171","hardware_revision":"907"}`,
+		`{"type":"telemetry","power":999}`,
+		`{"type":null,"power":5}`,
+		`{"power":7}`,
+	} {
+		if err := conn.Write(ctx, websocket.MessageText, []byte(frame)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case got := <-rec.monitors:
+		want := app.MonitorInfo{SerialNumber: "431234567", FirmwareVersion: "171", HardwareRevision: "907"}
+		if got.race != race || got.user != user.ID || got.info != want {
+			t.Fatalf("monitor = %+v, want race %s user %s info %+v", got, race, user.ID, want)
+		}
+	case <-ctx.Done():
+		t.Fatal("monitor frame not recorded")
+	}
+	// A null type is no type: the frame is a sample, as are untyped frames.
+	for _, power := range []int32{5, 7} {
+		select {
+		case got := <-rec.samples:
+			if got.race != race || got.user != user.ID || got.sample.Power != power {
+				t.Fatalf("sample = %+v, want power %d (the unknown type must be dropped)", got, power)
+			}
+		case <-ctx.Done():
+			t.Fatalf("sample with power %d not ingested", power)
+		}
+	}
+	select {
+	case got := <-rec.monitors:
+		t.Fatalf("extra monitor call %+v", got)
+	default:
 	}
 }
 

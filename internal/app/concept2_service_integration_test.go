@@ -1357,7 +1357,8 @@ func TestIntegration_Concept2Poster_DateInConnectionTimezone(t *testing.T) {
 }
 
 // A post queued while auto_post was on is not sent once the user switches it
-// off: the claim re-reads the toggle. Switching it back on sends it.
+// off: switching off withdraws the user's pending posts. Switching it back on
+// sends nothing for races finished before (no back-posting).
 func TestIntegration_Concept2Poster_AutoPostOffAfterQueueingSendsNothing(t *testing.T) {
 	clock := newTestClock()
 	lb := newScriptedLogbook(t)
@@ -1377,17 +1378,151 @@ func TestIntegration_Concept2Poster_AutoPostOffAfterQueueingSendsNothing(t *test
 	if n := postDue(t, poster); n != 0 {
 		t.Fatalf("PostDue with auto_post off = %d, want 0", n)
 	}
-	if got := lb.received(""); len(got) != 0 {
-		t.Fatalf("Logbook got %d requests with auto_post off, want 0", len(got))
-	}
-	if p := postStateOf(t, f.pool, f.race.ID); p.Status != "pending" || p.Attempts != 0 {
-		t.Fatalf("post with auto_post off = %+v, want pending and unclaimed", p)
+	if got := resultPosts(t, f.pool, f.race.ID); len(got) != 0 {
+		t.Fatalf("posts after auto_post off = %+v, want none pending", got)
 	}
 	if _, err := poster.SetAutoPost(ctx, f.users[0], true); err != nil {
 		t.Fatal(err)
 	}
+	clock.Advance(time.Hour)
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue after auto_post back on = %d, want 0 (no back-posting)", n)
+	}
+	if got := lb.received(""); len(got) != 0 {
+		t.Fatalf("Logbook got %d requests after off then on, want 0", len(got))
+	}
+}
+
+// Switching auto_post on leaves the user's pending posts alone.
+func TestIntegration_Concept2Poster_AutoPostOnKeepsPendingPosts(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "already-on")
+	})
+	if _, err := poster.SetAutoPost(context.Background(), f.users[0], true); err != nil {
+		t.Fatal(err)
+	}
 	if n := postDue(t, poster); n != 1 {
-		t.Fatalf("PostDue after auto_post back on = %d, want 1", n)
+		t.Fatalf("PostDue = %d, want 1", n)
+	}
+}
+
+// toggleOnRefresh is a Concept2 client that runs onRefresh (the user acting
+// mid-pass) while the poster refreshes a token, after the claim and before
+// the send.
+type toggleOnRefresh struct {
+	app.Concept2ResultClient
+	onRefresh func()
+}
+
+func (c toggleOnRefresh) RefreshContext(ctx context.Context, refreshToken string) (*concept2.Token, error) {
+	c.onRefresh()
+	return c.Concept2ResultClient.RefreshContext(ctx, refreshToken)
+}
+
+// A post already claimed when the user switches auto_post off, or
+// disconnects, is not sent: the poster re-checks it immediately before the
+// send.
+func TestIntegration_Concept2Poster_WithdrawnBetweenClaimAndSendIsNotSent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		act  func(ctx context.Context, svc *app.Concept2Service, userID uuid.UUID) error
+	}{
+		{"auto_post off", func(ctx context.Context, svc *app.Concept2Service, userID uuid.UUID) error {
+			_, err := svc.SetAutoPost(ctx, userID, false)
+			return err
+		}},
+		{"disconnect", func(ctx context.Context, svc *app.Concept2Service, userID uuid.UUID) error {
+			return svc.Disconnect(ctx, userID)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := newTestClock()
+			lb := newScriptedLogbook(t)
+			lb.tokens = []scriptedAnswer{{http.StatusOK, `{"access_token":"new-access","refresh_token":"rotated-refresh","expires_in":7200}`}}
+			ctx := context.Background()
+			var poster *app.Concept2Service
+			_ = finishedRace(t, nil, func(f *raceFixture) {
+				user := f.users[0]
+				pool := f.pool
+				poster = posterFor(pool, lb.URL, clock, func(cfg *app.Concept2ServiceConfig) {
+					cfg.Client = toggleOnRefresh{Concept2ResultClient: cfg.Client, onRefresh: func() {
+						if err := tc.act(ctx, newConcept2Service(pool), user); err != nil {
+							t.Error(err)
+						}
+					}}
+				})
+				f.withResultPoster(poster)
+				connectConcept2(t, pool, user, "in-flight")
+				if _, err := pool.Exec(ctx,
+					"UPDATE concept2_connections SET expires_at = NOW() - interval '1 hour' WHERE user_id = $1", user); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if n := postDue(t, poster); n != 0 {
+				t.Fatalf("PostDue = %d, want 0", n)
+			}
+			if got := lb.received(resultsPath); len(got) != 0 {
+				t.Fatalf("Logbook got %d results after the post was withdrawn mid-pass, want 0", len(got))
+			}
+		})
+	}
+}
+
+// Disconnecting withdraws the user's pending posts, so reconnecting (here to
+// a different Concept2 account) never sends races finished before it.
+// Posted results are kept.
+func TestIntegration_Concept2Poster_DisconnectWithdrawsPendingPosts(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	ctx := context.Background()
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "first-account")
+	})
+	if err := poster.Disconnect(ctx, f.users[0]); err != nil {
+		t.Fatal(err)
+	}
+	if got := resultPosts(t, f.pool, f.race.ID); len(got) != 0 {
+		t.Fatalf("posts after disconnect = %+v, want the pending post withdrawn", got)
+	}
+	if _, err := newConcept2Service(f.pool).SaveConnection(ctx, f.users[0], grantFor("second-account", 9999, "UTC")); err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Hour)
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue after reconnect = %d, want 0", n)
+	}
+	if got := lb.received(""); len(got) != 0 {
+		t.Fatalf("Logbook got %d requests after reconnect, want 0", len(got))
+	}
+}
+
+// Disconnecting keeps a user's posted results: only pending posts go.
+func TestIntegration_Concept2Poster_DisconnectKeepsPostedResults(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	ctx := context.Background()
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "posted-then-gone")
+	})
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("PostDue = %d, want 1", n)
+	}
+	if err := poster.Disconnect(ctx, f.users[0]); err != nil {
+		t.Fatal(err)
+	}
+	if got := resultPosts(t, f.pool, f.race.ID); len(got) != 1 || got[0].Status != "posted" {
+		t.Fatalf("posts after disconnect = %+v, want the posted row kept", got)
 	}
 }
 

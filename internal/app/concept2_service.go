@@ -228,12 +228,18 @@ func (s *Concept2Service) postOne(ctx context.Context, post db.ClaimDueConcept2P
 		}
 		access, refreshed = token, true
 	}
+	if ok, err := s.stillSendable(ctx, post); !ok || err != nil {
+		return false, err
+	}
 	c2ResultID, err := s.cfg.Client.PostResult(ctx, string(access), result)
 	if errors.Is(err, concept2.ErrUnauthorized) && !refreshed {
 		// The Logbook refused a token that had not expired: refresh it once.
 		token, done, rerr := s.refreshTokens(ctx, post, conn)
 		if done || rerr != nil {
 			return false, rerr
+		}
+		if ok, serr := s.stillSendable(ctx, post); !ok || serr != nil {
+			return false, serr
 		}
 		c2ResultID, err = s.cfg.Client.PostResult(ctx, string(token), result)
 	}
@@ -257,6 +263,21 @@ func (s *Concept2Service) postOne(ctx context.Context, post db.ClaimDueConcept2P
 		return true, fmt.Errorf("mark concept2 post posted: %w", err)
 	}
 	return true, nil
+}
+
+// stillSendable re-reads, immediately before a send, whether the claimed post
+// may still go out: the user may have switched auto-post off or disconnected
+// (both delete their pending posts) since the claim. A post that may not is
+// left as it is and nothing is sent.
+func (s *Concept2Service) stillSendable(ctx context.Context, post db.ClaimDueConcept2PostsRow) (bool, error) {
+	ok, err := s.q.Concept2PostStillSendable(ctx, db.Concept2PostStillSendableParams{ID: post.ID, UserID: post.UserID})
+	if err != nil {
+		return false, fmt.Errorf("re-check concept2 post before sending: %w", err)
+	}
+	if !ok {
+		slog.InfoContext(ctx, "concept2 result post withdrawn before sending", "post_id", post.ID, "user_id", post.UserID)
+	}
+	return ok, nil
 }
 
 // permanentLogbookError reports whether a Logbook status means the same post
@@ -681,8 +702,10 @@ func (s *Concept2Service) SaveConnection(ctx context.Context, userID uuid.UUID, 
 	return toConcept2Connection(row), nil
 }
 
-// Disconnect deletes userID's connection. It is idempotent: disconnecting a
-// user who is not connected succeeds.
+// Disconnect deletes userID's connection and their pending result posts, so a
+// reconnect never sends races finished before it; results already posted are
+// left alone. It is idempotent: disconnecting a user who is not connected
+// succeeds.
 func (s *Concept2Service) Disconnect(ctx context.Context, userID uuid.UUID) error {
 	if _, err := s.q.DeleteConcept2Connection(ctx, userID); err != nil {
 		return fmt.Errorf("delete concept2 connection: %w", err)
@@ -690,7 +713,9 @@ func (s *Concept2Service) Disconnect(ctx context.Context, userID uuid.UUID) erro
 	return nil
 }
 
-// SetAutoPost updates the auto_post preference for userID.
+// SetAutoPost updates the auto_post preference for userID. Switching it off
+// deletes their pending result posts, so switching it back on posts only
+// races finalized afterwards.
 func (s *Concept2Service) SetAutoPost(ctx context.Context, userID uuid.UUID, autoPost bool) (Concept2Connection, error) {
 	row, err := s.q.SetConcept2AutoPost(ctx, db.SetConcept2AutoPostParams{
 		UserID:   userID,

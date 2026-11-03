@@ -24,6 +24,10 @@ type Querier interface {
 	// unchanged, until the user reconnects. A post whose user has disconnected
 	// is still claimed, so the poster can settle it.
 	ClaimDueConcept2Posts(ctx context.Context, arg ClaimDueConcept2PostsParams) ([]ClaimDueConcept2PostsRow, error)
+	// Asked immediately before each send: the claimed post is still pending (not
+	// cancelled by a disconnect or by auto-post being switched off since it was
+	// claimed) and its connection still has auto_post on and needs no reconnect.
+	Concept2PostStillSendable(ctx context.Context, arg Concept2PostStillSendableParams) (bool, error)
 	CountRecentPasswordResetsByEmail(ctx context.Context, email string) (int64, error)
 	CountRecentVerificationCodesByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
 	CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) (int64, error)
@@ -34,6 +38,10 @@ type Querier interface {
 	CreateRaceParticipant(ctx context.Context, arg CreateRaceParticipantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecideFriendRequest(ctx context.Context, arg DecideFriendRequestParams) (FriendRequest, error)
+	// Disconnect: deletes the connection and, in the same statement, the user's
+	// pending result posts, so a later reconnect (possibly to another Concept2
+	// account) never sends races finished before it. Posted and failed rows are
+	// kept: results already in the Logbook are left alone.
 	DeleteConcept2Connection(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 	DeleteRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) ([]uuid.UUID, error)
@@ -147,6 +155,9 @@ type Querier interface {
 	// The host starts the race, so only the other participants must be ready.
 	RoomHasUnreadyGuests(ctx context.Context, arg RoomHasUnreadyGuestsParams) (bool, error)
 	RoomParticipantExists(ctx context.Context, arg RoomParticipantExistsParams) (bool, error)
+	// Switching auto-post off also deletes the user's pending result posts in the
+	// same statement, so switching it back on never sends races finished while it
+	// was off (no back-posting). Switching it on deletes nothing.
 	SetConcept2AutoPost(ctx context.Context, arg SetConcept2AutoPostParams) (Concept2Connection, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
 	// Records the PM5 a participant rows on, only while they are still racing:

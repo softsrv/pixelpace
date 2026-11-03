@@ -78,10 +78,43 @@ func (q *Queries) ClaimDueConcept2Posts(ctx context.Context, arg ClaimDueConcept
 	return items, nil
 }
 
-const deleteConcept2Connection = `-- name: DeleteConcept2Connection :execrows
-DELETE FROM concept2_connections WHERE user_id = $1
+const concept2PostStillSendable = `-- name: Concept2PostStillSendable :one
+SELECT EXISTS (
+    SELECT 1
+    FROM concept2_result_posts p
+    JOIN concept2_connections c ON c.user_id = p.user_id
+    WHERE p.id = $1 AND p.user_id = $2
+      AND p.status = 'pending' AND c.auto_post AND NOT c.needs_reconnect
+)::boolean AS sendable
 `
 
+type Concept2PostStillSendableParams struct {
+	ID     uuid.UUID `json:"id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+// Asked immediately before each send: the claimed post is still pending (not
+// cancelled by a disconnect or by auto-post being switched off since it was
+// claimed) and its connection still has auto_post on and needs no reconnect.
+func (q *Queries) Concept2PostStillSendable(ctx context.Context, arg Concept2PostStillSendableParams) (bool, error) {
+	row := q.db.QueryRow(ctx, concept2PostStillSendable, arg.ID, arg.UserID)
+	var sendable bool
+	err := row.Scan(&sendable)
+	return sendable, err
+}
+
+const deleteConcept2Connection = `-- name: DeleteConcept2Connection :execrows
+WITH cancelled AS (
+    DELETE FROM concept2_result_posts p
+    WHERE p.user_id = $1 AND p.status = 'pending'
+)
+DELETE FROM concept2_connections c WHERE c.user_id = $1
+`
+
+// Disconnect: deletes the connection and, in the same statement, the user's
+// pending result posts, so a later reconnect (possibly to another Concept2
+// account) never sends races finished before it. Posted and failed rows are
+// kept: results already in the Logbook are left alone.
 func (q *Queries) DeleteConcept2Connection(ctx context.Context, userID uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteConcept2Connection, userID)
 	if err != nil {
@@ -411,9 +444,14 @@ func (q *Queries) RequeueConcept2PostForReconnect(ctx context.Context, arg Reque
 }
 
 const setConcept2AutoPost = `-- name: SetConcept2AutoPost :one
-UPDATE concept2_connections
+WITH cancelled AS (
+    DELETE FROM concept2_result_posts p
+    WHERE p.user_id = $2 AND p.status = 'pending'
+      AND NOT $1::boolean
+)
+UPDATE concept2_connections c
 SET auto_post = $1, updated_at = NOW()
-WHERE user_id = $2
+WHERE c.user_id = $2
 RETURNING user_id, c2_user_id, c2_username, access_token_enc, refresh_token_enc, expires_at, scope, auto_post, needs_reconnect, timezone, connected_at, updated_at
 `
 
@@ -422,6 +460,9 @@ type SetConcept2AutoPostParams struct {
 	UserID   uuid.UUID `json:"user_id"`
 }
 
+// Switching auto-post off also deletes the user's pending result posts in the
+// same statement, so switching it back on never sends races finished while it
+// was off (no back-posting). Switching it on deletes nothing.
 func (q *Queries) SetConcept2AutoPost(ctx context.Context, arg SetConcept2AutoPostParams) (Concept2Connection, error) {
 	row := q.db.QueryRow(ctx, setConcept2AutoPost, arg.AutoPost, arg.UserID)
 	var i Concept2Connection

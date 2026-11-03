@@ -29,7 +29,15 @@ RETURNING *;
 SELECT * FROM concept2_connections WHERE user_id = sqlc.arg(user_id) LIMIT 1;
 
 -- name: DeleteConcept2Connection :execrows
-DELETE FROM concept2_connections WHERE user_id = sqlc.arg(user_id);
+-- Disconnect: deletes the connection and, in the same statement, the user's
+-- pending result posts, so a later reconnect (possibly to another Concept2
+-- account) never sends races finished before it. Posted and failed rows are
+-- kept: results already in the Logbook are left alone.
+WITH cancelled AS (
+    DELETE FROM concept2_result_posts p
+    WHERE p.user_id = sqlc.arg(user_id) AND p.status = 'pending'
+)
+DELETE FROM concept2_connections c WHERE c.user_id = sqlc.arg(user_id);
 
 -- name: UpdateConcept2Tokens :execrows
 UPDATE concept2_connections SET
@@ -45,9 +53,17 @@ UPDATE concept2_connections SET needs_reconnect = true, updated_at = NOW()
 WHERE user_id = sqlc.arg(user_id);
 
 -- name: SetConcept2AutoPost :one
-UPDATE concept2_connections
+-- Switching auto-post off also deletes the user's pending result posts in the
+-- same statement, so switching it back on never sends races finished while it
+-- was off (no back-posting). Switching it on deletes nothing.
+WITH cancelled AS (
+    DELETE FROM concept2_result_posts p
+    WHERE p.user_id = sqlc.arg(user_id) AND p.status = 'pending'
+      AND NOT sqlc.arg(auto_post)::boolean
+)
+UPDATE concept2_connections c
 SET auto_post = sqlc.arg(auto_post), updated_at = NOW()
-WHERE user_id = sqlc.arg(user_id)
+WHERE c.user_id = sqlc.arg(user_id)
 RETURNING *;
 
 -- ── Result posts ─────────────────────────────────────────────────────────────
@@ -98,6 +114,18 @@ WHERE id IN (
     FOR UPDATE SKIP LOCKED
 )
 RETURNING id, user_id, race_id, attempts;
+
+-- name: Concept2PostStillSendable :one
+-- Asked immediately before each send: the claimed post is still pending (not
+-- cancelled by a disconnect or by auto-post being switched off since it was
+-- claimed) and its connection still has auto_post on and needs no reconnect.
+SELECT EXISTS (
+    SELECT 1
+    FROM concept2_result_posts p
+    JOIN concept2_connections c ON c.user_id = p.user_id
+    WHERE p.id = sqlc.arg(id) AND p.user_id = sqlc.arg(user_id)
+      AND p.status = 'pending' AND c.auto_post AND NOT c.needs_reconnect
+)::boolean AS sendable;
 
 -- name: GetConcept2PostPayload :one
 -- What one post sends: the participant's recorded finish and PM5 details, the

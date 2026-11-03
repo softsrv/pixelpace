@@ -6,12 +6,14 @@ SMTP4DEV_SMTP    := 2525
 SMTP4DEV_WEB     := 5000
 VALKEY_NAME      := $(APP_NAME)-valkey
 VALKEY_PORT      := 6379
+DEV_NAME         := $(APP_NAME)-dev
+DEV_IMAGE        := $(APP_NAME)-dev
 
 # Load .env if present (for local dev convenience)
 -include .env
 export
 
-.PHONY: dev run build test fmt lint \
+.PHONY: dev dev-deps dev-container dev-logs dev-stop run build test fmt lint \
         daisyui-install pixi-install tailwind tailwind-watch \
         smtp4dev smtp4dev-stop valkey valkey-stop \
         migrate-up migrate-down migrate-create migrate-status \
@@ -20,9 +22,49 @@ export
 
 ## ── Development ─────────────────────────────────────────────────────────────
 
-# Full hot-reload: smtp4dev container + Go (air) + Tailwind watch in parallel
-dev: smtp4dev valkey migrate-up
-	$(MAKE) -j2 air tailwind-watch
+# Hot reload in Docker: starts smtp4dev and Valkey, applies migrations, then
+# runs air in a detached container with the source tree mounted at /src. air
+# rebuilds the CSS and the binary on every change. Prints only the container
+# ID; follow the output with `make dev-logs` and stop it with `make dev-stop`.
+dev: dev-deps
+	@$(MAKE) --no-print-directory -s dev-container
+
+# Quiet on success; prints everything if a step fails.
+dev-deps:
+	@out=$$($(MAKE) --no-print-directory -s smtp4dev valkey migrate-up 2>&1) || { echo "$$out" >&2; exit 1; }
+
+# Inside the container "localhost" is the container itself, so services the
+# .env points at on this machine are reached through host.docker.internal.
+dockerhost = $(subst 127.0.0.1,host.docker.internal,$(subst localhost,host.docker.internal,$(1)))
+
+DEV_ENV_VARS := APP_ENV PORT APP_BASE_URL TRUSTED_PROXY_COUNT \
+                DATABASE_URL DB_MAX_CONNS DB_MIN_CONNS VALKEY_ADDR \
+                JWT_SECRET JWT_ACCESS_EXPIRY REFRESH_TOKEN_EXPIRY \
+                BCRYPT_COST PASSWORD_MIN_LENGTH \
+                SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD SMTP_FROM_EMAIL SMTP_FROM_NAME \
+                CONCEPT2_CLIENT_ID CONCEPT2_CLIENT_SECRET CONCEPT2_BASE_URL
+
+dev-container: export DATABASE_URL := $(call dockerhost,$(DATABASE_URL))
+dev-container: export VALKEY_ADDR := $(call dockerhost,$(or $(VALKEY_ADDR),localhost:$(VALKEY_PORT)))
+dev-container: export SMTP_HOST := $(call dockerhost,$(SMTP_HOST))
+dev-container:
+	@docker build -q -t $(DEV_IMAGE) - < Dockerfile.dev >/dev/null
+	@docker rm -fv $(DEV_NAME) >/dev/null 2>&1 || true
+	@docker run -d --init --name $(DEV_NAME) \
+	  --add-host=host.docker.internal:host-gateway \
+	  -p $(or $(PORT),8080):$(or $(PORT),8080) \
+	  -v "$(CURDIR)":/src \
+	  -v /src/tmp \
+	  -v $(APP_NAME)-dev-gomod:/go/pkg/mod \
+	  -v $(APP_NAME)-dev-gocache:/root/.cache/go-build \
+	  $(addprefix -e ,$(DEV_ENV_VARS)) \
+	  $(DEV_IMAGE)
+
+dev-logs:
+	docker logs -f $(DEV_NAME)
+
+dev-stop:
+	docker rm -fv $(DEV_NAME) 2>/dev/null || true
 
 smtp4dev:
 	@if [ -z "$$(docker ps -q -f name=^$(SMTP4DEV_NAME)$$)" ]; then \

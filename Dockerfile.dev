@@ -1,0 +1,27 @@
+# Development image for `make dev`: the Go toolchain, air and the Tailwind CLI.
+# The source tree is bind-mounted at /src at run time, so nothing is copied in;
+# air watches the mount, rebuilds the CSS and the binary, and restarts the app.
+FROM golang:1.27.2-alpine
+
+RUN go install github.com/air-verse/air@v1.67.4
+
+# Tailwind CSS standalone CLI, pinned and checksummed like the production image.
+RUN apk add --no-cache curl libstdc++ && \
+    ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ]; then \
+        TW_ARCH="arm64-musl"; \
+        TW_HASH="9c106e815ce7ea99a65f91c13be2c51f00388dd3c0127c7a13a38f76cd1e26aa"; \
+    else \
+        TW_ARCH="x64-musl"; \
+        TW_HASH="d861210e7c772e3b8a8b302d51bd4c8e2ab2e6f5dcb7545b16da6e9676c99079"; \
+    fi && \
+    curl -fsSL "https://github.com/tailwindlabs/tailwindcss/releases/download/v4.3.0/tailwindcss-linux-${TW_ARCH}" \
+         -o /usr/local/bin/tailwindcss && \
+    echo "${TW_HASH}  /usr/local/bin/tailwindcss" | sha256sum -c && \
+    chmod +x /usr/local/bin/tailwindcss
+
+WORKDIR /src
+
+EXPOSE 8080
+
+CMD ["air"]

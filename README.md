@@ -10,7 +10,14 @@ Run the app locally for development with a single command:
 make dev
 ```
 
-`make dev` applies all pending database migrations (via [golang-migrate](https://github.com/golang-migrate/migrate)) against `$DATABASE_URL`, then starts the dev watchers in parallel: [air](https://github.com/air-verse/air) for Go hot-reload, a Tailwind CSS watch build, and the `smtp4dev` mail-catcher container. Re-running `make dev` is safe — `migrate ... up` is a no-op once the schema is already at head.
+`make dev` starts the `smtp4dev` mail-catcher and Valkey containers, applies all pending database migrations (via [golang-migrate](https://github.com/golang-migrate/migrate)) against `$DATABASE_URL`, then runs the app in a detached Docker container (`app-dev`, built from `Dockerfile.dev`) and prints its container ID. The source tree is mounted into the container, where [air](https://github.com/air-verse/air) rebuilds the Tailwind CSS and the Go binary on every change to Go, template, CSS or JS files and restarts the app on [http://localhost:8080](http://localhost:8080). Re-running `make dev` is safe: it replaces the running container, and `migrate ... up` is a no-op once the schema is already at head.
+
+```sh
+make dev-logs   # follow the app and build output
+make dev-stop   # stop and remove the app container
+```
+
+Inside the container, `localhost` in `DATABASE_URL`, `VALKEY_ADDR` and `SMTP_HOST` is rewritten to `host.docker.internal`, so services running on your machine stay reachable.
 
 ### Prerequisites
 
@@ -26,12 +33,10 @@ Before running `make dev`, make sure you have:
   The app fails fast at startup (exits non-zero) if any of these required variables is missing or empty: `APP_BASE_URL`, `DATABASE_URL`, `JWT_SECRET` (must be at least 32 bytes), `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM_EMAIL`. Note that `JWT_SECRET` also derives the encryption key for Concept2 OAuth tokens at rest; rotating it forces every Concept2 connection to reconnect.
 
   Optional variables include `CONCEPT2_CLIENT_ID`, `CONCEPT2_CLIENT_SECRET`, and `CONCEPT2_BASE_URL` (defaults to `https://log-dev.concept2.com` until trusted client approval from Concept2; switch to `https://log.concept2.com` after approval). When configuring Concept2 integration, register `<APP_BASE_URL>/profile/concept2/callback` as the OAuth redirect URI with Concept2.
-- **Docker, installed and running.** `make dev` starts the `rnwood/smtp4dev` container for local email testing — SMTP on `localhost:2525`, web UI at [http://localhost:5000](http://localhost:5000).
+- **Docker, installed and running.** `make dev` runs the app itself in a container, and starts the `rnwood/smtp4dev` container for local email testing — SMTP on `localhost:2525`, web UI at [http://localhost:5000](http://localhost:5000).
 - **Required CLI tooling on your `PATH`:**
-  - [Go](https://go.dev/) (to build/run the app)
   - [`migrate`](https://github.com/golang-migrate/migrate) (golang-migrate CLI, used by `make migrate-up`)
-  - [`air`](https://github.com/air-verse/air) (Go hot-reload)
-  - [`tailwindcss`](https://tailwindcss.com/) (CSS watch/build)
+  - [Go](https://go.dev/) and [`tailwindcss`](https://tailwindcss.com/) only for running tests or `make run`/`make tailwind` outside Docker; `make dev` uses the copies in the dev image
 
 ## Running with Docker Compose
 

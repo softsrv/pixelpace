@@ -3,12 +3,14 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/main ./cmd/app"
-  bin = "./tmp/main"
-  full_bin = "./tmp/main"
-  include_ext = ["go", "html", "css"]
-  exclude_dir = ["tmp", "vendor", "web/static/css/dist"]
-  delay = 1000
+  # Static files are embedded in the binary, so the CSS is rebuilt first and
+  # every change to Go, templates, CSS or JS needs a fresh build to show up.
+  cmd = "tailwindcss -i ./web/static/css/app.css -o ./web/static/css/dist/app.css --minify && go build -o ./tmp/main ./cmd/app"
+  entrypoint = ["./tmp/main"]
+  include_ext = ["go", "html", "css", "js", "mjs"]
+  exclude_dir = ["tmp", "bin", "vendor", "web/static/css/dist", ".git", ".local"]
+  exclude_regex = ["_test\\.go$", "\\.test\\.mjs$"]
+  delay = 500
 
 [log]
   time = true

@@ -17,6 +17,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/softsrv/starter/internal/app"
@@ -30,6 +31,10 @@ import (
 )
 
 func main() {
+	if err := loadConfigFile(); err != nil {
+		slog.Error("load config file", "error", err)
+		os.Exit(1)
+	}
 	cfg := mustLoadConfig()
 	setupLogger(cfg.AppEnv)
 
@@ -267,6 +272,27 @@ func (c config) Concept2Enabled() bool {
 
 func (c config) Concept2RedirectURL() string {
 	return c.AppBaseURL + "/profile/concept2/callback"
+}
+
+// defaultConfigFile is the dotenv file read when CONFIG_FILE is not set.
+const defaultConfigFile = ".env"
+
+// loadConfigFile reads the dotenv config file into the process environment.
+// CONFIG_FILE names the file, which must then exist; unset or empty, ./.env is
+// read if it is there. Variables already set in the environment win over the
+// file, so a single value can still be overridden at launch.
+func loadConfigFile() error {
+	path := os.Getenv("CONFIG_FILE")
+	if path == "" {
+		if _, err := os.Stat(defaultConfigFile); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		path = defaultConfigFile
+	}
+	if err := godotenv.Load(path); err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	return nil
 }
 
 func mustLoadConfig() config {

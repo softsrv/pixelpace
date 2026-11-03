@@ -11,8 +11,13 @@ services:
   app:
     image: trriplejay/pixelpace:${PIXELPACE_TAG:-latest}
     build: .
-    env_file: .env
+    # The app reads its settings from this dotenv file, mounted where the
+    # image's CONFIG_FILE points. PIXELPACE_CONFIG picks a different host
+    # file. The variables below override the file.
+    volumes:
+      - ${PIXELPACE_CONFIG:-./.env}:/config/.env:ro
     environment:
+      CONFIG_FILE: /config/.env
       PORT: "8080"
     ports:
       # Loopback only by default, for a reverse proxy on the same host (it

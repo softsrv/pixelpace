@@ -22,6 +22,9 @@ RUN apk add --no-cache curl libstdc++ && \
 
 WORKDIR /src
 
+# make dev mounts the repo's .env here; the app reads it at startup.
+ENV CONFIG_FILE=/config/.env
+
 EXPOSE 8080
 
 CMD ["air"]

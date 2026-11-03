@@ -100,7 +100,7 @@ pgxpool config: max 25 conns (`DB_MAX_CONNS`), min 5, max lifetime 1h, idle time
 
 ## Environment
 
-Copy `.env.example` to `.env`. Required vars: `DATABASE_URL`, `JWT_SECRET` (≥32 bytes), `APP_BASE_URL`, and all `SMTP_*` vars. `APP_ENV=production` gates JSON logging, secure cookies, and suppresses debug error detail.
+Copy `.env.example` to `.env`. The app loads it itself at startup with godotenv (`loadConfigFile` in `cmd/app/main.go`): `CONFIG_FILE` names the file (it must then exist), else `./.env` is read if present; variables already in the environment override the file. Containers mount it at `/config/.env` (the images set `CONFIG_FILE`). Required vars: `DATABASE_URL`, `JWT_SECRET` (≥32 bytes), `APP_BASE_URL`, and all `SMTP_*` vars. `APP_ENV=production` gates JSON logging, secure cookies, and suppresses debug error detail.
 
 For local development, `make dev` starts smtp4dev automatically — SMTP is available at `localhost:2525`, web UI at `http://localhost:5000`.
 

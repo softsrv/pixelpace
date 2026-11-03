@@ -160,7 +160,7 @@ func (q *Queries) FinishRaceRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRoomRace = `-- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, rt.kind, rt.target_value, rt.label, races.id AS race_id
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id
@@ -170,6 +170,7 @@ WHERE r.id = $1
 type GetRoomRaceRow struct {
 	Status       string             `json:"status"`
 	RaceStartsAt pgtype.Timestamptz `json:"race_starts_at"`
+	RaceTypeID   uuid.UUID          `json:"race_type_id"`
 	Kind         string             `json:"kind"`
 	TargetValue  int64              `json:"target_value"`
 	Label        string             `json:"label"`
@@ -182,6 +183,7 @@ func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow
 	err := row.Scan(
 		&i.Status,
 		&i.RaceStartsAt,
+		&i.RaceTypeID,
 		&i.Kind,
 		&i.TargetValue,
 		&i.Label,

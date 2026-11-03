@@ -63,3 +63,33 @@ func (q *Queries) LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPe
 	}
 	return items, nil
 }
+
+const timeTrialPersonalBest = `-- name: TimeTrialPersonalBest :one
+SELECT rp.elapsed_milliseconds
+FROM race_participants AS rp
+JOIN races AS r ON r.id = rp.race_id
+WHERE r.race_type_id = $1
+  AND rp.user_id = $2
+  AND r.time_trial = true
+  AND rp.status = 'finished'
+  AND rp.elapsed_milliseconds IS NOT NULL
+  AND r.started_at < $3::timestamptz
+ORDER BY rp.elapsed_milliseconds ASC
+LIMIT 1
+`
+
+type TimeTrialPersonalBestParams struct {
+	RaceTypeID uuid.UUID          `json:"race_type_id"`
+	UserID     uuid.UUID          `json:"user_id"`
+	Before     pgtype.Timestamptz `json:"before"`
+}
+
+// The racer's own fastest finished Time Trial at a race type, from races that
+// started before the given instant (the minimum elapsed time). No row when
+// there is none. A Time Trial's pacer rows at this time.
+func (q *Queries) TimeTrialPersonalBest(ctx context.Context, arg TimeTrialPersonalBestParams) (pgtype.Int4, error) {
+	row := q.db.QueryRow(ctx, timeTrialPersonalBest, arg.RaceTypeID, arg.UserID, arg.Before)
+	var elapsed_milliseconds pgtype.Int4
+	err := row.Scan(&elapsed_milliseconds)
+	return elapsed_milliseconds, err
+}

@@ -17,9 +17,12 @@
           <p class="pp-kicker pp-arcade">Now racing</p>
           <h1 id="pp-race-title" class="card-title pp-arcade">{{.Race.Label}} race</h1>
         </div>
-        {{with .Lanes}}<span class="pp-tag pp-arcade">{{len .}} {{if eq (len .) 1}}lane{{else}}lanes{{end}}</span>{{end}}
+        {{if gt .LaneCount 0}}<span class="pp-tag pp-arcade">{{.LaneCount}} {{if eq .LaneCount 1}}lane{{else}}lanes{{end}}</span>{{end}}
       </div>
       <p id="race-status" class="pp-status-line text-sm" role="status" aria-live="polite">Getting the start line ready…</p>
+      {{if and .Solo (not .Race.Pacer)}}
+      <p id="race-pacer-note" class="pp-status-line text-sm">No personal best yet: set your first time.</p>
+      {{end}}
       <div id="race-track"
            class="pp-track h-[70vh] min-h-96 w-full overflow-hidden"
            data-self-id="{{.User.ID}}"
@@ -36,6 +39,7 @@
       <ol id="race-lanes" class="sr-only" aria-label="Racers, by lane from left to right">
         {{range .Lanes}}<li data-user-id="{{.UserID}}" data-self="{{.IsSelf}}">{{.Label}}</li>
         {{end}}
+        {{with .Race.Pacer}}<li data-user-id="pacer" data-pacer="true" data-pacer-ms="{{.ElapsedMilliseconds}}">Your best</li>{{end}}
       </ol>
     </div>
   </section>

@@ -14,6 +14,7 @@ _Avoid_: Race format, workout type, game mode
 
 **Time Trial**:
 A Race that begins with a single entrant: a racer rowing alone against the clock to set a personal best. Same Room, Race Types, Countdown, and race options as any other Race — the only difference is the entrant count when the Race begins, recorded on the Race at that instant. A Race that begins with others stays a Race even if the rest later DNF; a Room whose other participants are dropped before the start (equipment never connected) begins as a Time Trial.
+A Time Trial whose racer has an earlier finished Time Trial at that Race Type shows a **Pacer**: a boat that rows the distance at the racer's personal best (their fastest such time). The Pacer is a lane only — never an entrant, never ranked, never on a Leaderboard. A first Time Trial at a Race Type has no Pacer.
 _Avoid_: Solo race, practice, workout
 
 **Leaderboard**:

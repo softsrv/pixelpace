@@ -41,6 +41,7 @@ type RaceStatus struct {
 	ServerTime   time.Time       `json:"server_time"`
 	Racers       []app.RaceRacer `json:"racers"`
 	Finished     bool            `json:"finished"`
+	Pacer        *app.RacePacer  `json:"pacer"`
 }
 
 // RacePageHandler renders the race view, collects each racer's equipment
@@ -68,12 +69,19 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 	for i, racer := range race.Racers {
 		lanes[i] = RaceLane{UserID: racer.UserID, Label: racer.Name, IsSelf: racer.UserID == userID}
 	}
+	laneCount := len(lanes)
+	if race.Pacer != nil {
+		laneCount++
+	}
 	user, _ := middleware.UserFromContext(r.Context())
 	h.renderer.Page(w, http.StatusOK, "race.html", map[string]any{
-		"User":    user,
-		"DevMode": h.devMode,
-		"Race":    race,
-		"Lanes":   lanes,
+		"User":      user,
+		"DevMode":   h.devMode,
+		"Race":      race,
+		"Lanes":     lanes,
+		"Pacer":     race.Pacer,
+		"Solo":      len(race.Racers) == 1,
+		"LaneCount": laneCount,
 	})
 }
 
@@ -89,6 +97,7 @@ func (h *RacePageHandler) Status(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(RaceStatus{
 		RaceID: race.RaceID, RaceStartsAt: race.RaceStartsAt, ServerTime: h.now(), Racers: race.Racers,
 		Finished: race.Finished,
+		Pacer:    race.Pacer,
 	})
 }
 

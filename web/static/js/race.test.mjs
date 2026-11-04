@@ -95,7 +95,18 @@ function makePixi() {
       return c;
     },
     Text: function (options) {
-      var t = { text: options.text, style: Object.assign({}, options.style), anchor: { set: function () {} }, position: { set: function () {} }, alpha: 1, y: 0 };
+      var _text = options.text;
+      var writes = 0;
+      var t = {
+        get text() { return _text; },
+        set text(v) { writes++; _text = v; },
+        get writes() { return writes; },
+        style: Object.assign({}, options.style),
+        anchor: { set: function () {} },
+        position: { set: function () {} },
+        alpha: 1,
+        y: 0
+      };
       texts.push(t);
       return t;
     }
@@ -410,8 +421,10 @@ function laneItem(userId, label, isSelf) {
   return { dataset: { userId: userId, self: isSelf ? 'true' : 'false' }, textContent: label };
 }
 
+// The server renders the pace label as the li's text; the view recomputes it
+// from data-pacer-ms and data-target-mm, so a placeholder here proves it does.
 function pacerItem(pacerMs) {
-  return { dataset: { userId: 'pacer', pacer: 'true', pacerMs: String(pacerMs) }, textContent: 'Your best' };
+  return { dataset: { userId: 'pacer', pacer: 'true', pacerMs: String(pacerMs) }, textContent: 'server label' };
 }
 
 // Answers each status call with the next body in turn; once they run out the
@@ -452,7 +465,7 @@ function assertNear(actual, expected, message) {
   assert.ok(Math.abs(actual - expected) <= 4, message + ': y = ' + actual + ', want about ' + expected);
 }
 
-test('the pacer boat is labelled Your best in the pacer hull, takes no rival colour, and ignores race-telemetry', async function () {
+test('the pacer boat is labelled with its pace per 500m in the pacer hull, takes no rival colour, and ignores race-telemetry', async function () {
   async function draw(lanes) {
     var page = setupPage({
       finished: false, lanes: lanes,
@@ -469,10 +482,13 @@ test('the pacer boat is labelled Your best in the pacer hull, takes no rival col
   assert.equal(hullOf(without.pixi.rower('Rival')), hullColor(false, 0));
   var withPacer = await draw([laneItem('u-self', 'Me', true), laneItem('u-2', 'Rival', false), pacerItem(100000)]);
 
-  var pacer = withPacer.pixi.rower('Your best');
-  assert.ok(pacer, 'a boat is drawn for the pacer lane, labelled Your best');
+  // 100000ms over the default 500000mm target: 1:40.0 per 500m.
+  var pacer = withPacer.pixi.rower('1:40.0');
+  assert.ok(pacer, 'a boat is drawn for the pacer lane, labelled with its pace 1:40.0');
+  assert.equal(withPacer.pixi.rower('Your best'), undefined, 'no boat is labelled Your best');
   assert.equal(hullOf(pacer), PACER_HULL, 'the pacer hull is PACER_HULL');
-  assert.equal(pacer.children.find(function (c) { return c.text === 'Your best'; }).style.fill, PACER_HULL, 'its label is in the pacer colour');
+  assert.equal(pacer.children.find(function (c) { return c.text === '1:40.0'; }).style.fill, PACER_HULL, 'its label is in the pacer colour');
+  assert.equal(pacerLanes(withPacer.page)[0].textContent, '1:40.0', 'the lane list names the pacer as its boat does');
   var rivalHull = hullsOf(withPacer.pixi.rower('Rival'));
   assert.equal(hullOf(withPacer.pixi.rower('Rival')), hullColor(false, 0), 'the rival keeps rival colour 0');
   assert.deepEqual(rivalHull, rivalHullAlone, 'the rival is drawn exactly as it is without a pacer');
@@ -541,11 +557,12 @@ test("the player's own boat is labelled 'you' in its hull colour, while rivals a
   assert.equal(rivalLabel.text, 'Rival');
   assert.equal(rivalLabel.style.fill, COLORS.white, "rival label fill is COLORS.white");
 
-  var pacerRower = mainView.pixi.rower('Your best');
-  assert.ok(pacerRower, "pacer boat exists with label 'Your best'");
-  var pacerLabel = pacerRower.children.find(function (c) { return c && c.text === 'Your best'; });
+  // The pacer is labelled with its pace: 100000ms over the default 500000mm target is 1:40.0 per 500m.
+  var pacerRower = mainView.pixi.rower('1:40.0');
+  assert.ok(pacerRower, "pacer boat exists with label '1:40.0'");
+  var pacerLabel = pacerRower.children.find(function (c) { return c && c.text === '1:40.0'; });
   assert.ok(pacerLabel, "pacer boat child label found");
-  assert.equal(pacerLabel.text, 'Your best');
+  assert.equal(pacerLabel.text, '1:40.0');
   assert.equal(pacerLabel.style.fill, PACER_HULL, "pacer label fill is PACER_HULL");
 
   // CLM-3: Same-named rival boat carries different label
@@ -581,7 +598,7 @@ test("the player's own boat is labelled 'you' in its hull colour, while rivals a
   assert.equal(noSelfView.pixi.texts.some(function (t) { return t.text === 'you'; }), false, "no label reads 'you' when no self lane");
   assert.ok(noSelfView.pixi.rower('Rival 1'), "rival 1 boat labelled with its display name");
   assert.ok(noSelfView.pixi.rower('Rival 2'), "rival 2 boat labelled with its display name");
-  assert.ok(noSelfView.pixi.rower('Your best'), "pacer boat labelled 'Your best'");
+  assert.ok(noSelfView.pixi.rower('1:40.0'), "pacer boat labelled with its pace '1:40.0'");
   noSelfView.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });
 
@@ -601,7 +618,9 @@ test('the pacer rows from the start on the server clock: still before GO, mid-co
     pixi.releaseInit();
     await startRaceView(page.track, pixi.PIXI);
     await settle();
-    var pacer = pixi.rower('Your best');
+    var pacer = pixi.rower('0:50.0'); // 100000ms over 1000m
+    assert.ok(pacer, 'the pacer boat over 1000m is labelled 0:50.0');
+    assert.equal(pacerLanes(page)[0].textContent, '0:50.0');
     pixi.ticks[0]({ deltaTime: 1 });
     localNow += 4000;
     pixi.ticks[0]({ deltaTime: 1 });
@@ -620,7 +639,7 @@ test('the pacer rows from the start on the server clock: still before GO, mid-co
     pixi.releaseInit();
     await startRaceView(page.track, pixi.PIXI);
     await settle();
-    pacer = pixi.rower('Your best');
+    pacer = pixi.rower('0:50.0');
     pixi.ticks[0]({ deltaTime: 1 });
     assertNear(pacer.y, START_Y - 0.5 * (START_Y - FINISH_Y), 'a mid-race load shows the pacer at 500m, not the start line');
 
@@ -660,9 +679,10 @@ test('a status with a pacer adds its lane, racer syncing keeps it while dropping
 
   await until(function () { return pacerLanes(page).length === 1; });
   assert.equal(pacerLanes(page)[0].dataset.pacerMs, '95000', 'the added lane carries the pacer time');
-  assert.equal(pacerLanes(page)[0].textContent, 'Your best');
-  var pacer = pixi.rower('Your best');
-  assert.ok(pacer && hullOf(pacer) === PACER_HULL, 'and a pacer boat is drawn in the pacer hull');
+  // 95000ms over the default 500000mm target: 1:35.0 per 500m.
+  assert.equal(pacerLanes(page)[0].textContent, '1:35.0');
+  var pacer = pixi.rower('1:35.0');
+  assert.ok(pacer && hullOf(pacer) === PACER_HULL, 'and a pacer boat labelled 1:35.0 is drawn in the pacer hull');
   assert.equal(pixi.rower('Rival'), undefined, 'the racer absent from status.racers is still removed');
   pixi.ticks[0]({ deltaTime: 1 });
   assert.notEqual(pacer.y, null, 'the ticker places the added pacer');
@@ -671,17 +691,17 @@ test('a status with a pacer adds its lane, racer syncing keeps it while dropping
   await until(function () { return served[1] >= 1; });
   await settle();
   assert.equal(pacerLanes(page).length, 1, 'syncing against racers that omit the pacer keeps its lane');
-  assert.equal(pixi.rower('Your best'), pacer, 'and its boat');
+  assert.equal(pixi.rower('1:35.0'), pacer, 'and its boat');
 
   phase = 2;
   await until(function () { return pacerLanes(page).length === 0; });
-  assert.equal(pixi.rower('Your best'), undefined, 'pacer null removes the boat');
+  assert.equal(pixi.rower('1:35.0'), undefined, 'pacer null removes the boat');
   assert.ok(pixi.rower('you'), 'our own boat stays');
   pixi.ticks[0]({ deltaTime: 1 }); // the ticker runs on without the removed lane
   page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished')); // stop this view's polling
 });
 
-test('with a pacer lane, the results modal lists only the racers, never Your best', async function () {
+test('with a pacer lane, the results modal lists only the racers, never the pacer or its pace label', async function () {
   var page = setupPage({
     finished: false,
     lanes: [laneItem('u-self', 'Me', true), laneItem('u-2', 'Rival', false), pacerItem(100000)],
@@ -694,7 +714,158 @@ test('with a pacer lane, the results modal lists only the racers, never Your bes
   await until(function () { return page.parts.tbody.children.length > 0; });
   var names = page.parts.tbody.children.map(function (tr) { return tr.children[1] && tr.children[1].textContent; });
   assert.deepEqual(names, ['Rival', 'Me']);
+  assert.ok(pixi.rower('1:40.0'), 'the pacer boat was on the track, labelled 1:40.0');
+  assert.ok(!names.includes('1:40.0'), 'the pacer pace label is not in the results');
   assert.ok(!names.includes('Your best'), 'the pacer is not in the results');
+});
+
+test('a status changing the pacer time relabels its boat and lane with the new pace', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var phases = [
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 95000 } },
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 120000 } }
+  ];
+  var phase = 0;
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: { '/rooms/r1/race/status': function () { return jsonResponse(200, phases[phase]); } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return pacerLanes(page).length === 1; });
+  var pacer = pixi.rower('1:35.0');
+  assert.ok(pacer, 'the first status labels the pacer 1:35.0');
+
+  phase = 1; // 120000ms over 500m: 2:00.0 per 500m
+  await until(function () { return pacerLanes(page)[0].textContent === '2:00.0'; });
+  assert.equal(pacerLanes(page).length, 1, 'still one pacer lane');
+  assert.equal(pacerLanes(page)[0].dataset.pacerMs, '120000');
+  assert.equal(pixi.rower('2:00.0'), pacer, 'the same boat now reads the new pace');
+  assert.equal(pixi.rower('1:35.0'), undefined, 'the old pace no longer shows');
+  assert.equal(pacer.children.find(function (c) { return c.text === '2:00.0'; }).style.fill, PACER_HULL, 'the relabelled boat keeps the pacer colour');
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('setPacer skips PIXI text write when the new label equals the current one, and setLabel appends no suffix', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var pollCount = 0;
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true), pacerItem(100000)],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        pollCount++;
+        return jsonResponse(200, {
+          server_time: new Date().toISOString(),
+          racers: self,
+          pacer: { elapsed_milliseconds: 100000 }
+        });
+      }
+    }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return pollCount >= 3; });
+
+  var pacer = pixi.rower('1:40.0');
+  assert.ok(pacer, 'pacer boat exists');
+  var pacerText = pacer.children.find(function (c) { return c && c.text === '1:40.0'; });
+  assert.ok(pacerText, 'pacer text found');
+  assert.equal(pacerText.writes, 0, 'setPacer skipped PIXI text writes because label 1:40.0 did not change');
+
+  // Verify rower.setLabel sets exact text with no suffix even on self rower
+  var selfRower = pixi.rower('you');
+  assert.ok(selfRower, 'self boat exists');
+  selfRower.setLabel('TestName');
+  var selfText = selfRower.children.find(function (c) { return c && c.text === 'TestName'; });
+  assert.ok(selfText, 'self boat text set to exact given text');
+  assert.equal(selfText.text, 'TestName', 'no (you) suffix appended');
+
+  // Verify pacer.setLabel sets exact text
+  pacer.setLabel('NewPace');
+  assert.equal(pacerText.text, 'NewPace');
+  assert.equal(pacerText.writes, 1);
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('a status carrying a pacer with a zero time still draws its boat and lane, labelled —', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: { '/rooms/r1/race/status': function () {
+      return jsonResponse(200, { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 0 } });
+    } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return pacerLanes(page).length === 1; });
+  assert.equal(pacerLanes(page)[0].textContent, '—', 'the lane list names the pacer —');
+  var boat = pixi.rower('—');
+  assert.ok(boat && hullOf(boat) === PACER_HULL, 'a pacer boat labelled — is drawn in the pacer hull');
+  pixi.texts.forEach(function (t) { assert.ok(!/NaN/.test(String(t.text)), 'no label reads NaN'); });
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('a status changing the pacer time to zero relabels the same boat and lane —', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var phases = [
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 95000 } },
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 0 } }
+  ];
+  var phase = 0;
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: { '/rooms/r1/race/status': function () { return jsonResponse(200, phases[phase]); } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return pacerLanes(page).length === 1; });
+  var pacer = pixi.rower('1:35.0');
+  assert.ok(pacer, 'the first status labels the pacer 1:35.0');
+
+  phase = 1;
+  await until(function () { return pacerLanes(page)[0].textContent === '—'; });
+  assert.equal(pacerLanes(page).length, 1, 'still one pacer lane');
+  assert.equal(pixi.rower('—'), pacer, 'the same boat now reads —');
+  assert.equal(pixi.rower('1:35.0'), undefined, 'the old pace no longer shows');
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('a pacer with an unusable time or target is still drawn, labelled — rather than NaN or nothing', async function () {
+  async function draw(options) {
+    var page = setupPage(Object.assign({
+      finished: false,
+      responses: { '/rooms/r1/race/status': statusQueue([]) }
+    }, options));
+    var pixi = makePixi();
+    pixi.releaseInit();
+    await startRaceView(page.track, pixi.PIXI);
+    await settle();
+    return { page: page, pixi: pixi };
+  }
+  var cases = [
+    { lanes: [laneItem('u-self', 'Me', true), pacerItem(0)] },
+    { lanes: [laneItem('u-self', 'Me', true), pacerItem('abc')] },
+    { lanes: [laneItem('u-self', 'Me', true), pacerItem(100000)], targetMm: 'abc' },
+    { lanes: [laneItem('u-self', 'Me', true), pacerItem(100000)], targetMm: '-5' }
+  ];
+  for (var i = 0; i < cases.length; i++) {
+    var drawn = await draw(cases[i]);
+    var boat = drawn.pixi.rower('—');
+    assert.ok(boat, 'case ' + i + ': the pacer boat is drawn, labelled —');
+    assert.equal(hullOf(boat), PACER_HULL, 'case ' + i + ': in the pacer hull');
+    assert.equal(pacerLanes(drawn.page)[0].textContent, '—', 'case ' + i + ': the lane list names it — too');
+    drawn.pixi.texts.forEach(function (t) { assert.ok(!/NaN/.test(String(t.text)), 'case ' + i + ': no label reads NaN'); });
+    drawn.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+  }
 });
 
 test('note hidden once status brings a pacer', async function () {

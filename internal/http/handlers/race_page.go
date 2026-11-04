@@ -74,7 +74,7 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		laneCount++
 	}
 	user, _ := middleware.UserFromContext(r.Context())
-	h.renderer.Page(w, http.StatusOK, "race.html", map[string]any{
+	data := map[string]any{
 		"User":      user,
 		"DevMode":   h.devMode,
 		"Race":      race,
@@ -82,7 +82,11 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		"Pacer":     race.Pacer,
 		"Solo":      len(race.Racers) == 1,
 		"LaneCount": laneCount,
-	})
+	}
+	if race.Pacer != nil {
+		data["PacerLabel"] = formatPace(race.Pacer.ElapsedMilliseconds, race.TargetMillimeters)
+	}
+	h.renderer.Page(w, http.StatusOK, "race.html", data)
 }
 
 // Status reports the lineup's equipment readiness, the scheduled start once

@@ -218,6 +218,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if strings.Contains(body, "data-pacer") {
 		t.Errorf("page body unexpectedly contains data-pacer: %q", body)
 	}
+	if strings.Contains(body, "—") {
+		t.Errorf("page body without a pacer unexpectedly contains a pace label '—': %q", body)
+	}
 
 	// Status returns JSON with pacer null
 	statusRR := serveRacePage(t, viewer, user, roomID.String(), raceStatusEndpoint)
@@ -252,6 +255,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if strings.Contains(rrTwo.Body.String(), "set your first time") {
 		t.Errorf("2-entrant race unexpectedly has note: %q", rrTwo.Body.String())
 	}
+	if strings.Contains(rrTwo.Body.String(), "data-pacer") {
+		t.Errorf("2-entrant race unexpectedly has a pacer lane: %q", rrTwo.Body.String())
+	}
 }
 
 func TestRacePageWithPacerRendersPacerLaneAndStatusPacerJSON(t *testing.T) {
@@ -270,12 +276,12 @@ func TestRacePageWithPacerRendersPacerLaneAndStatusPacerJSON(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	wantPacerLI := `<li data-user-id="pacer" data-pacer="true" data-pacer-ms="110000">Your best</li>`
+	wantPacerLI := `<li data-user-id="pacer" data-pacer="true" data-pacer-ms="110000">0:27.5</li>`
 	if !strings.Contains(body, wantPacerLI) {
 		t.Errorf("page body missing %q; body=%q", wantPacerLI, body)
 	}
-	if !strings.Contains(body, "Your best") {
-		t.Errorf("page body missing text 'Your best'; body=%q", body)
+	if strings.Contains(body, "Your best") {
+		t.Errorf("page body still names the pacer 'Your best'; body=%q", body)
 	}
 	if !strings.Contains(body, "2 lanes") {
 		t.Errorf("page body missing lane-count tag counting 2 lanes; body=%q", body)

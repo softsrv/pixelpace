@@ -84,22 +84,9 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		"LaneCount": laneCount,
 	}
 	if race.Pacer != nil {
-		data["PacerLabel"] = formatPaceTenths(race.Pacer.ElapsedMilliseconds, race.TargetMillimeters)
+		data["PacerLabel"] = formatPace(race.Pacer.ElapsedMilliseconds, race.TargetMillimeters)
 	}
 	h.renderer.Page(w, http.StatusOK, "race.html", data)
-}
-
-// formatPaceTenths renders the average time per 500m as m:ss.t, rounded to the
-// nearest tenth (half up), or "—" when it cannot be computed. It labels the
-// pacer boat and must match race-results.mjs formatPaceTenths.
-func formatPaceTenths(elapsedMs, distanceMm int64) string {
-	if elapsedMs <= 0 || distanceMm <= 0 {
-		return "—"
-	}
-	// tenths = round((elapsedMs * 500000 / distanceMm) / 100)
-	//        = floor((elapsedMs * 10000 + distanceMm) / (2 * distanceMm))
-	tenths := (elapsedMs*10000 + distanceMm) / (2 * distanceMm)
-	return formatDuration(tenths * 100)
 }
 
 // Status reports the lineup's equipment readiness, the scheduled start once

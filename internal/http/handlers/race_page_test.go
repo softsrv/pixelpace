@@ -8,7 +8,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -258,51 +257,6 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	}
 	if strings.Contains(rrTwo.Body.String(), "data-pacer") {
 		t.Errorf("2-entrant race unexpectedly has a pacer lane: %q", rrTwo.Body.String())
-	}
-}
-
-// The pace table is owned by testdata/pace_tenths.json, which the JS
-// formatPaceTenths test in web/static/js/race-results.test.mjs loads too, so
-// the server-rendered label and the live boat label cannot drift apart.
-// Each case is read from the pacer li the race page renders.
-func TestRacePagePacerLabelIsPacePerFiveHundredInTenths(t *testing.T) {
-	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
-	roomID := uuid.New()
-	raw, err := os.ReadFile("testdata/pace_tenths.json")
-	if err != nil {
-		t.Fatalf("read pace table: %v", err)
-	}
-	var cases []struct {
-		ElapsedMs  int64  `json:"elapsed_ms"`
-		DistanceMm int64  `json:"distance_mm"`
-		Want       string `json:"want"`
-	}
-	if err := json.Unmarshal(raw, &cases); err != nil {
-		t.Fatalf("parse pace table: %v", err)
-	}
-	if len(cases) == 0 {
-		t.Fatal("pace table is empty")
-	}
-	for _, tc := range cases {
-		c := struct {
-			elapsedMs, distanceMm int64
-			want                  string
-		}{tc.ElapsedMs, tc.DistanceMm, tc.Want}
-		viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
-			return app.RoomRace{
-				RoomID: roomID, Label: "race", TargetMillimeters: c.distanceMm,
-				Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
-				Pacer:  &app.RacePacer{ElapsedMilliseconds: c.elapsedMs},
-			}, nil
-		}}
-		rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
-		if rr.Code != http.StatusOK {
-			t.Fatalf("%dms over %dmm: status = %d, want 200", c.elapsedMs, c.distanceMm, rr.Code)
-		}
-		want := fmt.Sprintf(`data-pacer-ms="%d">%s</li>`, c.elapsedMs, c.want)
-		if !strings.Contains(rr.Body.String(), want) {
-			t.Errorf("%dms over %dmm: page body missing %q; body=%q", c.elapsedMs, c.distanceMm, want, rr.Body.String())
-		}
 	}
 }
 

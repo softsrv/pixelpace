@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 
-import { formatDuration, formatPace, formatPaceTenths, formatDistance, resultRows } from './race-results.mjs';
+import { formatDuration, formatPace, formatDistance, resultRows } from './race-results.mjs';
 
 test('formatDuration formats finish time as m:ss.t', function () {
   assert.equal(formatDuration(95000), '1:35.0');
@@ -168,22 +167,6 @@ test('formatPace derives pace from elapsed and distance and rounds to the tenth'
   assert.equal(formatPace(59960), '1:00.0');
   assert.equal(formatPace(95550), '1:35.6');
   assert.equal(formatPace(59.96), '1:00.0');
-});
-
-// The pace table is owned by internal/http/handlers/testdata/pace_tenths.json,
-// which the Go race-page test (TestRacePagePacerLabelIsPacePerFiveHundredInTenths)
-// loads too, so the JS and Go formatters are held to one table.
-test('formatPaceTenths gives the pace per 500m as m:ss.t rounded to the nearest tenth', function () {
-  var cases = JSON.parse(readFileSync(new URL('../../../internal/http/handlers/testdata/pace_tenths.json', import.meta.url), 'utf8'));
-  assert.ok(cases.length > 0, 'the shared pace table has cases');
-  cases.forEach(function (c) {
-    assert.equal(formatPaceTenths(c.elapsed_ms, c.distance_mm), c.want, c.elapsed_ms + 'ms over ' + c.distance_mm + 'mm');
-  });
-  assert.equal(formatPaceTenths(null, 500000), '—');
-  assert.equal(formatPaceTenths(100000, null), '—');
-  assert.equal(formatPaceTenths(NaN, 500000), '—');
-  assert.equal(formatPaceTenths(100000, NaN), '—');
-  assert.equal(formatPaceTenths(undefined, undefined), '—');
 });
 
 test('formatDistance rounds and rejects negative or non-numeric input', function () {

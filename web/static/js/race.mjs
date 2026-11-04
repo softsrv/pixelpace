@@ -26,7 +26,7 @@
 // its time changes, or removes it (pacer null).
 
 import { countdownLabel, laneCenterX, pacerDistance, progressFraction, trackY } from './race-track.mjs';
-import { formatPaceTenths } from './race-results.mjs';
+import { formatPace } from './race-results.mjs';
 import {
   BOAT_POSES, BOAT_ROWS, BOAT_COLS, COLORS, GLYPH_ROWS, PACER_HULL,
   advanceStroke, boatCells, cellColor, hullColor, pixelScale, snap, strokePose, textCells
@@ -76,7 +76,7 @@ export async function startRaceView(trackEl, PIXI) {
   var lanes = Array.from(document.querySelectorAll('#race-lanes [data-user-id]'), function (el) {
     var isPacer = el.dataset.pacer === 'true';
     var pacerMs = isPacer ? Number(el.dataset.pacerMs) : 0;
-    var label = isPacer ? formatPaceTenths(pacerMs, targetMillimeters) : el.textContent.trim();
+    var label = isPacer ? formatPace(pacerMs, targetMillimeters) : el.textContent.trim();
     if (isPacer) el.textContent = label; // the lane list names the pacer as its boat does
     return {
       userId: el.dataset.userId,
@@ -274,7 +274,7 @@ export async function startRaceView(trackEl, PIXI) {
       }
     } else if (status.pacer) {
       // The server decides whether a pacer exists; an unusable time still
-      // draws the boat, labelled by formatPaceTenths' '—' fallback, as on load.
+      // draws the boat, labelled by formatPace's '—' fallback, as on load.
       setPacer(Number(status.pacer.elapsed_milliseconds));
       setHidden(pacerNoteEl, true);
     } else if (Array.isArray(status.racers) && status.racers.length >= 2) {
@@ -324,16 +324,19 @@ export async function startRaceView(trackEl, PIXI) {
   // Adds the pacer lane (last, after the racers, as the page renders it) or
   // updates its time and pace label, keeping the screen-reader lane list in step.
   function setPacer(pacerMs) {
-    var label = formatPaceTenths(pacerMs, targetMillimeters);
+    var label = formatPace(pacerMs, targetMillimeters);
     var lane = pacerLane();
     if (lane) {
       lane.pacerMs = pacerMs;
+      var changed = lane.label !== label;
       lane.label = label;
       if (lane.el) {
         lane.el.dataset.pacerMs = String(pacerMs);
         lane.el.textContent = label;
       }
-      lane.sprite.setLabel(label);
+      if (changed) {
+        lane.sprite.setLabel(label);
+      }
       return;
     }
     var el = document.createElement('li');
@@ -629,7 +632,7 @@ function createRower(PIXI, lane, rivalIndex, scale) {
 
   // Renames the boat; its colour stays the lane's (the pacer keeps PACER_HULL).
   rower.setLabel = function (text) {
-    label.text = lane.isSelf ? text + ' (you)' : text;
+    label.text = text;
   };
 
   rower.setScale = function (size) {

@@ -95,7 +95,18 @@ function makePixi() {
       return c;
     },
     Text: function (options) {
-      var t = { text: options.text, style: Object.assign({}, options.style), anchor: { set: function () {} }, position: { set: function () {} }, alpha: 1, y: 0 };
+      var _text = options.text;
+      var writes = 0;
+      var t = {
+        get text() { return _text; },
+        set text(v) { writes++; _text = v; },
+        get writes() { return writes; },
+        style: Object.assign({}, options.style),
+        anchor: { set: function () {} },
+        position: { set: function () {} },
+        alpha: 1,
+        y: 0
+      };
       texts.push(t);
       return t;
     }
@@ -734,6 +745,50 @@ test('a status changing the pacer time relabels its boat and lane with the new p
   assert.equal(pixi.rower('2:00.0'), pacer, 'the same boat now reads the new pace');
   assert.equal(pixi.rower('1:35.0'), undefined, 'the old pace no longer shows');
   assert.equal(pacer.children.find(function (c) { return c.text === '2:00.0'; }).style.fill, PACER_HULL, 'the relabelled boat keeps the pacer colour');
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('setPacer skips PIXI text write when the new label equals the current one, and setLabel appends no suffix', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var pollCount = 0;
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true), pacerItem(100000)],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        pollCount++;
+        return jsonResponse(200, {
+          server_time: new Date().toISOString(),
+          racers: self,
+          pacer: { elapsed_milliseconds: 100000 }
+        });
+      }
+    }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return pollCount >= 3; });
+
+  var pacer = pixi.rower('1:40.0');
+  assert.ok(pacer, 'pacer boat exists');
+  var pacerText = pacer.children.find(function (c) { return c && c.text === '1:40.0'; });
+  assert.ok(pacerText, 'pacer text found');
+  assert.equal(pacerText.writes, 0, 'setPacer skipped PIXI text writes because label 1:40.0 did not change');
+
+  // Verify rower.setLabel sets exact text with no suffix even on self rower
+  var selfRower = pixi.rower('you');
+  assert.ok(selfRower, 'self boat exists');
+  selfRower.setLabel('TestName');
+  var selfText = selfRower.children.find(function (c) { return c && c.text === 'TestName'; });
+  assert.ok(selfText, 'self boat text set to exact given text');
+  assert.equal(selfText.text, 'TestName', 'no (you) suffix appended');
+
+  // Verify pacer.setLabel sets exact text
+  pacer.setLabel('NewPace');
+  assert.equal(pacerText.text, 'NewPace');
+  assert.equal(pacerText.writes, 1);
+
   page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });
 

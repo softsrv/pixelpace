@@ -12,7 +12,7 @@ export function formatDuration(milliseconds) {
   return m + ':' + String(s).padStart(2, '0') + '.' + tenths;
 }
 
-// Formats a pace per 500m. Returns '—' for null, zero, negative or NaN input,
+// Formats a pace per 500m as m:ss.t. Returns '—' for null, zero, negative or NaN input,
 // or when distance is zero (never divides by zero or returns NaN).
 export function formatPace(paceOrElapsed, distance) {
   if (distance !== undefined) {
@@ -27,10 +27,12 @@ export function formatPace(paceOrElapsed, distance) {
 
   var pace = Number(paceOrElapsed);
   if (paceOrElapsed == null || Number.isNaN(pace) || pace <= 0) return '—';
-  var totalSeconds = pace > 1000 ? Math.round(pace / 1000) : Math.round(pace);
+  var totalTenths = pace > 1000 ? Math.round(pace / 100) : Math.round(pace * 10);
+  var tenths = totalTenths % 10;
+  var totalSeconds = Math.floor(totalTenths / 10);
   var m = Math.floor(totalSeconds / 60);
   var s = totalSeconds % 60;
-  return m + ':' + String(s).padStart(2, '0');
+  return m + ':' + String(s).padStart(2, '0') + '.' + tenths;
 }
 
 // Formats the average pace per 500m of an elapsed time over a distance in

@@ -23,15 +23,17 @@ test('formatDistance formats distance in metres', function () {
   assert.equal(formatDistance(NaN), '0 m');
 });
 
-test('formatPace shows pace per 500m as m:ss', function () {
-  assert.equal(formatPace(95000), '1:35');
-  assert.equal(formatPace(120000), '2:00');
-  assert.equal(formatPace(132000), '2:12');
+test('formatPace shows pace per 500m as m:ss.t', function () {
+  assert.equal(formatPace(95000), '1:35.0');
+  assert.equal(formatPace(120000), '2:00.0');
+  assert.equal(formatPace(132000), '2:12.0');
 });
 
 test('formatPace: pace never NaN or divide-by-zero at 0 distance (S8)', function () {
   assert.equal(formatPace(null), '—', 'null input returns em-dash');
   assert.equal(formatPace(0), '—', 'zero pace returns em-dash');
+  assert.equal(formatPace(-5), '—', 'negative pace returns em-dash');
+  assert.equal(formatPace('abc'), '—', 'non-numeric pace returns em-dash');
   assert.equal(formatPace(NaN), '—', 'NaN input returns em-dash');
   assert.equal(formatPace(undefined), '—', 'undefined returns em-dash');
   assert.equal(formatPace(95000, 0), '—', 'distance 0 returns em-dash, no divide-by-zero');
@@ -51,7 +53,7 @@ test('resultRows: a single racer ranked 1st (S9)', function () {
   assert.equal(res.rows[0].name, 'Solo');
   assert.equal(res.rows[0].time, '1:35.0');
   assert.equal(res.rows[0].distance, '500 m');
-  assert.equal(res.rows[0].pace, '1:35');
+  assert.equal(res.rows[0].pace, '1:35.0');
   assert.equal(res.rows[0].status, 'finished');
   assert.equal(res.rows[0].isSelf, false);
   assert.equal(res.message, null);
@@ -90,14 +92,14 @@ test('resultRows: DNF shown without time, after finishers, marked DNF with dista
   assert.equal(res.rows[0].rank, 1);
   assert.equal(res.rows[0].time, '1:35.0');
   assert.equal(res.rows[0].distance, '500 m');
-  assert.equal(res.rows[0].pace, '1:35');
+  assert.equal(res.rows[0].pace, '1:35.0');
   assert.equal(res.rows[0].status, 'finished');
 
   // DNF with distance
   assert.equal(res.rows[1].rank, null);
   assert.equal(res.rows[1].time, '');
   assert.equal(res.rows[1].distance, '350 m');
-  assert.equal(res.rows[1].pace, '2:00');
+  assert.equal(res.rows[1].pace, '2:00.0');
   assert.equal(res.rows[1].status, 'dnf');
 
   // DNF with 0 distance and null pace
@@ -148,19 +150,23 @@ test('formatDuration floors to tenths, pads seconds and carries minutes', functi
   assert.equal(formatDuration('abc'), '');
 });
 
-test('formatPace derives pace from elapsed and distance and rounds to the second', function () {
-  assert.equal(formatPace(95000, 500), '1:35');
-  assert.equal(formatPace(190000, 1000), '1:35');
-  assert.equal(formatPace(95000, 500000), '1:35', 'millimetre distance is converted to metres');
+test('formatPace derives pace from elapsed and distance and rounds to the tenth', function () {
+  assert.equal(formatPace(95000, 500), '1:35.0');
+  assert.equal(formatPace(190000, 1000), '1:35.0');
+  assert.equal(formatPace(95000, 500000), '1:35.0', 'millimetre distance is converted to metres');
   assert.equal(formatPace(0, 500), '—');
   assert.equal(formatPace(null, 500), '—');
   assert.equal(formatPace(NaN, 500), '—');
   assert.equal(formatPace(95000, -5), '—');
   assert.equal(formatPace(-95000), '—');
-  assert.equal(formatPace(95400), '1:35');
-  assert.equal(formatPace(95600), '1:36');
-  assert.equal(formatPace(59600), '1:00');
-  assert.equal(formatPace(5000), '0:05');
+  assert.equal(formatPace(95400), '1:35.4');
+  assert.equal(formatPace(95600), '1:35.6');
+  assert.equal(formatPace(95600, 500), '1:35.6');
+  assert.equal(formatPace(59600), '0:59.6');
+  assert.equal(formatPace(5000), '0:05.0');
+  assert.equal(formatPace(59960), '1:00.0');
+  assert.equal(formatPace(95550), '1:35.6');
+  assert.equal(formatPace(59.96), '1:00.0');
 });
 
 test('formatDistance rounds and rejects negative or non-numeric input', function () {
@@ -216,9 +222,9 @@ test('resultRows: pace is computed from elapsed and distance when the server sen
       { name: 'B', status: 'dnf', elapsed_milliseconds: 50000, distance_m: 250 }
     ]
   });
-  assert.equal(res.rows[0].pace, '1:40');
+  assert.equal(res.rows[0].pace, '1:40.0');
   assert.equal(res.rows[0].distance, '500 m');
-  assert.equal(res.rows[1].pace, '1:40');
+  assert.equal(res.rows[1].pace, '1:40.0');
   assert.equal(res.rows[1].distance, '250 m');
 });
 
@@ -267,7 +273,7 @@ test('resultRows: elapsed and pace aliases are read', function () {
     ]
   });
   assert.deepEqual(res.rows.map(function (r) { return r.time; }), ['1:01.0', '1:02.0', '1:03.0']);
-  assert.deepEqual(res.rows.map(function (r) { return r.pace; }), ['1:01', '1:02', '1:03']);
+  assert.deepEqual(res.rows.map(function (r) { return r.pace; }), ['1:01.0', '1:02.0', '1:03.0']);
 });
 
 test('resultRows: name and user id aliases, and a default finished status', function () {
@@ -303,5 +309,39 @@ test('resultRows: a DNF row never shows rank or finish time even if the server s
   assert.equal(res.rows[0].rank, null);
   assert.equal(res.rows[0].time, '');
   assert.equal(res.rows[0].status, 'dnf');
-  assert.equal(res.rows[0].pace, '2:00');
+  assert.equal(res.rows[0].pace, '2:00.0');
+});
+
+test('resultRows: finisher with pace 95600 displays pace 1:35.6 (CLM-1)', function () {
+  var res = resultRows({
+    results: [
+      { user_id: 'u-1', name: 'Racer', status: 'finished', elapsed_ms: 95600, distance_m: 500, pace_ms_per_500m: 95600 }
+    ]
+  });
+  assert.equal(res.rows[0].pace, '1:35.6');
+});
+
+test('resultRows: every row pace has tenths or em-dash across multi-racer and solo time trial (CLM-3)', function () {
+  var multi = resultRows({
+    results: [
+      { name: 'A', status: 'finished', elapsed_ms: 95600, distance_m: 500, pace_ms_per_500m: 95600 },
+      { name: 'B', status: 'finished', elapsed_ms: 102400, distance_m: 500, pace_ms_per_500m: 102400 },
+      { name: 'C', status: 'dnf', elapsed_ms: null, distance_m: 350, pace_ms_per_500m: 120000 },
+      { name: 'D', status: 'dnf', elapsed_ms: null, distance_m: 0, pace_ms_per_500m: null }
+    ]
+  });
+  assert.equal(multi.rows.length, 4);
+  multi.rows.forEach(function (row) {
+    assert.match(row.pace, /^\d+:\d{2}\.\d$|^—$/);
+  });
+
+  // Solo Time Trial single-row case asserting tenths
+  var solo = resultRows({
+    results: [
+      { user_id: 'u-solo', name: 'Solo TT', status: 'finished', elapsed_ms: 95400, distance_m: 500, pace_ms_per_500m: 95400 }
+    ]
+  });
+  assert.equal(solo.rows.length, 1);
+  assert.equal(solo.rows[0].pace, '1:35.4');
+  assert.match(solo.rows[0].pace, /^\d+:\d{2}\.\d$/);
 });

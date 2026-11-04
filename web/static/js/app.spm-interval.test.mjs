@@ -66,6 +66,7 @@ var probedAppJs = appJs
     '    try { return probedOnNotify(event); } finally { __probe.depth--; }',
     '  }',
     '  __probe.onNotify = onNotify;',
+    '  __probe.renderMetric = renderMetric;',
     '  function probedOnNotify(event) {'
   ].join('\n'))
   .replace(DEV_MOCK_END, '  if (devMode) __probe.mockPm5State = mockPm5State;\n' + DEV_MOCK_END);
@@ -193,6 +194,7 @@ function runDashboardApp(devMode, options) {
   return {
     metricEls: metricEls,
     probe: probe,
+    renderMetric: probe.renderMetric,
     // Characteristic keys ('31'..'36') of the notifications since index `from`.
     notified: function (from) {
       return probe.notifications.slice(from || 0).map(function (n) { return UUID_KEYS[n.uuid]; });
@@ -284,7 +286,7 @@ test('dev-mode simulator auto-starts at 26 spm and 2:12 with no Bluetooth presen
   var result = runDashboardApp(true, { race: true });
 
   assert.equal(result.metricEls.strokeRate.textContent, '26 spm');
-  assert.equal(result.metricEls.pace.textContent, '2:12 /500m');
+  assert.equal(result.metricEls.pace.textContent, '2:12.0 /500m');
   assert.equal(result.metricEls.distance.textContent, '0 m');
   assert.equal(result.metricEls.heartRate.textContent, '0 bpm');
   assert.equal(result.connectionInfo.textContent, 'Development mock PM5 — streaming synthetic rowing metrics.');
@@ -372,13 +374,13 @@ test('a stroke rate or pace change shows within one status tick and persists', f
   result.statusTicks(1);
 
   assert.equal(result.metricEls.strokeRate.textContent, '30 spm');
-  assert.equal(result.metricEls.pace.textContent, '1:50 /500m');
+  assert.equal(result.metricEls.pace.textContent, '1:50.0 /500m');
   assert.equal(stream.buffer[stream.buffer.length - 1].stroke_rate, 30, 'the next race sample carries the new stroke rate');
   assert.equal(result.strokeTimer().delay, 2000, 'strokes follow the new rate');
   result.strokeTick();
   result.statusTicks(3);
   assert.equal(result.metricEls.strokeRate.textContent, '30 spm');
-  assert.equal(result.metricEls.pace.textContent, '1:50 /500m');
+  assert.equal(result.metricEls.pace.textContent, '1:50.0 /500m');
 });
 
 test('simulated readings fill the dashboard tiles and drive the rower animation through onNotify', function () {
@@ -450,7 +452,7 @@ test('panel settings are clamped or refused and never render NaN or a negative',
   renderedTiles(result).forEach(function (text) {
     assert.doesNotMatch(text, /NaN|-/, 'tile "' + text + '"');
   });
-  assert.equal(result.metricEls.pace.textContent, '1:00 /500m');
+  assert.equal(result.metricEls.pace.textContent, '1:00.0 /500m');
   for (var i = 0; i < stream.buffer.length; i++) {
     var sample = stream.buffer[i];
     assert.ok(Number.isFinite(sample.distance_millimeters) && sample.distance_millimeters >= 0);
@@ -506,8 +508,20 @@ function tileText(key, value) {
     var s = Math.max(0, Math.floor(total || 0));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   }
+  function paceTenths(total) {
+    var val = Number(total);
+    if (!val || Number.isNaN(val) || val < 0) {
+      val = 0;
+    }
+    var totalTenths = Math.round(val * 10);
+    var tenths = totalTenths % 10;
+    var seconds = Math.floor(totalTenths / 10);
+    var m = Math.floor(seconds / 60);
+    var s = seconds % 60;
+    return m + ':' + String(s).padStart(2, '0') + '.' + tenths;
+  }
   if (key === 'elapsedTime') return duration(value);
-  if (key === 'pace') return duration(value) + ' /500m';
+  if (key === 'pace') return paceTenths(value) + ' /500m';
   if (key === 'strokeCount') return Math.round(value);
   var unit = { distance: ' m', strokeRate: ' spm', power: ' W', calories: ' kcal', heartRate: ' bpm' }[key];
   return Math.round(value) + unit;
@@ -536,7 +550,7 @@ test('every simulator reading reaches the tiles only from a ce06003x DataView no
     assert.equal(render.text, tileText(render.key, notification.decoded[render.key]), 'the tile shows the decoded value');
   });
   assert.equal(result.metricEls.strokeRate.textContent, '31 spm');
-  assert.equal(result.metricEls.pace.textContent, '1:48 /500m');
+  assert.equal(result.metricEls.pace.textContent, '1:48.0 /500m');
   assert.equal(result.metricEls.distance.textContent, tileText('distance', result.last('31').decoded.distance));
 });
 
@@ -569,7 +583,7 @@ test('each simulator payload decodes to the simulator state at PM5 resolution an
   assert.equal(result.metricEls.elapsedTime.textContent, '10:00');
   assert.equal(result.metricEls.distance.textContent, Math.round(Math.round(metres * 10) / 10) + ' m');
   assert.equal(result.metricEls.strokeRate.textContent, '26 spm');
-  assert.equal(result.metricEls.pace.textContent, '2:12 /500m');
+  assert.equal(result.metricEls.pace.textContent, '2:12.0 /500m');
   assert.equal(result.metricEls.heartRate.textContent, '0 bpm');
   assert.equal(result.metricEls.calories.textContent, Math.round(kcal) + ' kcal');
   assert.equal(result.metricEls.power.textContent, Math.round(watts) + ' W');
@@ -689,8 +703,12 @@ test('simulated distance, power and calories follow the PM5 model and rest at SP
   assert.equal(result.last('32').decoded.strokeRate, 0);
   assert.equal(result.last('32').decoded.pace, 0);
   assert.equal(result.last('36').decoded.power, 0);
-  assert.equal(result.metricEls.pace.textContent, '0:00 /500m');
+  assert.equal(result.metricEls.pace.textContent, '0:00.0 /500m');
   assert.equal(result.metricEls.power.textContent, '0 W');
+  result.renderMetric('pace', -5);
+  assert.equal(result.metricEls.pace.textContent, '0:00.0 /500m');
+  result.renderMetric('pace', undefined);
+  assert.equal(result.metricEls.pace.textContent, '0:00.0 /500m');
 });
 
 test('encoded fields are clamped to their width and never decode to NaN or a negative', function () {
@@ -774,4 +792,48 @@ test('status characteristics notify every 500 ms and stroke characteristics once
   from = result.probe.notifications.length;
   result.statusTicks(5);
   assert.deepEqual(result.notified(from), ['31', '32', '33', '31', '32', '33', '31', '32', '33', '31', '32', '33', '31', '32', '33'], 'no 0x35/0x36 at SPM 0');
+});
+
+test('live pace tile displays tenths (m:ss.t /500m), rounds with carry, and clamps falsy/negative/undefined (CLM-1, CLM-2, CLM-5)', function () {
+  var result = runDashboardApp(false);
+  var dv = new DataView(new ArrayBuffer(17));
+
+  function notifyPace(paceSeconds) {
+    dv.setUint16(7, Math.round(paceSeconds * 100), true);
+    result.probe.onNotify({ target: { uuid: PM5_UUIDS['32'], value: dv } });
+  }
+
+  // Non-zero tenth (CLM-1: 132.4 s -> '2:12.4 /500m')
+  notifyPace(132.4);
+  assert.equal(result.metricEls.pace.textContent, '2:12.4 /500m');
+
+  // Carry into seconds and minutes (CLM-2: 59.96 s -> '1:00.0 /500m')
+  notifyPace(59.96);
+  assert.equal(result.metricEls.pace.textContent, '1:00.0 /500m');
+
+  // Round down (CLM-2: 95.44 s -> '1:35.4 /500m')
+  notifyPace(95.44);
+  assert.equal(result.metricEls.pace.textContent, '1:35.4 /500m');
+
+  // Direct renderMetric calls
+  result.renderMetric('pace', 132.4);
+  assert.equal(result.metricEls.pace.textContent, '2:12.4 /500m');
+
+  result.renderMetric('pace', 59.96);
+  assert.equal(result.metricEls.pace.textContent, '1:00.0 /500m');
+
+  result.renderMetric('pace', 95.44);
+  assert.equal(result.metricEls.pace.textContent, '1:35.4 /500m');
+
+  result.renderMetric('pace', -10);
+  assert.equal(result.metricEls.pace.textContent, '0:00.0 /500m');
+
+  result.renderMetric('pace', undefined);
+  assert.equal(result.metricEls.pace.textContent, '0:00.0 /500m');
+
+  result.renderMetric('pace', NaN);
+  assert.equal(result.metricEls.pace.textContent, '0:00.0 /500m');
+
+  result.renderMetric('pace', 0);
+  assert.equal(result.metricEls.pace.textContent, '0:00.0 /500m');
 });

@@ -560,6 +560,19 @@ document.body.addEventListener('token-expired', async function () {
     return m + ':' + String(s).padStart(2, '0');
   }
 
+  function formatPace(totalSeconds) {
+    var val = Number(totalSeconds);
+    if (!val || Number.isNaN(val) || val < 0) {
+      val = 0;
+    }
+    var totalTenths = Math.round(val * 10);
+    var tenths = totalTenths % 10;
+    var seconds = Math.floor(totalTenths / 10);
+    var m = Math.floor(seconds / 60);
+    var s = seconds % 60;
+    return m + ':' + String(s).padStart(2, '0') + '.' + tenths;
+  }
+
   function metricEl(key) {
     if (!metricsRegion) return null;
     return metricsRegion.querySelector('[data-metric="' + key + '"]');
@@ -571,7 +584,7 @@ document.body.addEventListener('token-expired', async function () {
 
     if (key === 'elapsedTime') el.textContent = formatDuration(value);
     if (key === 'distance') el.textContent = Math.round(value || 0) + ' m';
-    if (key === 'pace') el.textContent = formatDuration(value) + ' /500m';
+    if (key === 'pace') el.textContent = formatPace(value) + ' /500m';
     if (key === 'strokeRate') el.textContent = Math.round(value || 0) + ' spm';
     if (key === 'power') el.textContent = Math.round(value || 0) + ' W';
     if (key === 'strokeCount') el.textContent = Math.round(value || 0);

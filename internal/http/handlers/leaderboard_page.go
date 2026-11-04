@@ -211,14 +211,15 @@ func formatDuration(ms int64) string {
 	return fmt.Sprintf("%d:%02d.%d", seconds/60, seconds%60, tenths%10)
 }
 
-// formatPace renders the average time per 500m as m:ss, matching the race
+// formatPace renders the average time per 500m as m:ss.t, matching the race
 // results, or "—" when it cannot be computed.
 func formatPace(elapsedMs, distanceMm int64) string {
 	if elapsedMs <= 0 || distanceMm <= 0 {
 		return "—"
 	}
-	// pace (ms per 500m) = elapsed * 500m / distance; round to whole seconds.
+	// pace (ms per 500m) = elapsed * 500m / distance; round to nearest tenth of a second.
 	paceMs := float64(elapsedMs) * 500000 / float64(distanceMm)
-	seconds := int64(paceMs/1000 + 0.5)
-	return fmt.Sprintf("%d:%02d", seconds/60, seconds%60)
+	tenths := int64(paceMs/100 + 0.5)
+	seconds := tenths / 10
+	return fmt.Sprintf("%d:%02d.%d", seconds/60, seconds%60, tenths%10)
 }

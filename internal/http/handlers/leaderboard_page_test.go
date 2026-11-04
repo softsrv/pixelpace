@@ -94,10 +94,10 @@ func TestLeaderboardPageDefaultsAndRendersRanking(t *testing.T) {
 		`<title>Leaderboards</title>`,
 		`Race leaderboard`,
 		// Ties share a rank; pace is per 500m of the race distance.
-		`<tr class="pp-rank-1">`, `<td>1:35.0</td>`, `<td>1:35</td>`,
+		`<tr class="pp-rank-1">`,
 		`<tr class="pp-rank-1 font-bold" aria-current="true">`,
 		`&lt;Me&gt; <span class="pp-you-tag pp-arcade">You</span>`,
-		`<tr class="pp-rank-3">`, `<td>1:41.2</td>`, `<td>1:41</td>`,
+		`<tr class="pp-rank-3">`,
 		`#1 &middot; 1:35.0`,
 		`href="/leaderboards"`,
 	} {
@@ -105,8 +105,39 @@ func TestLeaderboardPageDefaultsAndRendersRanking(t *testing.T) {
 			t.Errorf("page missing %q", want)
 		}
 	}
+	for _, pattern := range []string{
+		`<td>1:35.0</td>\s*<td>1:35.0</td>`,
+		`<td>1:41.2</td>\s*<td>1:41.2</td>`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(body) {
+			t.Errorf("page missing pattern %q", pattern)
+		}
+	}
+	for _, obsolete := range []string{`<td>1:35</td>`, `<td>1:41</td>`} {
+		if strings.Contains(body, obsolete) {
+			t.Errorf("page contains obsolete pace %q", obsolete)
+		}
+	}
 	if strings.Contains(body, "<Me>") {
 		t.Errorf("racer name is not escaped")
+	}
+
+	rows2000 := []app.LeaderboardRow{
+		{UserID: other, Name: "Speedy", ElapsedMilliseconds: 380400},
+	}
+	target2000 := "/leaderboards?race_type=" + lbType2000.String() + "&window=month"
+	for _, htmx := range []bool{false, true} {
+		rr2000, call2000 := serveLeaderboardPage(t, rows2000, viewer, target2000, htmx)
+		if rr2000.Code != http.StatusOK {
+			t.Fatalf("htmx=%v status = %d: %s", htmx, rr2000.Code, rr2000.Body)
+		}
+		if call2000 != (leaderboardCall{"global", "month", "race", lbType2000, viewer}) {
+			t.Fatalf("htmx=%v call = %+v", htmx, call2000)
+		}
+		body2000 := rr2000.Body.String()
+		if !regexp.MustCompile(`<td>6:20.4</td>\s*<td>1:35.1</td>`).MatchString(body2000) {
+			t.Errorf("htmx=%v missing Time+Pace row pattern `<td>6:20.4</td>\\s*<td>1:35.1</td>` in %s", htmx, body2000)
+		}
 	}
 }
 

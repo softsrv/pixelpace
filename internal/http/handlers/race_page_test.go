@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -260,29 +261,33 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	}
 }
 
-// The same table as the formatPaceTenths test in web/static/js/race-results.test.mjs,
-// read from the pacer li the race page renders for each pacer time and target.
+// The pace table is owned by testdata/pace_tenths.json, which the JS
+// formatPaceTenths test in web/static/js/race-results.test.mjs loads too, so
+// the server-rendered label and the live boat label cannot drift apart.
+// Each case is read from the pacer li the race page renders.
 func TestRacePagePacerLabelIsPacePerFiveHundredInTenths(t *testing.T) {
 	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
 	roomID := uuid.New()
-	cases := []struct {
-		elapsedMs, distanceMm int64
-		want                  string
-	}{
-		{498800, 2000000, "2:04.7"},
-		{500000, 2000000, "2:05.0"},
-		{100000, 500000, "1:40.0"},
-		{110000, 2000000, "0:27.5"},
-		{95000, 500000, "1:35.0"},
-		{100000, 1000000, "0:50.0"},
-		{59960, 500000, "1:00.0"},
-		{499999, 2000000, "2:05.0"},
-		{0, 2000000, "—"},
-		{-1, 2000000, "—"},
-		{100000, 0, "—"},
-		{100000, -500000, "—"},
+	raw, err := os.ReadFile("testdata/pace_tenths.json")
+	if err != nil {
+		t.Fatalf("read pace table: %v", err)
 	}
-	for _, c := range cases {
+	var cases []struct {
+		ElapsedMs  int64  `json:"elapsed_ms"`
+		DistanceMm int64  `json:"distance_mm"`
+		Want       string `json:"want"`
+	}
+	if err := json.Unmarshal(raw, &cases); err != nil {
+		t.Fatalf("parse pace table: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("pace table is empty")
+	}
+	for _, tc := range cases {
+		c := struct {
+			elapsedMs, distanceMm int64
+			want                  string
+		}{tc.ElapsedMs, tc.DistanceMm, tc.Want}
 		viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 			return app.RoomRace{
 				RoomID: roomID, Label: "race", TargetMillimeters: c.distanceMm,

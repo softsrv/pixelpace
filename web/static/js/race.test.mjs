@@ -737,6 +737,53 @@ test('a status changing the pacer time relabels its boat and lane with the new p
   page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });
 
+test('a status carrying a pacer with a zero time still draws its boat and lane, labelled —', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: { '/rooms/r1/race/status': function () {
+      return jsonResponse(200, { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 0 } });
+    } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return pacerLanes(page).length === 1; });
+  assert.equal(pacerLanes(page)[0].textContent, '—', 'the lane list names the pacer —');
+  var boat = pixi.rower('—');
+  assert.ok(boat && hullOf(boat) === PACER_HULL, 'a pacer boat labelled — is drawn in the pacer hull');
+  pixi.texts.forEach(function (t) { assert.ok(!/NaN/.test(String(t.text)), 'no label reads NaN'); });
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('a status changing the pacer time to zero relabels the same boat and lane —', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var phases = [
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 95000 } },
+    { server_time: new Date().toISOString(), racers: self, pacer: { elapsed_milliseconds: 0 } }
+  ];
+  var phase = 0;
+  var page = setupPage({
+    finished: false,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: { '/rooms/r1/race/status': function () { return jsonResponse(200, phases[phase]); } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return pacerLanes(page).length === 1; });
+  var pacer = pixi.rower('1:35.0');
+  assert.ok(pacer, 'the first status labels the pacer 1:35.0');
+
+  phase = 1;
+  await until(function () { return pacerLanes(page)[0].textContent === '—'; });
+  assert.equal(pacerLanes(page).length, 1, 'still one pacer lane');
+  assert.equal(pixi.rower('—'), pacer, 'the same boat now reads —');
+  assert.equal(pixi.rower('1:35.0'), undefined, 'the old pace no longer shows');
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
 test('a pacer with an unusable time or target is still drawn, labelled — rather than NaN or nothing', async function () {
   async function draw(options) {
     var page = setupPage(Object.assign({

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { formatDuration, formatPace, formatPaceTenths, formatDistance, resultRows } from './race-results.mjs';
 
@@ -163,25 +164,14 @@ test('formatPace derives pace from elapsed and distance and rounds to the second
   assert.equal(formatPace(5000), '0:05');
 });
 
-// The same table as the formatPaceTenths test in internal/http/handlers/race_page_test.go
-// (TestRacePagePacerLabelIsPacePerFiveHundredInTenths).
+// The pace table is owned by internal/http/handlers/testdata/pace_tenths.json,
+// which the Go race-page test (TestRacePagePacerLabelIsPacePerFiveHundredInTenths)
+// loads too, so the JS and Go formatters are held to one table.
 test('formatPaceTenths gives the pace per 500m as m:ss.t rounded to the nearest tenth', function () {
-  var cases = [
-    [498800, 2000000, '2:04.7'],
-    [500000, 2000000, '2:05.0'],
-    [100000, 500000, '1:40.0'],
-    [110000, 2000000, '0:27.5'],
-    [95000, 500000, '1:35.0'],
-    [100000, 1000000, '0:50.0'],
-    [59960, 500000, '1:00.0'],
-    [499999, 2000000, '2:05.0'],
-    [0, 2000000, '—'],
-    [-1, 2000000, '—'],
-    [100000, 0, '—'],
-    [100000, -500000, '—']
-  ];
+  var cases = JSON.parse(readFileSync(new URL('../../../internal/http/handlers/testdata/pace_tenths.json', import.meta.url), 'utf8'));
+  assert.ok(cases.length > 0, 'the shared pace table has cases');
   cases.forEach(function (c) {
-    assert.equal(formatPaceTenths(c[0], c[1]), c[2], c[0] + 'ms over ' + c[1] + 'mm');
+    assert.equal(formatPaceTenths(c.elapsed_ms, c.distance_mm), c.want, c.elapsed_ms + 'ms over ' + c.distance_mm + 'mm');
   });
   assert.equal(formatPaceTenths(null, 500000), '—');
   assert.equal(formatPaceTenths(100000, null), '—');

@@ -272,7 +272,9 @@ export async function startRaceView(trackEl, PIXI) {
         if (status.racers.length === 1) setHidden(pacerNoteEl, false);
         else if (status.racers.length >= 2) setHidden(pacerNoteEl, true);
       }
-    } else if (status.pacer && Number(status.pacer.elapsed_milliseconds) > 0) {
+    } else if (status.pacer) {
+      // The server decides whether a pacer exists; an unusable time still
+      // draws the boat, labelled by formatPaceTenths' '—' fallback, as on load.
       setPacer(Number(status.pacer.elapsed_milliseconds));
       setHidden(pacerNoteEl, true);
     } else if (Array.isArray(status.racers) && status.racers.length >= 2) {

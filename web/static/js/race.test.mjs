@@ -5,7 +5,7 @@ import { access } from 'node:fs/promises';
 // race.mjs guards its top-level DOM access, so it imports under node with no
 // document; each test then builds the page it needs and calls startRaceView.
 import { startRaceView } from './race.mjs';
-import { PACER_HULL, hullColor } from './race-pixels.mjs';
+import { COLORS, PACER_HULL, hullColor } from './race-pixels.mjs';
 
 var REMOVED = 'You were removed from this race because your rowing machine was not connected in time.';
 var raceResultsAvailable = await access(new URL('./race-results.mjs', import.meta.url)).then(function () { return true; }, function () { return false; });
@@ -498,6 +498,99 @@ test('the pacer boat is labelled with its pace per 500m in the pacer hull, takes
   pacerFirst.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });
 
+test("the player's own boat is labelled 'you' in its hull colour, while rivals and pacer keep their names", async function () {
+  async function draw(lanes) {
+    var racers = lanes.filter(function (l) { return l.dataset.pacer !== 'true'; }).map(function (l) {
+      return { user_id: l.dataset.userId, equipment_ready: true };
+    });
+    var page = setupPage({
+      finished: false, lanes: lanes,
+      responses: { '/rooms/r1/race/status': statusQueue([{ server_time: new Date().toISOString(), race_starts_at: new Date(Date.now() + 60000).toISOString(), racers: racers }]) }
+    });
+    var pixi = makePixi();
+    pixi.releaseInit();
+    await startRaceView(page.track, pixi.PIXI);
+    await settle();
+    return { page: page, pixi: pixi };
+  }
+
+  // Render lanes Me (self), Rival, a second rival also named 'Me', and the pacer.
+  var lanes = [
+    laneItem('u-self', 'Me', true),
+    laneItem('u-2', 'Rival', false),
+    laneItem('u-3', 'Me', false),
+    pacerItem(100000)
+  ];
+  var mainView = await draw(lanes);
+
+  // CLM-1: Exactly one PIXI.Text label has text === 'you', fill equals self hull, fontWeight 'bold'
+  var youLabels = mainView.pixi.texts.filter(function (t) { return t.text === 'you'; });
+  assert.equal(youLabels.length, 1, "exactly one label reads 'you'");
+  var selfRower = mainView.pixi.rower('you');
+  assert.ok(selfRower, "player boat exists with label 'you'");
+  assert.equal(hullOf(selfRower), hullColor(true, 0), "self hull colour matches hullColor(true, 0)");
+  var selfLabel = selfRower.children.find(function (c) { return c && c.text === 'you'; });
+  assert.ok(selfLabel, "self boat child label found");
+  assert.equal(selfLabel.style.fill, hullColor(true, 0), "label fill equals self lane hull colour");
+  assert.equal(selfLabel.style.fontWeight, 'bold', "label fontWeight is bold");
+  assert.equal(selfLabel.style.fontSize, 12, "label fontSize is 12");
+  assert.deepEqual(selfLabel.style.stroke, { color: COLORS.ink, width: 3 }, "label stroke is ink width 3");
+  assert.equal(mainView.pixi.texts.some(function (t) { return t.text === 'Me (you)'; }), false, "no label reads 'Me (you)'");
+  assert.equal(mainView.pixi.texts.some(function (t) { return typeof t.text === 'string' && t.text.includes('(you)'); }), false, "no label contains '(you)'");
+
+  // CLM-2: Rival and pacer labels
+  var rivalRower = mainView.pixi.rower('Rival');
+  assert.ok(rivalRower, "rival boat exists with label 'Rival'");
+  var rivalLabel = rivalRower.children.find(function (c) { return c && c.text === 'Rival'; });
+  assert.ok(rivalLabel, "rival boat child label found");
+  assert.equal(rivalLabel.text, 'Rival');
+  assert.equal(rivalLabel.style.fill, COLORS.white, "rival label fill is COLORS.white");
+
+  // The pacer is labelled with its pace: 100000ms over the default 500000mm target is 1:40.0 per 500m.
+  var pacerRower = mainView.pixi.rower('1:40.0');
+  assert.ok(pacerRower, "pacer boat exists with label '1:40.0'");
+  var pacerLabel = pacerRower.children.find(function (c) { return c && c.text === '1:40.0'; });
+  assert.ok(pacerLabel, "pacer boat child label found");
+  assert.equal(pacerLabel.text, '1:40.0');
+  assert.equal(pacerLabel.style.fill, PACER_HULL, "pacer label fill is PACER_HULL");
+
+  // CLM-3: Same-named rival boat carries different label
+  var sameNameRower = mainView.pixi.rower('Me');
+  assert.ok(sameNameRower, "same-named rival boat exists with label 'Me'");
+  var sameNameLabel = sameNameRower.children.find(function (c) { return c && c.text === 'Me'; });
+  assert.ok(sameNameLabel, "same-name rival child label found");
+  assert.equal(sameNameLabel.text, 'Me');
+  assert.equal(sameNameLabel.style.fill, COLORS.white, "same-name rival label fill is COLORS.white");
+  var meLabels = mainView.pixi.texts.filter(function (t) { return t.text === 'Me'; });
+  assert.equal(meLabels.length, 1, "exactly one label has text 'Me'");
+
+  // CLM-5: Screen-reader list (#race-lanes) still gives the player's real display name
+  var selfLaneEl = mainView.page.laneList.children.find(function (el) { return el.dataset.self === 'true'; });
+  assert.ok(selfLaneEl, "self lane element exists in #race-lanes");
+  assert.equal(selfLaneEl.textContent, 'Me', "#race-lanes still lists the self display name 'Me'");
+  mainView.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+
+  // CLM-4: (a) Blank/whitespace self name; (b) lanes with no self
+  var emptyView = await draw([laneItem('u-self', '', true), laneItem('u-2', 'Rival', false)]);
+  assert.ok(emptyView.pixi.rower('you'), "empty self name draws boat labelled 'you'");
+  assert.equal(emptyView.pixi.texts.filter(function (t) { return t.text === 'you'; }).length, 1);
+  assert.equal(emptyView.pixi.texts.some(function (t) { return typeof t.text === 'string' && t.text.includes('(you)'); }), false);
+  emptyView.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+
+  var whitespaceView = await draw([laneItem('u-self', '   ', true), laneItem('u-2', 'Rival', false)]);
+  assert.ok(whitespaceView.pixi.rower('you'), "whitespace self name draws boat labelled 'you'");
+  assert.equal(whitespaceView.pixi.texts.filter(function (t) { return t.text === 'you'; }).length, 1);
+  assert.equal(whitespaceView.pixi.texts.some(function (t) { return typeof t.text === 'string' && t.text.includes('(you)'); }), false);
+  whitespaceView.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+
+  var noSelfView = await draw([laneItem('u-1', 'Rival 1', false), laneItem('u-2', 'Rival 2', false), pacerItem(100000)]);
+  assert.equal(noSelfView.pixi.texts.some(function (t) { return t.text === 'you'; }), false, "no label reads 'you' when no self lane");
+  assert.ok(noSelfView.pixi.rower('Rival 1'), "rival 1 boat labelled with its display name");
+  assert.ok(noSelfView.pixi.rower('Rival 2'), "rival 2 boat labelled with its display name");
+  assert.ok(noSelfView.pixi.rower('1:40.0'), "pacer boat labelled with its pace '1:40.0'");
+  noSelfView.page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
 test('the pacer rows from the start on the server clock: still before GO, mid-course on a mid-race load, at the finish at its time', async function () {
   var realNow = Date.now;
   var startsAt = Date.parse('2026-10-26T12:00:10Z');
@@ -521,7 +614,7 @@ test('the pacer rows from the start on the server clock: still before GO, mid-co
     localNow += 4000;
     pixi.ticks[0]({ deltaTime: 1 });
     assertNear(pacer.y, START_Y, 'before GO the pacer waits on the start line');
-    assert.equal(pacer.y, pixi.rower('Me (you)').y, 'level with our own boat at the start');
+    assert.equal(pacer.y, pixi.rower('you').y, 'level with our own boat at the start');
     page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 
     // A reload 50s into a 100s personal best over 1000m.
@@ -592,7 +685,7 @@ test('a status with a pacer adds its lane, racer syncing keeps it while dropping
   phase = 2;
   await until(function () { return pacerLanes(page).length === 0; });
   assert.equal(pixi.rower('1:35.0'), undefined, 'pacer null removes the boat');
-  assert.ok(pixi.rower('Me (you)'), 'our own boat stays');
+  assert.ok(pixi.rower('you'), 'our own boat stays');
   pixi.ticks[0]({ deltaTime: 1 }); // the ticker runs on without the removed lane
   page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished')); // stop this view's polling
 });

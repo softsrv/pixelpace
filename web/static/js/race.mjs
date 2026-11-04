@@ -610,7 +610,7 @@ function createRower(PIXI, lane, rivalIndex, scale) {
   var wake = new PIXI.Graphics();
   rower.addChild(wake);
   var label = new PIXI.Text({
-    text: lane.isSelf ? lane.label + ' (you)' : lane.label,
+    text: lane.isSelf ? 'you' : lane.label,
     style: {
       fill: lane.isSelf || lane.isPacer ? hull : COLORS.white,
       fontSize: 12,

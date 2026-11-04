@@ -33,6 +33,8 @@ make docker-build     # Build dev image
 make prod             # Build production image (multi-stage, distroless, non-root)
 ```
 
+Merges into `main` require a pull request with `ci` green. Run `make fmt lint test test-integration` before opening a PR; see [docs/merge-gate.md](docs/merge-gate.md) for details on the merge gate.
+
 To run a single test:
 ```bash
 go test ./internal/auth/... -run TestJWTRoundTrip

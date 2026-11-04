@@ -64,7 +64,7 @@ func TestLoginFocusOrder(t *testing.T) {
 				emailIdx, passIdx, forgotIdx, submitIdx)
 		}
 
-		if !(emailIdx < passIdx && passIdx < forgotIdx && forgotIdx < submitIdx) {
+		if emailIdx >= passIdx || passIdx >= forgotIdx || forgotIdx >= submitIdx {
 			t.Errorf("expected focus order email (%d) < password (%d) < forgot (%d) < submit (%d)",
 				emailIdx, passIdx, forgotIdx, submitIdx)
 		}
@@ -111,7 +111,7 @@ func TestLoginFocusOrder(t *testing.T) {
 		passIdx := strings.Index(loginForm, `id="password"`)
 		forgotIdx := strings.Index(loginForm, `href="/forgot-password"`)
 		submitIdx := strings.Index(loginForm, `type="submit"`)
-		if !(passIdx < forgotIdx && forgotIdx < submitIdx) {
+		if passIdx >= forgotIdx || forgotIdx >= submitIdx {
 			t.Errorf("expected password (%d) < forgot (%d) < submit (%d)", passIdx, forgotIdx, submitIdx)
 		}
 

@@ -17,7 +17,7 @@
           <p class="pp-kicker pp-arcade">Now racing</p>
           <h1 id="pp-race-title" class="card-title pp-arcade">{{.Race.Label}} race</h1>
         </div>
-        {{if gt .LaneCount 0}}<span class="pp-tag pp-arcade">{{.LaneCount}} {{if eq .LaneCount 1}}lane{{else}}lanes{{end}}</span>{{end}}
+        {{with .LaneCount}}<span class="pp-tag pp-arcade">{{.}} {{if eq . 1}}lane{{else}}lanes{{end}}</span>{{end}}
       </div>
       <p id="race-status" class="pp-status-line text-sm" role="status" aria-live="polite">Getting the start line ready…</p>
       {{if and .Solo (not .Race.Pacer)}}

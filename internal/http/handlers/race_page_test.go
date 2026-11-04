@@ -218,6 +218,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if strings.Contains(body, "data-pacer") {
 		t.Errorf("page body unexpectedly contains data-pacer: %q", body)
 	}
+	if strings.Contains(body, "—") {
+		t.Errorf("page body without a pacer unexpectedly contains a pace label '—': %q", body)
+	}
 
 	// Status returns JSON with pacer null
 	statusRR := serveRacePage(t, viewer, user, roomID.String(), raceStatusEndpoint)
@@ -252,6 +255,50 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if strings.Contains(rrTwo.Body.String(), "set your first time") {
 		t.Errorf("2-entrant race unexpectedly has note: %q", rrTwo.Body.String())
 	}
+	if strings.Contains(rrTwo.Body.String(), "data-pacer") {
+		t.Errorf("2-entrant race unexpectedly has a pacer lane: %q", rrTwo.Body.String())
+	}
+}
+
+// The same table as the formatPaceTenths test in web/static/js/race-results.test.mjs,
+// read from the pacer li the race page renders for each pacer time and target.
+func TestRacePagePacerLabelIsPacePerFiveHundredInTenths(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID := uuid.New()
+	cases := []struct {
+		elapsedMs, distanceMm int64
+		want                  string
+	}{
+		{498800, 2000000, "2:04.7"},
+		{500000, 2000000, "2:05.0"},
+		{100000, 500000, "1:40.0"},
+		{110000, 2000000, "0:27.5"},
+		{95000, 500000, "1:35.0"},
+		{100000, 1000000, "0:50.0"},
+		{59960, 500000, "1:00.0"},
+		{499999, 2000000, "2:05.0"},
+		{0, 2000000, "—"},
+		{-1, 2000000, "—"},
+		{100000, 0, "—"},
+		{100000, -500000, "—"},
+	}
+	for _, c := range cases {
+		viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+			return app.RoomRace{
+				RoomID: roomID, Label: "race", TargetMillimeters: c.distanceMm,
+				Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
+				Pacer:  &app.RacePacer{ElapsedMilliseconds: c.elapsedMs},
+			}, nil
+		}}
+		rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%dms over %dmm: status = %d, want 200", c.elapsedMs, c.distanceMm, rr.Code)
+		}
+		want := fmt.Sprintf(`data-pacer-ms="%d">%s</li>`, c.elapsedMs, c.want)
+		if !strings.Contains(rr.Body.String(), want) {
+			t.Errorf("%dms over %dmm: page body missing %q; body=%q", c.elapsedMs, c.distanceMm, want, rr.Body.String())
+		}
+	}
 }
 
 func TestRacePageWithPacerRendersPacerLaneAndStatusPacerJSON(t *testing.T) {
@@ -270,12 +317,12 @@ func TestRacePageWithPacerRendersPacerLaneAndStatusPacerJSON(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	wantPacerLI := `<li data-user-id="pacer" data-pacer="true" data-pacer-ms="110000">Your best</li>`
+	wantPacerLI := `<li data-user-id="pacer" data-pacer="true" data-pacer-ms="110000">0:27.5</li>`
 	if !strings.Contains(body, wantPacerLI) {
 		t.Errorf("page body missing %q; body=%q", wantPacerLI, body)
 	}
-	if !strings.Contains(body, "Your best") {
-		t.Errorf("page body missing text 'Your best'; body=%q", body)
+	if strings.Contains(body, "Your best") {
+		t.Errorf("page body still names the pacer 'Your best'; body=%q", body)
 	}
 	if !strings.Contains(body, "2 lanes") {
 		t.Errorf("page body missing lane-count tag counting 2 lanes; body=%q", body)

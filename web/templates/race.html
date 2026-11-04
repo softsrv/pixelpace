@@ -39,7 +39,7 @@
       <ol id="race-lanes" class="sr-only" aria-label="Racers, by lane from left to right">
         {{range .Lanes}}<li data-user-id="{{.UserID}}" data-self="{{.IsSelf}}">{{.Label}}</li>
         {{end}}
-        {{with .Race.Pacer}}<li data-user-id="pacer" data-pacer="true" data-pacer-ms="{{.ElapsedMilliseconds}}">Your best</li>{{end}}
+        {{with .Race.Pacer}}<li data-user-id="pacer" data-pacer="true" data-pacer-ms="{{.ElapsedMilliseconds}}">{{$.PacerLabel}}</li>{{end}}
       </ol>
     </div>
   </section>

@@ -33,6 +33,19 @@ export function formatPace(paceOrElapsed, distance) {
   return m + ':' + String(s).padStart(2, '0');
 }
 
+// Formats the average pace per 500m of an elapsed time over a distance in
+// millimetres as m:ss.t, rounded to the nearest tenth (e.g. 498800ms over
+// 2000000mm -> "2:04.7", 59960ms over 500000mm -> "1:00.0"). Returns '—'
+// when either is null, NaN, zero or negative. Must match the race page's
+// Go formatPaceTenths.
+export function formatPaceTenths(elapsedMs, distanceMm) {
+  var elapsed = Number(elapsedMs);
+  var dist = Number(distanceMm);
+  if (elapsedMs == null || distanceMm == null || !(elapsed > 0) || !(dist > 0)) return '—';
+  var tenths = Math.floor((elapsed * 10000 + dist) / (2 * dist));
+  return formatDuration(tenths * 100);
+}
+
 // Formats a distance in metres (e.g. 500 -> "500 m").
 export function formatDistance(meters) {
   var m = Number(meters);

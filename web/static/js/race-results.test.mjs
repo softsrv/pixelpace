@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { formatDuration, formatPace, formatDistance, resultRows } from './race-results.mjs';
+import { formatDuration, formatPace, formatPaceTenths, formatDistance, resultRows } from './race-results.mjs';
 
 test('formatDuration formats finish time as m:ss.t', function () {
   assert.equal(formatDuration(95000), '1:35.0');
@@ -161,6 +161,33 @@ test('formatPace derives pace from elapsed and distance and rounds to the second
   assert.equal(formatPace(95600), '1:36');
   assert.equal(formatPace(59600), '1:00');
   assert.equal(formatPace(5000), '0:05');
+});
+
+// The same table as the formatPaceTenths test in internal/http/handlers/race_page_test.go
+// (TestRacePagePacerLabelIsPacePerFiveHundredInTenths).
+test('formatPaceTenths gives the pace per 500m as m:ss.t rounded to the nearest tenth', function () {
+  var cases = [
+    [498800, 2000000, '2:04.7'],
+    [500000, 2000000, '2:05.0'],
+    [100000, 500000, '1:40.0'],
+    [110000, 2000000, '0:27.5'],
+    [95000, 500000, '1:35.0'],
+    [100000, 1000000, '0:50.0'],
+    [59960, 500000, '1:00.0'],
+    [499999, 2000000, '2:05.0'],
+    [0, 2000000, '—'],
+    [-1, 2000000, '—'],
+    [100000, 0, '—'],
+    [100000, -500000, '—']
+  ];
+  cases.forEach(function (c) {
+    assert.equal(formatPaceTenths(c[0], c[1]), c[2], c[0] + 'ms over ' + c[1] + 'mm');
+  });
+  assert.equal(formatPaceTenths(null, 500000), '—');
+  assert.equal(formatPaceTenths(100000, null), '—');
+  assert.equal(formatPaceTenths(NaN, 500000), '—');
+  assert.equal(formatPaceTenths(100000, NaN), '—');
+  assert.equal(formatPaceTenths(undefined, undefined), '—');
 });
 
 test('formatDistance rounds and rejects negative or non-numeric input', function () {

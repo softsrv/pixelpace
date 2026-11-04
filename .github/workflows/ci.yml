@@ -11,6 +11,9 @@ permissions:
   contents: read
 
 jobs:
+  # The required status-check context in .github/rulesets/main.json is "ci",
+  # which matches this job id. Renaming this job id or adding a `name:` key
+  # breaks the required check.
   ci:
     runs-on: ubuntu-latest
     permissions:

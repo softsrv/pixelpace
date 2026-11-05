@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,23 +19,46 @@ type UserFetcher interface {
 	GetUserByID(ctx context.Context, id uuid.UUID) (db.User, error)
 }
 
+// SessionRefresher renews an expired session from the request's refresh
+// token: it sets fresh auth cookies on w and returns the new access token, or
+// reports false when the session cannot be renewed. *handlers.AuthHandler
+// implements it.
+type SessionRefresher interface {
+	RefreshSession(w http.ResponseWriter, r *http.Request) (accessToken string, ok bool)
+}
+
+// AuthOption configures Authenticate.
+type AuthOption func(*authConfig)
+
+type authConfig struct {
+	refresher SessionRefresher
+}
+
+// WithSessionRefresh makes Authenticate renew a missing, expired or invalid
+// access token from the refresh token before turning the request away, so a
+// user whose session is still alive never sees the login page.
+func WithSessionRefresh(r SessionRefresher) AuthOption {
+	return func(c *authConfig) { c.refresher = r }
+}
+
 // Authenticate validates the JWT from either the cookie or Authorization header,
-// loads the user, and attaches it to the request context.
-func Authenticate(queries UserFetcher, jwtSecret string) func(http.Handler) http.Handler {
+// loads the user, and attaches it to the request context. With
+// WithSessionRefresh, a request without a valid access token is first renewed
+// from its refresh token, and goes through if that succeeds.
+func Authenticate(queries UserFetcher, jwtSecret string, opts ...AuthOption) func(http.Handler) http.Handler {
+	var cfg authConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tokenStr := extractToken(r)
-			if tokenStr == "" {
-				respondUnauthorized(w, r)
-				return
-			}
-
-			claims, err := auth.ValidateAccessToken(tokenStr, jwtSecret)
-			if err != nil {
-				if errors.Is(err, auth.ErrTokenExpired) {
-					// Signal HTMX clients to refresh.
-					w.Header().Set("HX-Trigger", "token-expired")
+			claims, err := auth.ValidateAccessToken(extractToken(r), jwtSecret)
+			if err != nil && cfg.refresher != nil {
+				if token, ok := cfg.refresher.RefreshSession(w, r); ok {
+					claims, err = auth.ValidateAccessToken(token, jwtSecret)
 				}
+			}
+			if err != nil {
 				respondUnauthorized(w, r)
 				return
 			}

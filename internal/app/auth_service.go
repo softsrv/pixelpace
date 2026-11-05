@@ -30,6 +30,11 @@ type DeviceMeta struct {
 	DeviceName string
 	IPAddress  *netip.Addr
 	UserAgent  string
+	// ReplacesRefreshTokens are the raw refresh tokens the client already
+	// holds, if any. A login that issues a new session revokes them, so
+	// logging in again from the same browser replaces that browser's old
+	// session instead of leaving it in the session list until it expires.
+	ReplacesRefreshTokens []string
 }
 
 // TokenResult is returned after a successful login or token refresh.
@@ -215,7 +220,9 @@ func (s *AuthService) Logout(ctx context.Context, rawRefreshToken string) error 
 
 // Refresh validates a raw refresh token, issues a new access token, and returns
 // the same refresh token (no rotation). The refresh token's last_used_at and
-// device metadata are updated in place.
+// device metadata are updated in place, and its expiry slides to RefreshExpiry
+// from now: a session lasts as long as it keeps being used, and ends once it
+// has gone unused for RefreshExpiry.
 func (s *AuthService) Refresh(ctx context.Context, rawRefreshToken string, meta DeviceMeta) (TokenResult, error) {
 	hash := auth.HashToken(rawRefreshToken)
 
@@ -240,13 +247,20 @@ func (s *AuthService) Refresh(ctx context.Context, rawRefreshToken string, meta 
 		return TokenResult{}, fmt.Errorf("get user: %w", err)
 	}
 
+	// If the slide cannot be saved the session keeps working until its stored
+	// expiry, which is what the cookie is then given.
+	expiresAt := rt.ExpiresAt.Time
+	slid := time.Now().Add(s.cfg.RefreshExpiry)
 	if err := s.q.UpdateRefreshTokenLastUsed(ctx, db.UpdateRefreshTokenLastUsedParams{
 		ID:         rt.ID,
 		DeviceName: pgtype.Text{String: meta.DeviceName, Valid: meta.DeviceName != ""},
 		IpAddress:  meta.IPAddress,
 		UserAgent:  pgtype.Text{String: meta.UserAgent, Valid: meta.UserAgent != ""},
+		ExpiresAt:  pgtype.Timestamptz{Time: slid, Valid: true},
 	}); err != nil {
 		slog.Error("update refresh token last used", "token_id", rt.ID, "error", err)
+	} else {
+		expiresAt = slid
 	}
 
 	tp, err := auth.IssueAccessToken(user.ID, user.Email, s.cfg.JWTSecret, s.cfg.AccessExpiry)
@@ -258,7 +272,7 @@ func (s *AuthService) Refresh(ctx context.Context, rawRefreshToken string, meta 
 		AccessToken:        tp.AccessToken,
 		AccessTokenExpiry:  tp.ExpiresAt,
 		RefreshToken:       rawRefreshToken,
-		RefreshTokenExpiry: rt.ExpiresAt.Time,
+		RefreshTokenExpiry: expiresAt,
 	}, nil
 }
 
@@ -500,6 +514,9 @@ func (s *AuthService) issueTokenPair(
 	if err != nil {
 		return TokenResult{}, fmt.Errorf("insert refresh token: %w", err)
 	}
+	for _, old := range meta.ReplacesRefreshTokens {
+		s.revokeReplacedSession(ctx, old)
+	}
 
 	return TokenResult{
 		AccessToken:        tp.AccessToken,
@@ -507,6 +524,29 @@ func (s *AuthService) issueTokenPair(
 		RefreshToken:       rawRefresh,
 		RefreshTokenExpiry: expiresAt,
 	}, nil
+}
+
+// revokeReplacedSession revokes the refresh token a client held before it was
+// issued a new one. The client's cookie is overwritten by the new token either
+// way, so the old session is unreachable; revoking it just drops it from the
+// session list now. Failures are logged, not returned: the new login stands.
+func (s *AuthService) revokeReplacedSession(ctx context.Context, rawRefreshToken string) {
+	if rawRefreshToken == "" {
+		return
+	}
+	rt, err := s.q.GetRefreshTokenByHash(ctx, auth.HashToken(rawRefreshToken))
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.WarnContext(ctx, "replace session: get refresh token", "error", err)
+		}
+		return
+	}
+	if rt.RevokedAt.Valid {
+		return
+	}
+	if err := s.q.RevokeRefreshToken(ctx, rt.ID); err != nil {
+		slog.WarnContext(ctx, "replace session: revoke refresh token", "error", err, "token_id", rt.ID)
+	}
 }
 
 func (s *AuthService) sendVerificationEmail(ctx context.Context, user db.User) error {

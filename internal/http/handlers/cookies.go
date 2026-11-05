@@ -96,11 +96,28 @@ func clearAuthCookies(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    "",
-		Path:     "/auth",
+		Path:     "/",
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  epoch,
+		MaxAge:   -1,
+	})
+	clearLegacyRefreshCookie(w, secure)
+}
+
+// clearLegacyRefreshCookie expires a refresh_token cookie set with the old
+// Path=/auth. Left in place it would be sent ahead of the Path=/ one on
+// /auth/* requests, so logout would revoke the wrong session.
+func clearLegacyRefreshCookie(w http.ResponseWriter, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     "/auth",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 	})
 }

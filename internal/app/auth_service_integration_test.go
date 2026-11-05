@@ -4,6 +4,7 @@ package app_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/softsrv/starter/internal/app"
+	"github.com/softsrv/starter/internal/auth"
 	"github.com/softsrv/starter/internal/db"
 	"github.com/softsrv/starter/internal/email"
 )
@@ -155,6 +157,28 @@ func TestIntegration_Refresh(t *testing.T) {
 		t.Error("access token must be newly issued on each refresh")
 	}
 
+	// Each refresh slides the session's expiry to the full idle lifetime
+	// (RefreshExpiry, 720h here) from now, in the database and in the result.
+	if _, err := pool.Exec(ctx, "UPDATE refresh_tokens SET expires_at = NOW() + interval '1 hour' WHERE token_hash = $1",
+		auth.HashToken(result.RefreshToken)); err != nil {
+		t.Fatal(err)
+	}
+	slid, err := svc.Refresh(ctx, result.RefreshToken, app.DeviceMeta{})
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	var stored time.Time
+	if err := pool.QueryRow(ctx, "SELECT expires_at FROM refresh_tokens WHERE token_hash = $1",
+		auth.HashToken(result.RefreshToken)).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Now().Add(720 * time.Hour)
+	for name, got := range map[string]time.Time{"stored": stored, "returned": slid.RefreshTokenExpiry} {
+		if d := got.Sub(want); d < -time.Minute || d > time.Minute {
+			t.Errorf("%s refresh expiry %v, want about 720h from now (%v)", name, got, want)
+		}
+	}
+
 	// Token can be refreshed again without error.
 	_, err = svc.Refresh(ctx, result.RefreshToken, app.DeviceMeta{})
 	if err != nil {
@@ -229,5 +253,69 @@ func TestIntegration_AccountLockout(t *testing.T) {
 	_, err = svc.Login(ctx, "lockout@example.com", "any-password", app.DeviceMeta{})
 	if err != app.ErrAccountLocked {
 		t.Errorf("expected ErrAccountLocked, got %v", err)
+	}
+}
+
+// Logging in again from a browser that still holds a refresh token replaces
+// that browser's session: the old token is revoked rather than left in the
+// session list until it expires. A login without one (another device) leaves
+// existing sessions alone.
+func TestIntegration_LoginReplacesPresentedSession(t *testing.T) {
+	pool := testDB(t)
+	svc := testAuthService(t, pool)
+	ctx := context.Background()
+	q := db.New(pool)
+
+	user, err := svc.Register(ctx, "replace@example.com", "password123")
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+	})
+
+	first, err := svc.Login(ctx, "replace@example.com", "password123", app.DeviceMeta{})
+	if err != nil {
+		t.Fatalf("first Login: %v", err)
+	}
+	other, err := svc.Login(ctx, "replace@example.com", "password123", app.DeviceMeta{})
+	if err != nil {
+		t.Fatalf("other-device Login: %v", err)
+	}
+
+	// Same browser logs in again, presenting its old token plus one that
+	// matches nothing (unknown tokens are ignored).
+	second, err := svc.Login(ctx, "replace@example.com", "password123", app.DeviceMeta{
+		ReplacesRefreshTokens: []string{first.RefreshToken, "not-a-real-token"},
+	})
+	if err != nil {
+		t.Fatalf("second Login: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, first.RefreshToken, app.DeviceMeta{}); !errors.Is(err, app.ErrTokenRevoked) {
+		t.Errorf("Refresh(replaced) error = %v, want ErrTokenRevoked", err)
+	}
+	for name, tok := range map[string]string{"new": second.RefreshToken, "other device": other.RefreshToken} {
+		if _, err := svc.Refresh(ctx, tok, app.DeviceMeta{}); err != nil {
+			t.Errorf("Refresh(%s session): %v", name, err)
+		}
+	}
+
+	active, err := q.ListActiveRefreshTokensByUserID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("ListActiveRefreshTokensByUserID: %v", err)
+	}
+	if len(active) != 2 {
+		t.Errorf("active sessions = %d, want 2 (new + other device)", len(active))
+	}
+
+	// A failed login must not revoke the presented session.
+	if _, err := svc.Login(ctx, "replace@example.com", "wrong-password", app.DeviceMeta{
+		ReplacesRefreshTokens: []string{second.RefreshToken},
+	}); !errors.Is(err, app.ErrInvalidCredentials) {
+		t.Fatalf("bad-password Login error = %v, want ErrInvalidCredentials", err)
+	}
+	if _, err := svc.Refresh(ctx, second.RefreshToken, app.DeviceMeta{}); err != nil {
+		t.Errorf("Refresh after failed login: %v", err)
 	}
 }

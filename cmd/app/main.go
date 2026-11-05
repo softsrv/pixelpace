@@ -103,9 +103,6 @@ func main() {
 		concept2Svc = app.NewConcept2Service(queries, app.Concept2ServiceConfig{
 			Sealer: concept2.NewSealer([]byte(cfg.JWTSecret)),
 			Client: concept2Client,
-			// Only production posts to Concept2: staging and development
-			// queue and send nothing.
-			DevMode: devModeForAppEnv(cfg.AppEnv),
 		})
 		slog.Info("concept2 logbook enabled", "base_url", cfg.Concept2BaseURL)
 	}
@@ -380,8 +377,7 @@ func getEnvOrDefault(key, def string) string {
 const concept2PostInterval = 30 * time.Second
 
 // devModeForAppEnv is the single owner of DevMode: every environment except
-// production is DevMode. It turns on dev-only routes, and turns off posting
-// results to Concept2 (Concept2ServiceConfig.DevMode).
+// production is DevMode. It drives dev-only routes and UI only.
 func devModeForAppEnv(appEnv string) bool {
 	return appEnv != "production"
 }

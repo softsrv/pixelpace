@@ -1193,39 +1193,150 @@ func renderConcept2Panel(t *testing.T, pool *pgxpool.Pool, userID uuid.UUID) str
 	return rr.Body.String()
 }
 
-// CLM-9: in DevMode finalizing a race queues no post and the Logbook gets no
-// request, even for a post already pending; with DevMode off the same race
-// queues one post.
-func TestIntegration_Concept2Poster_DevModeQueuesAndSendsNothing(t *testing.T) {
-	for _, devMode := range []bool{true, false} {
-		t.Run(fmt.Sprintf("DevMode=%v", devMode), func(t *testing.T) {
-			clock := newTestClock()
-			lb := newScriptedLogbook(t)
-			var poster *app.Concept2Service
-			f := finishedRace(t, nil, func(f *raceFixture) {
-				poster = posterFor(f.pool, lb.URL, clock, func(c *app.Concept2ServiceConfig) { c.DevMode = devMode })
-				f.withResultPoster(poster)
-				connectConcept2(t, f.pool, f.users[0], "dev")
-			})
-			posts := resultPosts(t, f.pool, f.race.ID)
-			if want := map[bool]int{true: 0, false: 1}[devMode]; len(posts) != want {
-				t.Fatalf("posts after finalize = %+v, want %d", posts, want)
-			}
-			if devMode {
-				// A post queued outside DevMode is not sent by a DevMode poster.
-				if err := posterFor(f.pool, lb.URL, clock, nil).Enqueue(context.Background(), db.New(f.pool), f.race.ID); err != nil {
-					t.Fatal(err)
-				}
-				postDue(t, poster)
-				if got := lb.received(""); len(got) != 0 {
-					t.Fatalf("DevMode Logbook requests = %d, want 0", len(got))
-				}
-				if p := postStateOf(t, f.pool, f.race.ID); p.Status != "pending" || p.Attempts != 0 {
-					t.Fatalf("DevMode touched the post: %+v", p)
-				}
-			}
-		})
+// CLM-1: with no environment input in config, a connected user with auto_post
+// on who finishes a race gets one pending result post; the next PostDue pass
+// sends it to the configured Logbook and marks it posted.
+func TestIntegration_Concept2Poster_ConnectedFinisherQueuesAndPosts(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "clm1-user")
+	})
+	posts := resultPosts(t, f.pool, f.race.ID)
+	if len(posts) != 1 || posts[0].Status != "pending" || posts[0].UserID != f.users[0] {
+		t.Fatalf("posts after finalize = %+v, want one pending row", posts)
 	}
+	// Calling Enqueue explicitly is idempotent.
+	if err := poster.Enqueue(context.Background(), db.New(f.pool), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if posts := resultPosts(t, f.pool, f.race.ID); len(posts) != 1 {
+		t.Fatalf("posts after Enqueue = %+v, want 1", posts)
+	}
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("PostDue = %d, want 1", n)
+	}
+	got := lb.received(resultsPath)
+	if len(got) != 1 {
+		t.Fatalf("Logbook requests = %d, want 1", len(got))
+	}
+	p := postStateOf(t, f.pool, f.race.ID)
+	if p.Status != "posted" {
+		t.Fatalf("post state = %+v, want status posted", p)
+	}
+}
+
+type recordingTransport struct {
+	mu   sync.Mutex
+	reqs []*http.Request
+}
+
+func (rt *recordingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.mu.Lock()
+	rt.reqs = append(rt.reqs, req.Clone(req.Context()))
+	rt.mu.Unlock()
+
+	res := &http.Response{
+		StatusCode: http.StatusCreated,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"data":{"id":7777}}`)),
+		Request:    req,
+	}
+	res.Header.Set("Content-Type", "application/json")
+	return res, nil
+}
+
+// CLM-3: when the configured Concept2 base URL is the production Logbook
+// (https://log.concept2.com), PostDue sends the due result to that host unchanged
+// and marks it posted.
+func TestIntegration_Concept2Poster_ProductionLogbookHostPosted(t *testing.T) {
+	rt := &recordingTransport{}
+	httpClient := &http.Client{Transport: rt}
+	c2Client := concept2.New("https://log.concept2.com", "client-id", "client-secret", "https://pixelpace.example/profile/concept2/callback", concept2.WithHTTPClient(httpClient))
+
+	clock := newTestClock()
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		connectConcept2(t, f.pool, f.users[0], "prod-logbook-user")
+	})
+	cfg := app.Concept2ServiceConfig{
+		Sealer: stubSealer{},
+		Client: c2Client,
+		Now:    clock.Now,
+	}
+	poster := app.NewConcept2Service(db.New(f.pool), cfg)
+	if err := poster.Enqueue(context.Background(), db.New(f.pool), f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	posts := resultPosts(t, f.pool, f.race.ID)
+	if len(posts) != 1 || posts[0].Status != "pending" {
+		t.Fatalf("posts after Enqueue = %+v, want 1 pending", posts)
+	}
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("PostDue = %d, want 1", n)
+	}
+	rt.mu.Lock()
+	reqs := rt.reqs
+	rt.mu.Unlock()
+	if len(reqs) != 1 {
+		t.Fatalf("transport received %d requests, want 1", len(reqs))
+	}
+	if host := reqs[0].URL.Host; host != "log.concept2.com" {
+		t.Fatalf("request host = %q, want log.concept2.com", host)
+	}
+	if scheme := reqs[0].URL.Scheme; scheme != "https" {
+		t.Fatalf("request scheme = %q, want https", scheme)
+	}
+	p := postStateOf(t, f.pool, f.race.ID)
+	if p.Status != "posted" {
+		t.Fatalf("post state = %+v, want status posted", p)
+	}
+}
+
+// CLM-4: a race finish queues no post when the user has no Concept2 connection
+// or did not finish (DNF).
+func TestIntegration_Concept2Poster_UnconnectedAndDNFQueueNothing(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+
+	t.Run("unconnected", func(t *testing.T) {
+		var poster *app.Concept2Service
+		f := finishedRace(t, nil, func(f *raceFixture) {
+			poster = posterFor(f.pool, lb.URL, clock, nil)
+			f.withResultPoster(poster)
+		})
+		posts := resultPosts(t, f.pool, f.race.ID)
+		if len(posts) != 0 {
+			t.Fatalf("posts for unconnected user = %+v, want none", posts)
+		}
+		if n := postDue(t, poster); n != 0 {
+			t.Fatalf("PostDue = %d, want 0", n)
+		}
+	})
+
+	t.Run("dnf", func(t *testing.T) {
+		ctx := context.Background()
+		const target int64 = 500000
+		f := seedRaceRoom(t, 2, target, 5*time.Millisecond)
+		poster := posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "dnf-user-1")
+		connectConcept2(t, f.pool, f.users[1], "dnf-user-2")
+		f.begin(t)
+		f.ingest(t, 0, 1000, 1000, f.now)
+		if err := f.svc.Run(ctx, f.race.ID); err != nil {
+			t.Fatal(err)
+		}
+		posts := resultPosts(t, f.pool, f.race.ID)
+		if len(posts) != 0 {
+			t.Fatalf("posts for DNF participants = %+v, want none", posts)
+		}
+		if n := postDue(t, poster); n != 0 {
+			t.Fatalf("PostDue = %d, want 0", n)
+		}
+	})
 }
 
 // CLM-18: with auto_post off a finalized race queues nothing for the user;

@@ -50,9 +50,6 @@ type Concept2ServiceConfig struct {
 	Sealer TokenSealer
 	// Client posts results to the Logbook. Required by PostDue.
 	Client Concept2ResultClient
-	// DevMode turns posting off: Enqueue queues nothing and PostDue sends
-	// nothing. main sets it from devModeForAppEnv, its only owner.
-	DevMode bool
 	// Lease is how long a claimed post stays claimed before another pass may
 	// take it again, so a poster that stops mid-post does not strand it.
 	Lease time.Duration
@@ -105,12 +102,8 @@ var _ RaceResultPoster = (*Concept2Service)(nil)
 // reconnects, so a finish is never lost. RaceService calls it with its
 // finalize transaction's queries,
 // so the posts commit with the finish or not at all. It is idempotent: a
-// participant already queued for this race is not queued again. In DevMode
-// it queues nothing.
+// participant already queued for this race is not queued again.
 func (s *Concept2Service) Enqueue(ctx context.Context, q *db.Queries, raceID uuid.UUID) error {
-	if s.cfg.DevMode {
-		return nil
-	}
 	userIDs, err := q.ListConcept2PostCandidates(ctx, raceID)
 	if err != nil {
 		return fmt.Errorf("list concept2 post candidates: %w", err)
@@ -152,12 +145,8 @@ func (s *Concept2Service) RunPoster(ctx context.Context, interval time.Duration)
 // after a capped exponential gap for as long as it takes. Tokens that will
 // not open or refresh set the connection needs_reconnect and leave its posts
 // pending, attempts unchanged, with nothing sent. It returns how many posts
-// it posted, and an error only when the database fails. In DevMode it sends
-// nothing.
+// it posted, and an error only when the database fails.
 func (s *Concept2Service) PostDue(ctx context.Context) (int, error) {
-	if s.cfg.DevMode {
-		return 0, nil
-	}
 	if s.cfg.Client == nil {
 		return 0, errors.New("concept2 result client is not configured")
 	}

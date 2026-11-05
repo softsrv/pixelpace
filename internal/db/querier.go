@@ -167,11 +167,14 @@ type Querier interface {
 	SetUserDisplayName(ctx context.Context, arg SetUserDisplayNameParams) error
 	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
 	// The racer's own fastest finished Time Trial at a race type, from races that
-	// started before the given instant (the minimum elapsed time). No row when
-	// there is none. A Time Trial's pacer rows at this time.
+	// started and were finished by the racer before the given instant (the minimum
+	// elapsed time). No row when there is none. A Time Trial's pacer rows at this
+	// time; bounding on the finish keeps it fixed for the whole race.
 	TimeTrialPersonalBest(ctx context.Context, arg TimeTrialPersonalBestParams) (pgtype.Int4, error)
 	UpdateConcept2Tokens(ctx context.Context, arg UpdateConcept2TokensParams) (int64, error)
 	UpdatePasswordHash(ctx context.Context, arg UpdatePasswordHashParams) error
+	// A refresh also slides the token's expiry: a session stays alive for as long
+	// as it keeps being used, and ends once it goes unused for the idle lifetime.
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error
 	UpdateRoomRaceType(ctx context.Context, arg UpdateRoomRaceTypeParams) error
 	// Every query here is keyed by the PixelPace user's id (user_id), so acting

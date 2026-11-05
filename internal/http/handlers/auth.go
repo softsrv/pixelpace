@@ -104,6 +104,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// when they reach /verify-email. POST /auth/verify-email is protected by
 	// authMW and will reject unauthenticated requests.
 	meta := h.deviceMeta(r)
+	meta.ReplacesRefreshTokens = presentedRefreshTokens(r)
 	result, err := h.auth.Login(r.Context(), email, password, meta)
 	if err != nil {
 		// Registration succeeded — log the auto-login failure and redirect anyway.
@@ -125,6 +126,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := h.deviceMeta(r)
+	meta.ReplacesRefreshTokens = presentedRefreshTokens(r)
 	result, err := h.auth.Login(r.Context(), r.FormValue("email"), r.FormValue("password"), meta)
 	if err != nil {
 		slog.WarnContext(r.Context(), "login failed", "error", err)
@@ -225,6 +227,7 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := h.deviceMeta(r)
+	meta.ReplacesRefreshTokens = presentedRefreshTokens(r)
 	result, err := h.auth.VerifyEmail(r.Context(), token, meta)
 	if err != nil {
 		slog.WarnContext(r.Context(), "verify email failed", "error", err)
@@ -281,15 +284,43 @@ func (h *AuthHandler) setTokenCookies(w http.ResponseWriter, result app.TokenRes
 		SameSite: http.SameSiteLaxMode,
 		Expires:  result.AccessTokenExpiry,
 	})
+	// Path "/" so every request carries it: Authenticate refreshes an expired
+	// session from it on whatever page the user opens.
 	http.SetCookie(w, &http.Cookie{
 		Name:     "refresh_token",
 		Value:    result.RefreshToken,
-		Path:     "/auth",
+		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.secure,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  result.RefreshTokenExpiry,
 	})
+	clearLegacyRefreshCookie(w, h.secure)
+}
+
+// RefreshSession renews the session from the request's refresh_token cookie:
+// it issues a new access token, slides the session's expiry, sets both
+// cookies on w and returns the access token. It reports false when there is
+// no usable refresh token. A refresh token the server rejects (unknown,
+// revoked or expired) also has the auth cookies cleared; a failure of the
+// server itself leaves them, so a transient fault does not log the user out.
+// It satisfies middleware.SessionRefresher.
+func (h *AuthHandler) RefreshSession(w http.ResponseWriter, r *http.Request) (string, bool) {
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil || cookie.Value == "" {
+		return "", false
+	}
+	result, err := h.auth.Refresh(r.Context(), cookie.Value, h.deviceMeta(r))
+	if err != nil {
+		if errors.Is(err, app.ErrTokenNotFound) || errors.Is(err, app.ErrTokenRevoked) || errors.Is(err, app.ErrTokenExpired) {
+			clearAuthCookies(w, h.secure)
+		} else {
+			slog.WarnContext(r.Context(), "session refresh failed", "error", err)
+		}
+		return "", false
+	}
+	h.setTokenCookies(w, result)
+	return result.AccessToken, true
 }
 
 func (h *AuthHandler) renderError(w http.ResponseWriter, r *http.Request, status int, msg string) {
@@ -305,6 +336,20 @@ func (h *AuthHandler) renderError(w http.ResponseWriter, r *http.Request, status
 func htmxRedirect(w http.ResponseWriter, path string) {
 	w.Header().Set("HX-Redirect", path)
 	w.WriteHeader(http.StatusOK)
+}
+
+// presentedRefreshTokens returns the refresh token cookies the request
+// carries. Login and email verification pass them on so the new session
+// replaces the one this browser already had. There can be more than one: a
+// browser may still hold a legacy Path=/auth cookie next to the Path=/ one.
+func presentedRefreshTokens(r *http.Request) []string {
+	var tokens []string
+	for _, c := range r.CookiesNamed("refresh_token") {
+		if c.Value != "" {
+			tokens = append(tokens, c.Value)
+		}
+	}
+	return tokens
 }
 
 // deviceMeta extracts client IP and user-agent metadata from the request.

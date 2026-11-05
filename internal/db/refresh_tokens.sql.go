@@ -171,22 +171,29 @@ func (q *Queries) RevokeRefreshToken(ctx context.Context, id uuid.UUID) error {
 }
 
 const updateRefreshTokenLastUsed = `-- name: UpdateRefreshTokenLastUsed :exec
-UPDATE refresh_tokens SET last_used_at = NOW(), device_name = $2, ip_address = $3, user_agent = $4 WHERE id = $1
+UPDATE refresh_tokens SET
+    last_used_at = NOW(), device_name = $2, ip_address = $3, user_agent = $4,
+    expires_at = $5
+WHERE id = $1
 `
 
 type UpdateRefreshTokenLastUsedParams struct {
-	ID         uuid.UUID   `json:"id"`
-	DeviceName pgtype.Text `json:"device_name"`
-	IpAddress  *netip.Addr `json:"ip_address"`
-	UserAgent  pgtype.Text `json:"user_agent"`
+	ID         uuid.UUID          `json:"id"`
+	DeviceName pgtype.Text        `json:"device_name"`
+	IpAddress  *netip.Addr        `json:"ip_address"`
+	UserAgent  pgtype.Text        `json:"user_agent"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 }
 
+// A refresh also slides the token's expiry: a session stays alive for as long
+// as it keeps being used, and ends once it goes unused for the idle lifetime.
 func (q *Queries) UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error {
 	_, err := q.db.Exec(ctx, updateRefreshTokenLastUsed,
 		arg.ID,
 		arg.DeviceName,
 		arg.IpAddress,
 		arg.UserAgent,
+		arg.ExpiresAt,
 	)
 	return err
 }

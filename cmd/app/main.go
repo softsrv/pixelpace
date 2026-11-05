@@ -340,9 +340,11 @@ func mustLoadConfig() config {
 		cfg.JWTAccessExpiry = 15 * time.Minute
 	}
 
-	cfg.RefreshTokenExpiry, err = time.ParseDuration(getEnvOrDefault("REFRESH_TOKEN_EXPIRY", "720h"))
+	// REFRESH_TOKEN_EXPIRY is the session's idle lifetime: each refresh slides
+	// the expiry forward, so only a session unused this long has to log in again.
+	cfg.RefreshTokenExpiry, err = time.ParseDuration(getEnvOrDefault("REFRESH_TOKEN_EXPIRY", "240h"))
 	if err != nil {
-		cfg.RefreshTokenExpiry = 720 * time.Hour
+		cfg.RefreshTokenExpiry = 240 * time.Hour
 	}
 
 	cfg.BCryptCost, err = strconv.Atoi(getEnvOrDefault("BCRYPT_COST", "12"))

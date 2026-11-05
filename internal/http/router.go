@@ -163,7 +163,15 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	forgotRL := middleware.NewRateLimiter(ctx, 3, time.Hour, middleware.FormEmailKeyFunc)
 	resetRL := middleware.NewRateLimiter(ctx, 5, time.Hour, ipKey)
 
-	authMW := middleware.Authenticate(cfg.Queries, cfg.JWTSecret)
+	// A lapsed access token is renewed from the refresh token, so an active
+	// session never meets the login page. Off only when no AuthService is
+	// configured (router tests).
+	var authOpts []middleware.AuthOption
+	sessionRefresh := cfg.AuthSvc != nil
+	if sessionRefresh {
+		authOpts = append(authOpts, middleware.WithSessionRefresh(authH))
+	}
+	authMW := middleware.Authenticate(cfg.Queries, cfg.JWTSecret, authOpts...)
 	verifiedMW := func(h http.Handler) http.Handler { return authMW(middleware.RequireEmailVerified(h)) }
 
 	// ── Static assets ─────────────────────────────────────────────────────────
@@ -178,16 +186,25 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 		// Only send the user to the dashboard if they present a genuinely valid
 		// access token for an account that still exists; a stale, malformed or
 		// orphaned cookie on exactly "/" should land on the landing page rather
-		// than bouncing through a protected route to /login.
+		// than bouncing through a protected route to /login. A session whose
+		// access token has lapsed is renewed from its refresh token first, so a
+		// returning user lands on the dashboard.
+		session := rootSignedOut
 		if cookie, err := r.Cookie("access_token"); err == nil && cookie.Value != "" {
-			switch classifyRootToken(r, cfg, cookie.Value) {
-			case rootSignedIn:
-				http.Redirect(w, r, "/dashboard", http.StatusFound)
-				return
-			case rootOrphaned:
-				if r.URL.Path == "/" {
-					clearAccessTokenCookie(w, cfg.Secure)
-				}
+			session = classifyRootToken(r, cfg, cookie.Value)
+		}
+		if session == rootSignedOut && r.URL.Path == "/" && sessionRefresh {
+			if token, ok := authH.RefreshSession(w, r); ok {
+				session = classifyRootToken(r, cfg, token)
+			}
+		}
+		switch session {
+		case rootSignedIn:
+			http.Redirect(w, r, "/dashboard", http.StatusFound)
+			return
+		case rootOrphaned:
+			if r.URL.Path == "/" {
+				clearAccessTokenCookie(w, cfg.Secure)
 			}
 		}
 		if r.URL.Path != "/" {

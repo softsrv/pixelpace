@@ -18,7 +18,12 @@ UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = $1;
 UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL;
 
 -- name: UpdateRefreshTokenLastUsed :exec
-UPDATE refresh_tokens SET last_used_at = NOW(), device_name = $2, ip_address = $3, user_agent = $4 WHERE id = $1;
+-- A refresh also slides the token's expiry: a session stays alive for as long
+-- as it keeps being used, and ends once it goes unused for the idle lifetime.
+UPDATE refresh_tokens SET
+    last_used_at = NOW(), device_name = $2, ip_address = $3, user_agent = $4,
+    expires_at = sqlc.arg(expires_at)
+WHERE id = $1;
 
 -- name: ListActiveRefreshTokensByUserID :many
 SELECT * FROM refresh_tokens

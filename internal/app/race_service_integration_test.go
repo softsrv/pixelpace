@@ -1672,3 +1672,102 @@ func TestRaceServiceUnfinishedRaces(t *testing.T) {
 		t.Fatalf("unfinished=%v err=%v, want it without the finished race %s", ids, err, f.race.ID)
 	}
 }
+
+// seedWarmupRoom seeds a counting-down one-minute warmup room on the warmup
+// race type, as the dashboard's 'Start warmup' creates.
+func seedWarmupRoom(t *testing.T, threshold time.Duration) *raceFixture {
+	t.Helper()
+	f := seedModeRoom(t, "warmup", 1, 500000, threshold)
+	if _, err := f.pool.Exec(context.Background(), "UPDATE rooms SET race_type_id = '01950000-0000-7000-8000-000000000009' WHERE id = $1", f.room); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// CLM-5: a started warmup ends exactly when the server clock reaches
+// started_at + duration, whatever distance was rowed: never earlier because a
+// distance (even far beyond any standard one) was reached, never later because
+// the rower sent nothing, and with no DNF and no Concept2 post.
+func TestRaceServiceWarmupEndsAtDuration(t *testing.T) {
+	const duration = time.Minute
+	for _, tc := range []struct {
+		name     string
+		distance int64 // millimetres rowed before the minute is up; < 0 sends nothing
+	}{
+		{"past 10000m", 12_000_000},
+		{"zero metres", 0},
+		{"no telemetry at all", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A staleness threshold far below the duration: it must not end a warmup.
+			f := seedWarmupRoom(t, 5*time.Millisecond)
+			lb := newFakeLogbook(t)
+			poster := newConcept2Poster(f.pool, lb)
+			f.withResultPoster(poster)
+			connectConcept2(t, f.pool, f.users[0], "warmup-user")
+			f.begin(t)
+			sub := f.subscribe(t)
+			start := f.race.StartedAt.Time
+			if tc.distance >= 0 {
+				f.ingest(t, 0, 30000, tc.distance, start.Add(30*time.Second))
+			}
+
+			stillRunning := func(label string) {
+				t.Helper()
+				if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"racing"}) {
+					t.Fatalf("%s: statuses=%v, want still racing", label, got)
+				}
+				if at := f.raceFinishedAt(t); at.Valid {
+					t.Fatalf("%s: race finished at %v, want running", label, at.Time)
+				}
+				if status := f.roomStatus(t); status != "in_progress" {
+					t.Fatalf("%s: room status=%s, want in_progress", label, status)
+				}
+			}
+			polls := 0
+			f.onSleep = func() {
+				polls++
+				switch polls {
+				case 1:
+					f.now = start.Add(30 * time.Second)
+					stillRunning("mid-warmup")
+				case 2:
+					f.now = start.Add(duration - time.Millisecond)
+				case 3:
+					stillRunning("one millisecond before the end")
+					f.now = start.Add(duration)
+				}
+			}
+			if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+				t.Fatal(err)
+			}
+			if polls != 3 {
+				t.Fatalf("Run polled %d times, want 3: it must end exactly at the duration", polls)
+			}
+			if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished"}) {
+				t.Fatalf("statuses=%v, want finished and no DNF", got)
+			}
+			var elapsed int32
+			if err := f.pool.QueryRow(context.Background(), "SELECT elapsed_milliseconds FROM race_participants WHERE race_id = $1", f.race.ID).Scan(&elapsed); err != nil || elapsed != int32(duration.Milliseconds()) {
+				t.Fatalf("participant elapsed=%d err=%v, want the full duration", elapsed, err)
+			}
+			if at := f.raceFinishedAt(t); !at.Valid || !at.Time.Equal(start.Add(duration)) {
+				t.Fatalf("races.finished_at=%+v, want %v", at, start.Add(duration))
+			}
+			if status := f.roomStatus(t); status != "finished" {
+				t.Fatalf("room status=%s, want finished", status)
+			}
+			if frames := finishedFrames(t, drain(sub)); len(frames) != 1 {
+				t.Fatalf("finished frames=%v, want one", frames)
+			}
+			if posts := resultPosts(t, f.pool, f.race.ID); len(posts) != 0 {
+				t.Fatalf("posts=%+v, want none for a warmup", posts)
+			}
+			// A finished warmup is final: a second Run returns at once.
+			f.onSleep = func() { t.Fatal("Run polled a finished warmup") }
+			if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

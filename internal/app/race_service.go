@@ -660,8 +660,13 @@ func lockStandings(ctx context.Context, q *db.Queries, raceID uuid.UUID) (db.Loc
 	if err != nil {
 		return db.LockRaceRow{}, nil, fmt.Errorf("lock standings race: %w", err)
 	}
-	if race.Kind != "distance" {
+	// A warmup rows on the warmup sentinel race type (kind "time"); every
+	// other mode needs a distance race.
+	if race.Kind != "distance" && race.Mode != ModeWarmup {
 		return db.LockRaceRow{}, nil, fmt.Errorf("standings require a distance race, got %q", race.Kind)
+	}
+	if race.Mode == ModeWarmup && !race.DurationSeconds.Valid {
+		return db.LockRaceRow{}, nil, errors.New("warmup race has no duration")
 	}
 	rows, err := q.ListRaceStandings(ctx, db.ListRaceStandingsParams{
 		RaceID: raceID, DistanceMillimeters: pgtype.Int8{Int64: race.TargetValue, Valid: true},
@@ -682,9 +687,19 @@ func (s *RaceService) stale(race db.LockRaceRow, row db.ListRaceStandingsRow, no
 	return now.Sub(lastSeen) > s.cfg.StalenessThreshold
 }
 
+// warmupDuration is how long a warmup runs from its start.
+func warmupDuration(race db.LockRaceRow) time.Duration {
+	return time.Duration(race.DurationSeconds.Int32) * time.Second
+}
+
 // raceOver reports whether every participant is done: already finished or
-// DNF, holding a sample at or past the target, or stale without one.
+// DNF, holding a sample at or past the target, or stale without one. A warmup
+// is over once the clock reaches its start plus its duration, whatever
+// distance anyone has rowed.
 func (s *RaceService) raceOver(race db.LockRaceRow, rows []db.ListRaceStandingsRow, now time.Time) bool {
+	if race.Mode == ModeWarmup {
+		return !now.Before(race.StartedAt.Time.Add(warmupDuration(race)))
+	}
 	for _, row := range rows {
 		if row.Status != "racing" || row.TargetElapsedMilliseconds.Valid {
 			continue
@@ -701,6 +716,9 @@ func (s *RaceService) raceOver(race db.LockRaceRow, rows []db.ListRaceStandingsR
 // happens to their telemetry afterwards. Finalizing records each finish, marks
 // the rest DNF, and moves the race and its room to finished.
 func (s *RaceService) settle(ctx context.Context, q *db.Queries, race db.LockRaceRow, rows []db.ListRaceStandingsRow, final, finalize bool) ([]RaceStanding, error) {
+	if race.Mode == ModeWarmup {
+		return s.settleWarmup(ctx, q, race, rows, finalize)
+	}
 	now := s.cfg.Now()
 	standings := make([]RaceStanding, 0, len(rows))
 	for _, row := range rows {
@@ -751,6 +769,44 @@ func (s *RaceService) settle(ctx context.Context, q *db.Queries, race db.LockRac
 			if err := s.cfg.ResultPoster.Enqueue(ctx, q, race.ID); err != nil {
 				return nil, fmt.Errorf("enqueue race results: %w", err)
 			}
+		}
+	}
+	return standings, nil
+}
+
+// settleWarmup settles a warmup, which has no target: nobody is marked DNF
+// for missing one and staleness never ends it. Standings are the distance
+// each rower has covered, furthest first. Finalizing records every rower still
+// racing as finished over the full duration, then moves the race and its room
+// to finished. A warmup is never queued for posting to another service.
+func (s *RaceService) settleWarmup(ctx context.Context, q *db.Queries, race db.LockRaceRow, rows []db.ListRaceStandingsRow, finalize bool) ([]RaceStanding, error) {
+	duration := warmupDuration(race)
+	standings := make([]RaceStanding, 0, len(rows))
+	for _, row := range rows {
+		if row.Status == "dnf" {
+			continue
+		}
+		standing := RaceStanding{UserID: row.UserID, DistanceMillimeters: row.DistanceMillimeters.Int64, ElapsedMilliseconds: row.ElapsedMilliseconds.Int64}
+		if finalize {
+			standing.ElapsedMilliseconds = duration.Milliseconds()
+			if err := q.FinishRaceParticipant(ctx, db.FinishRaceParticipantParams{
+				ID: row.ID, ElapsedMilliseconds: pgtype.Int4{Int32: int32(standing.ElapsedMilliseconds), Valid: true},
+				FinishedAt: pgtype.Timestamptz{Time: race.StartedAt.Time.Add(duration), Valid: true},
+			}); err != nil {
+				return nil, fmt.Errorf("finish warmup participant: %w", err)
+			}
+		}
+		standings = append(standings, standing)
+	}
+	sort.SliceStable(standings, func(i, j int) bool {
+		return standings[i].DistanceMillimeters > standings[j].DistanceMillimeters
+	})
+	if finalize {
+		if err := q.FinishRace(ctx, db.FinishRaceParams{ID: race.ID, FinishedAt: pgtype.Timestamptz{Time: s.cfg.Now(), Valid: true}}); err != nil {
+			return nil, fmt.Errorf("finish warmup race: %w", err)
+		}
+		if err := q.FinishRaceRoom(ctx, race.RoomID); err != nil {
+			return nil, fmt.Errorf("finish warmup room: %w", err)
 		}
 	}
 	return standings, nil

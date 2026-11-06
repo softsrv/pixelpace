@@ -42,7 +42,7 @@ func NewQuickMatchService(q *db.Queries, pool pgxBeginner, rooms *RoomService, c
 
 // Enqueue records a fresh search. A duplicate never resets the original wait.
 func (s *QuickMatchService) Enqueue(ctx context.Context, userID, presetID uuid.UUID) error {
-	if _, err := s.q.GetRaceType(ctx, presetID); err != nil {
+	if _, err := s.q.GetPreset(ctx, presetID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidPreset
 		}
@@ -52,7 +52,7 @@ func (s *QuickMatchService) Enqueue(ctx context.Context, userID, presetID uuid.U
 	if err != nil {
 		return fmt.Errorf("generate queue id: %w", err)
 	}
-	if err := s.q.EnqueueQuickMatch(ctx, db.EnqueueQuickMatchParams{ID: id, UserID: userID, RaceTypeID: presetID}); err != nil {
+	if err := s.q.EnqueueQuickMatch(ctx, db.EnqueueQuickMatchParams{ID: id, UserID: userID, PresetID: presetID}); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrAlreadyQueued
@@ -63,7 +63,7 @@ func (s *QuickMatchService) Enqueue(ctx context.Context, userID, presetID uuid.U
 }
 
 func (s *QuickMatchService) Leave(ctx context.Context, userID, presetID uuid.UUID) error {
-	if err := s.q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: userID, RaceTypeID: presetID}); err != nil {
+	if err := s.q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: userID, PresetID: presetID}); err != nil {
 		return fmt.Errorf("leave quick match: %w", err)
 	}
 	return nil
@@ -79,14 +79,14 @@ func (s *QuickMatchService) Match(ctx context.Context, userID, presetID uuid.UUI
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.q.WithTx(tx)
-	waiting, err := q.ListWaitingByRaceType(ctx, presetID)
+	waiting, err := q.ListWaitingByPreset(ctx, presetID)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("list waiting racers: %w", err)
 	}
 	racers := make([]quickMatchRacer, 0, len(waiting))
 	found := false
 	for _, entry := range waiting {
-		finishes, err := q.RecentFinishesByRaceType(ctx, db.RecentFinishesByRaceTypeParams{RaceTypeID: presetID, UserID: entry.UserID})
+		finishes, err := q.RecentFinishesByPreset(ctx, db.RecentFinishesByPresetParams{PresetID: presetID, UserID: entry.UserID})
 		if err != nil {
 			return uuid.Nil, "", fmt.Errorf("recent finishes: %w", err)
 		}
@@ -120,7 +120,7 @@ func (s *QuickMatchService) Match(ctx context.Context, userID, presetID uuid.UUI
 		}
 	}
 	for _, racer := range group {
-		if err := q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: racer.userID, RaceTypeID: presetID}); err != nil {
+		if err := q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: racer.userID, PresetID: presetID}); err != nil {
 			return uuid.Nil, "", fmt.Errorf("remove matched racer: %w", err)
 		}
 	}
@@ -137,7 +137,7 @@ type quickMatchRacer struct {
 	rated    bool
 }
 
-func quickMatchRating(finishes []db.RecentFinishesByRaceTypeRow) (float64, bool) {
+func quickMatchRating(finishes []db.RecentFinishesByPresetRow) (float64, bool) {
 	if len(finishes) > 5 {
 		finishes = finishes[:5]
 	}

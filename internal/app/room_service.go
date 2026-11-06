@@ -49,7 +49,7 @@ func generateJoinCode() (string, error) {
 
 // Activity types a room is created in. The activity type is chosen when the
 // room is created and never inferred from how many participants it has. The
-// values are the ones stored in rooms.mode and races.mode.
+// values are the ones stored in rooms.activity_type and activities.activity_type.
 const (
 	ActivityTypeRace      = "race"
 	ActivityTypeTimeTrial = "time_trial"
@@ -64,7 +64,7 @@ const (
 )
 
 // WarmupPresetID is the sentinel preset every warm-up room and race carries,
-// seeded by migration 000020: rooms.race_type_id is NOT NULL, and a warm-up
+// seeded by migration 000020: rooms.preset_id is NOT NULL, and a warm-up
 // has no distance target. It is a kind 'time' preset, so it is never offered
 // as a distance.
 var WarmupPresetID = uuid.MustParse("01950000-0000-7000-8000-000000000009")
@@ -107,7 +107,7 @@ func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, presetID uuid.
 		return uuid.Nil, "", ErrInvalidActivityType
 	}
 
-	preset, err := s.q.GetRaceType(ctx, presetID)
+	preset, err := s.q.GetPreset(ctx, presetID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, "", ErrInvalidPreset
@@ -160,8 +160,8 @@ func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, presetI
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := s.q.WithTx(tx)
 	if err := qtx.InsertRoom(ctx, db.InsertRoomParams{
-		ID: roomID, RaceTypeID: presetID, HostUserID: hostUserID, JoinCode: code,
-		Mode: activityType, DurationSeconds: durationSeconds,
+		ID: roomID, PresetID: presetID, HostUserID: hostUserID, JoinCode: code,
+		ActivityType: activityType, DurationSeconds: durationSeconds,
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		retry := errors.As(err, &pgErr) && pgErr.Code == "23505"
@@ -341,7 +341,7 @@ func (s *RoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) erro
 		if room.Status != "counting_down" {
 			return ErrInvalidStatusTransition
 		}
-		if room.Mode != ActivityTypeRace {
+		if room.ActivityType != ActivityTypeRace {
 			if err := qtx.DissolveRoom(ctx, roomID); err != nil {
 				return fmt.Errorf("dissolve solo room: %w", err)
 			}

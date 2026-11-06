@@ -17,6 +17,10 @@ A mode chosen on the dashboard, not an entrant count: a racer rowing alone again
 A Time Trial whose racer has an earlier finished Time Trial at that Race Type shows a **Pacer**: a boat that rows the distance at the racer's personal best (their fastest such time). The Pacer is a lane only — never an entrant, never ranked, never on a Leaderboard. A first Time Trial at a Race Type has no Pacer.
 _Avoid_: Solo race, practice, workout
 
+**Warmup**:
+A timed 1–20 minute solo session with no pacer, chosen on the dashboard, ending in a summary only. Nothing is saved beyond the session itself: never on a leaderboard, never used as a pacer time, never used in matchmaking, and never posted to Concept2.
+_Avoid_: Practice, free row, cooldown
+
 **Leaderboard**:
 A ranking of each racer's own **personal-best** result (not every result they've ever posted) for a single Race Type and **mode** — Race or Time Trial. The two modes never mix: the 500m Race Leaderboard and the 500m Time Trial Leaderboard are separate rankings. Further filtered by a **time window** (All-Time / Month / Week — each its own ranking, not a combined one) and a **scope** (Global, or Friends-only). An "in your area" geography-based scope is a deferred future idea, not yet designed.
 _Avoid_: Rankings, standings

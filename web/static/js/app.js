@@ -54,8 +54,10 @@ document.addEventListener('htmx:response:error', function (evt) {
 
 // <select data-submit-label-target="#label"> writes the chosen option's
 // data-submit-label into that element, so a form's button names what it does
-// (the race card: 'Create race' / 'Start time trial'). The race card is loaded
-// by htmx, so this is a document delegate.
+// (the race card: 'Create race' / 'Start time trial' / 'Start warmup'). It also
+// toggles mode-specific form fields (hiding the distance select and showing the
+// minutes input for warmup). The race card is loaded by htmx, so this is a
+// document delegate.
 document.addEventListener('change', function (evt) {
   var select = evt.target;
   if (!select || !select.matches || !select.matches('select[data-submit-label-target]')) return;
@@ -63,6 +65,31 @@ document.addEventListener('change', function (evt) {
   var text = option && option.getAttribute('data-submit-label');
   var label = document.querySelector(select.getAttribute('data-submit-label-target'));
   if (label && text) label.textContent = text;
+
+  if (select.name === 'mode') {
+    var form = select.form || (select.closest && select.closest('form'));
+    if (!form) return;
+    var isWarmup = select.value === 'warmup';
+    var distanceField = form.querySelector('#race-type-field') || form.querySelector('[data-mode-field="distance"]');
+    var warmupField = form.querySelector('#warmup-minutes-field') || form.querySelector('[data-mode-field="warmup"]');
+    var distanceSelect = form.querySelector('select[name="race_type_id"]');
+    var minutesInput = form.querySelector('input[name="minutes"]');
+
+    if (distanceField) {
+      if (isWarmup) distanceField.classList.add('hidden');
+      else distanceField.classList.remove('hidden');
+    }
+    if (distanceSelect) {
+      distanceSelect.disabled = isWarmup;
+    }
+    if (warmupField) {
+      if (isWarmup) warmupField.classList.remove('hidden');
+      else warmupField.classList.add('hidden');
+    }
+    if (minutesInput) {
+      minutesInput.disabled = !isWarmup;
+    }
+  }
 });
 
 // ── Concept2 Logbook connect: send the browser's timezone ─────────────────────

@@ -221,7 +221,11 @@ func (h *LobbyHandler) RaceCard(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
-	h.renderer.Fragment(w, http.StatusOK, "dashboard.html", "race-card", map[string]any{"RaceTypes": raceTypes})
+	h.renderer.Fragment(w, http.StatusOK, "dashboard.html", "race-card", map[string]any{
+		"RaceTypes":        raceTypes,
+		"WarmupMinutesMin": 1,
+		"WarmupMinutesMax": 20,
+	})
 }
 
 // Invites serves the caller's pending room invites for the dashboard.

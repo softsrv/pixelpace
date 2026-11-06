@@ -143,13 +143,18 @@
       <select name="mode" class="pp-field" data-submit-label-target="#create-room-submit-label">
         <option value="race" data-submit-label="Create race" selected>Race</option>
         <option value="time_trial" data-submit-label="Start time trial">Time trial</option>
+        <option value="warmup" data-submit-label="Start warmup">Warmup</option>
       </select>
     </label>
-    <label class="block space-y-2">
+    <label id="race-type-field" class="block space-y-2" data-mode-field="distance">
       <span class="pp-label pp-arcade">Race type</span>
       <select name="race_type_id" class="pp-field">
         {{range .RaceTypes}}<option value="{{.ID}}">{{.Label}}</option>{{end}}
       </select>
+    </label>
+    <label id="warmup-minutes-field" class="block space-y-2 hidden" data-mode-field="warmup">
+      <span class="pp-label pp-arcade">Minutes</span>
+      <input type="number" name="minutes" class="pp-field" min="1" max="20" step="1" value="10" placeholder="10" disabled />
     </label>
     <button type="submit" class="pp-btn w-full"><span aria-hidden="true">&#9654;</span> <span id="create-room-submit-label">Create race</span></button>
     <p id="create-room-error" class="text-error text-sm" role="alert"></p>

@@ -346,7 +346,7 @@ test('resultRows: every row pace has tenths or em-dash across multi-racer and so
   assert.match(solo.rows[0].pace, /^\d+:\d{2}\.\d$/);
 });
 
-test('resultRows: warmup rows show distance, time and pace, with no rank column and never the "No one finished" text (CLM-7, CLM-9)', function () {
+test('resultRows: warmup rows show distance, time and pace, with no rank column and never the "No one finished" text (CLM-1, CLM-7, CLM-9)', function () {
   var data = {
     activityType: 'warmup',
     results: [

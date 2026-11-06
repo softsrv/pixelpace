@@ -861,6 +861,51 @@ func TestRoomStartNoRacersReadyDoesNotReset(t *testing.T) {
 	}
 }
 
+// When a warmup begins and the host's equipment is not ready (ErrNoRacersReady),
+// the room is dissolved, ResetCountdown is not called, and the outcome is logged.
+func TestRoomCreateWarmupNoRacersReadyDoesNotReset(t *testing.T) {
+	logs := &capturedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	roomID := uuid.New()
+	beginner := &fakeBeginner{err: fmt.Errorf("schedule: %w", app.ErrNoRacersReady)}
+	svc := recordingRoomService(func(roomCall) error { return nil })
+	svc.createFn = func(_ context.Context, _, _ uuid.UUID, mode string, minutes *int32) (uuid.UUID, string, error) {
+		return roomID, "ABC234", nil
+	}
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Error("reset after no racer was ready")
+		return nil
+	}
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	form := url.Values{"mode": {app.ModeWarmup}, "minutes": {"5"}}
+	rr := serveRoomRequestWith(t, h, roomOperations()[0], uuid.New(), form.Encode(), "", true)
+	h.Wait()
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%q", rr.Code, rr.Body.String())
+	}
+	if len(beginner.runs) != 0 {
+		t.Fatalf("no racers ready ran races: %v", beginner.runs)
+	}
+	logged := false
+	logs.mu.Lock()
+	defer logs.mu.Unlock()
+	for _, r := range logs.records {
+		var room, cause bool
+		r.Attrs(func(a slog.Attr) bool {
+			room = room || (a.Key == "room_id" && fmt.Sprint(a.Value.Any()) == roomID.String())
+			cause = cause || (a.Key == "error" && strings.Contains(fmt.Sprint(a.Value.Any()), app.ErrNoRacersReady.Error()))
+			return true
+		})
+		logged = logged || (room && cause)
+	}
+	if !logged {
+		t.Fatalf("no-racers-ready outcome not logged with room and cause: %+v", logs.records)
+	}
+}
+
 // After a successful Begin, the room handler runs Run with the begun race's ID
 // in the same background goroutine. ResetCountdown is never called.
 func TestRoomStartRunsRaceAfterBegin(t *testing.T) {

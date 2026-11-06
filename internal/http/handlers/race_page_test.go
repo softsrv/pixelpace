@@ -260,6 +260,42 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Errorf("1-entrant mode=race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
 	}
 
+	// 1-entrant session in mode 'warmup': note is absent, pacer is null in status
+	warmupViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID:               roomID,
+			Label:                "Warmup",
+			Mode:                 app.ModeWarmup,
+			DurationMilliseconds: 300000,
+			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:                nil,
+		}, nil
+	}}
+	rrWarmup := serveRaceWith(t, newProductionRenderer(t), warmupViewer, user, roomID.String(), racePageEndpoint)
+	if rrWarmup.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rrWarmup.Code, rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), "set your first time") {
+		t.Errorf("warmup unexpectedly has note: %q", rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), `id="race-pacer-note"`) {
+		t.Errorf("warmup unexpectedly has id=\"race-pacer-note\": %q", rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), "data-pacer") {
+		t.Errorf("warmup unexpectedly has data-pacer: %q", rrWarmup.Body.String())
+	}
+	warmupStatusRR := serveRacePage(t, warmupViewer, user, roomID.String(), raceStatusEndpoint)
+	if warmupStatusRR.Code != http.StatusOK {
+		t.Fatalf("warmup status code = %d, want 200", warmupStatusRR.Code)
+	}
+	var warmupStatusData map[string]any
+	if err := json.Unmarshal(warmupStatusRR.Body.Bytes(), &warmupStatusData); err != nil {
+		t.Fatalf("unmarshal warmup status JSON: %v", err)
+	}
+	if p, ok := warmupStatusData["pacer"]; !ok || p != nil {
+		t.Errorf("warmup status pacer = %v, want null (ok=%v)", p, ok)
+	}
+
 	// 2-entrant race: note is absent
 	rival := uuid.New()
 	twoRacerViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {

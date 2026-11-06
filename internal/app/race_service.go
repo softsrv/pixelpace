@@ -401,15 +401,16 @@ type RaceRacer struct {
 // time_trial whose racer has a Time Trial at the race type finished before
 // this one began; it is a lane, never an entrant.
 type RoomRace struct {
-	RoomID            uuid.UUID
-	RaceID            *uuid.UUID
-	RaceStartsAt      *time.Time
-	Label             string
-	TargetMillimeters int64
-	Mode              string
-	Racers            []RaceRacer
-	Finished          bool
-	Pacer             *RacePacer
+	RoomID               uuid.UUID
+	RaceID               *uuid.UUID
+	RaceStartsAt         *time.Time
+	Label                string
+	TargetMillimeters    int64
+	Mode                 string
+	DurationMilliseconds int64
+	Racers               []RaceRacer
+	Finished             bool
+	Pacer                *RacePacer
 }
 
 // RacePacer is a Time Trial's pacer boat: it rows the target distance at the
@@ -447,7 +448,7 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 	default:
 		return RoomRace{}, ErrRaceNotStarted
 	}
-	if row.Kind != "distance" {
+	if row.Kind != "distance" && row.Mode != ModeWarmup {
 		return RoomRace{}, ErrInvalidRaceType
 	}
 	lineup, err := s.q.ListRoomLineup(ctx, roomID)
@@ -460,6 +461,9 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 			PublicPlayer: NewPublicPlayer(racer.ID, racer.DisplayName), EquipmentReady: racer.EquipmentReady,
 		})
 	}
+	if row.DurationSeconds.Valid {
+		view.DurationMilliseconds = int64(row.DurationSeconds.Int32) * 1000
+	}
 	if row.RaceStartsAt.Valid {
 		startsAt := row.RaceStartsAt.Time
 		view.RaceStartsAt = &startsAt
@@ -468,7 +472,7 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 		raceID := uuid.UUID(row.RaceID.Bytes)
 		view.RaceID = &raceID
 	}
-	if row.Mode == "time_trial" && len(lineup) == 1 && row.RaceStartsAt.Valid {
+	if row.Mode == ModeTimeTrial && len(lineup) == 1 && row.RaceStartsAt.Valid {
 		view.Pacer = s.timeTrialPacer(ctx, roomID, row.RaceTypeID, lineup[0].ID, row.RaceStartsAt)
 	}
 	return view, nil

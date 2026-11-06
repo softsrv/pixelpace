@@ -1771,3 +1771,35 @@ func TestRaceServiceWarmupEndsAtDuration(t *testing.T) {
 		})
 	}
 }
+
+// CLM-4: RoomRace for a warmup room never returns a time-trial pacer, even when
+// the host has a time-trial personal best.
+func TestRaceServiceRoomRaceWarmupNeverReturnsPacer(t *testing.T) {
+	f := seedWarmupRoom(t, time.Minute)
+	ctx := context.Background()
+	f.begin(t)
+	start := f.race.StartedAt.Time
+
+	// Seed an earlier finished Time Trial for the host at a standard distance.
+	var distanceType uuid.UUID
+	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' ORDER BY target_value LIMIT 1").Scan(&distanceType); err != nil {
+		t.Fatal(err)
+	}
+	f.seedHistory(t, 0,
+		pastResult{distanceType, start.Add(-time.Hour), true, "finished", 110000},
+	)
+
+	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatalf("RoomRace for warmup room: %v", err)
+	}
+	if view.Mode != app.ModeWarmup {
+		t.Fatalf("view.Mode = %q, want %q", view.Mode, app.ModeWarmup)
+	}
+	if view.Pacer != nil {
+		t.Fatalf("view.Pacer = %+v, want nil for warmup", view.Pacer)
+	}
+	if view.DurationMilliseconds != 60000 {
+		t.Fatalf("view.DurationMilliseconds = %d, want 60000 (1 minute)", view.DurationMilliseconds)
+	}
+}

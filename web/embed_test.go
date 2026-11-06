@@ -909,7 +909,11 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	typeID := uuid.MustParse("01950000-0000-7000-8000-000000000003")
 	inviteID := uuid.MustParse("01950000-0000-7000-8000-0000000000ff")
 	var card, invites strings.Builder
-	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{"RaceTypes": []app.RaceTypeOption{{ID: typeID, Label: "2000m"}}}); err != nil {
+	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{
+		"RaceTypes":        []app.RaceTypeOption{{ID: typeID, Label: "2000m"}},
+		"WarmupMinutesMin": app.MinWarmupMinutes,
+		"WarmupMinutesMax": app.MaxWarmupMinutes,
+	}); err != nil {
 		t.Fatalf("execute race-card: %v", err)
 	}
 	for _, want := range []string{

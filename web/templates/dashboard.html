@@ -154,7 +154,7 @@
     </label>
     <label id="warmup-minutes-field" class="block space-y-2 hidden" data-mode-field="warmup">
       <span class="pp-label pp-arcade">Minutes</span>
-      <input type="number" name="minutes" class="pp-field" min="1" max="20" step="1" value="10" placeholder="10" disabled />
+      <input type="number" name="minutes" class="pp-field" min="{{.WarmupMinutesMin}}" max="{{.WarmupMinutesMax}}" step="1" value="10" placeholder="10" disabled />
     </label>
     <button type="submit" class="pp-btn w-full"><span aria-hidden="true">&#9654;</span> <span id="create-room-submit-label">Create race</span></button>
     <p id="create-room-error" class="text-error text-sm" role="alert"></p>

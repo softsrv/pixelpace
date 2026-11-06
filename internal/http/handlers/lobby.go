@@ -223,8 +223,8 @@ func (h *LobbyHandler) RaceCard(w http.ResponseWriter, r *http.Request) {
 	}
 	h.renderer.Fragment(w, http.StatusOK, "dashboard.html", "race-card", map[string]any{
 		"RaceTypes":        raceTypes,
-		"WarmupMinutesMin": 1,
-		"WarmupMinutesMax": 20,
+		"WarmupMinutesMin": app.MinWarmupMinutes,
+		"WarmupMinutesMax": app.MaxWarmupMinutes,
 	})
 }
 

@@ -915,8 +915,10 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	for _, want := range []string{
 		`hx-post="/rooms"`,
 		`name="mode"`,
-		`<option value="race" selected>Race</option>`,
-		`<option value="time_trial">Time trial</option>`,
+		`data-submit-label-target="#create-room-submit-label"`,
+		`<option value="race" data-submit-label="Create race" selected>Race</option>`,
+		`<option value="time_trial" data-submit-label="Start time trial">Time trial</option>`,
+		`<span id="create-room-submit-label">Create race</span></button>`,
 		`<option value="` + typeID.String() + `">2000m</option>`,
 		`hx-post="/rooms/join"`,
 		`name="join_code"`,

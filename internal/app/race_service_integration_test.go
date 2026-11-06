@@ -674,6 +674,40 @@ func TestRaceServiceRoomRace(t *testing.T) {
 	}
 }
 
+// A time trial or warmup whose host's rowing machine never connected is
+// dissolved by Begin, which removes the host's participant row too. RoomRace
+// still knows the host and reports ErrSessionNotConnected to them, so the race
+// page can say why; a race-mode room dissolved the same way, or anyone who is
+// not its host, keeps today's answer.
+func TestRaceServiceRoomRaceSoloNotConnected(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want error
+	}{
+		{"time_trial", app.ErrSessionNotConnected},
+		{"warmup", app.ErrSessionNotConnected},
+		{"race", app.ErrParticipantNotFound},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			f := seedModeRoom(t, tc.mode, 1, 500000, time.Minute)
+			f.dropUnreadyAtStart(t, 0)
+			ctx := context.Background()
+			if _, err := f.svc.Begin(ctx, f.room); !errors.Is(err, app.ErrNoRacersReady) {
+				t.Fatalf("begin = %v, want ErrNoRacersReady", err)
+			}
+			if status := f.roomStatus(t); status != "dissolved" {
+				t.Fatalf("room status = %q, want dissolved", status)
+			}
+			if _, err := f.svc.RoomRace(ctx, f.room, f.users[0]); !errors.Is(err, tc.want) {
+				t.Fatalf("host RoomRace = %v, want %v", err, tc.want)
+			}
+			if _, err := f.svc.RoomRace(ctx, f.room, uuid.Must(uuid.NewV7())); !errors.Is(err, app.ErrParticipantNotFound) {
+				t.Fatalf("outsider RoomRace = %v, want ErrParticipantNotFound", err)
+			}
+		})
+	}
+}
+
 // pastResult records one earlier result for a fixture user, in a finished
 // history room of its own so the fixture room keeps a single race.
 type pastResult struct {

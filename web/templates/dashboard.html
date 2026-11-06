@@ -140,9 +140,9 @@
         data-error-target="#create-room-error" data-error-message="Couldn't create the race. Please try again.">
     <label class="block space-y-2">
       <span class="pp-label pp-arcade">Mode</span>
-      <select name="mode" class="pp-field">
-        <option value="race" selected>Race</option>
-        <option value="time_trial">Time trial</option>
+      <select name="mode" class="pp-field" data-submit-label-target="#create-room-submit-label">
+        <option value="race" data-submit-label="Create race" selected>Race</option>
+        <option value="time_trial" data-submit-label="Start time trial">Time trial</option>
       </select>
     </label>
     <label class="block space-y-2">
@@ -151,7 +151,7 @@
         {{range .RaceTypes}}<option value="{{.ID}}">{{.Label}}</option>{{end}}
       </select>
     </label>
-    <button type="submit" class="pp-btn w-full"><span aria-hidden="true">&#9654;</span> Create race</button>
+    <button type="submit" class="pp-btn w-full"><span aria-hidden="true">&#9654;</span> <span id="create-room-submit-label">Create race</span></button>
     <p id="create-room-error" class="text-error text-sm" role="alert"></p>
   </form>
   <div class="pp-or pp-arcade" role="separator">or</div>

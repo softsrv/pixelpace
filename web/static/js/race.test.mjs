@@ -133,7 +133,7 @@ function setupPage(options) {
   Object.assign(track.dataset, {
     selfId: 'u-self', targetMm: options.targetMm || '500000',
     mode: options.mode || 'race',
-    statusUrl: '/rooms/r1/race/status', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
+    statusUrl: '/rooms/r1/race/status', pageUrl: '/rooms/r1/race', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
     resultsUrl: '/rooms/r1/race/results', dashboardUrl: '/dashboard',
     finished: options.finished ? 'true' : 'false', raceId: options.finished ? 'race-1' : '',
     finishPollMs: options.finishPollMs || '1'
@@ -322,6 +322,20 @@ test('a racer removed before the start (ready 404) never opens the modal', async
   await settle();
   assert.equal(page.parts.modal.open, false);
   assert.equal(page.status.textContent, REMOVED, 'keeps the removal notice');
+});
+
+test('a time trial dissolved because the rowing machine never connected (status 410) reloads onto the not-connected page', async function () {
+  var page = setupPage({
+    mode: 'time_trial', finished: false, pm5: false,
+    lanes: [{ dataset: { userId: 'u-self', self: 'true' }, textContent: 'Me' }],
+    responses: { '/rooms/r1/race/status': function () { return jsonResponse(410, null); } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await settle();
+  assert.deepEqual(page.assigned, ['/rooms/r1/race'], 'reloads the race page, which renders the message');
+  assert.equal(page.calls.filter(function (u) { return u === '/rooms/r1/race/status'; }).length, 1, 'stops polling');
 });
 
 test('finishing your own row says you are waiting for the others', async function () {

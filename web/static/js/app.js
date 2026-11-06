@@ -52,6 +52,19 @@ document.addEventListener('htmx:response:error', function (evt) {
   if (found && found.target) found.target.textContent = found.source.getAttribute('data-error-message') || 'Something went wrong.';
 });
 
+// <select data-submit-label-target="#label"> writes the chosen option's
+// data-submit-label into that element, so a form's button names what it does
+// (the race card: 'Create race' / 'Start time trial'). The race card is loaded
+// by htmx, so this is a document delegate.
+document.addEventListener('change', function (evt) {
+  var select = evt.target;
+  if (!select || !select.matches || !select.matches('select[data-submit-label-target]')) return;
+  var option = select.options && select.options[select.selectedIndex];
+  var text = option && option.getAttribute('data-submit-label');
+  var label = document.querySelector(select.getAttribute('data-submit-label-target'));
+  if (label && text) label.textContent = text;
+});
+
 // ── Concept2 Logbook connect: send the browser's timezone ─────────────────────
 
 // The Concept2 panel is loaded by htmx after page load, so this is a document

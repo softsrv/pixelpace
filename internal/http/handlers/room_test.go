@@ -744,8 +744,15 @@ func TestRoomStartRefusedDoesNotRedirect(t *testing.T) {
 }
 
 // A begin that found no racer ready has already dissolved the room, so the
-// handler does not try to return it to waiting.
+// handler does not try to return it to waiting. The outcome is not swallowed:
+// it is logged with the room and the cause, and the host's race page reads the
+// dissolved room to say why.
 func TestRoomStartNoRacersReadyDoesNotReset(t *testing.T) {
+	logs := &capturedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
 	roomID := uuid.New()
 	beginner := &fakeBeginner{err: fmt.Errorf("schedule: %w", app.ErrNoRacersReady)}
 	svc := recordingRoomService(func(roomCall) error { return nil })
@@ -761,6 +768,21 @@ func TestRoomStartNoRacersReadyDoesNotReset(t *testing.T) {
 	}
 	if len(beginner.runs) != 0 {
 		t.Fatalf("no racers ready ran races: %v", beginner.runs)
+	}
+	logged := false
+	logs.mu.Lock()
+	defer logs.mu.Unlock()
+	for _, r := range logs.records {
+		var room, cause bool
+		r.Attrs(func(a slog.Attr) bool {
+			room = room || (a.Key == "room_id" && fmt.Sprint(a.Value.Any()) == roomID.String())
+			cause = cause || (a.Key == "error" && strings.Contains(fmt.Sprint(a.Value.Any()), app.ErrNoRacersReady.Error()))
+			return true
+		})
+		logged = logged || (room && cause)
+	}
+	if !logged {
+		t.Fatalf("no-racers-ready outcome not logged with room and cause: %+v", logs.records)
 	}
 }
 

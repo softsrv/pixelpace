@@ -165,7 +165,7 @@ func (q *Queries) FinishRaceRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRoomRace = `-- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.host_user_id
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id
@@ -181,6 +181,7 @@ type GetRoomRaceRow struct {
 	Label        string             `json:"label"`
 	RaceID       pgtype.UUID        `json:"race_id"`
 	Mode         string             `json:"mode"`
+	HostUserID   uuid.UUID          `json:"host_user_id"`
 }
 
 func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow, error) {
@@ -195,6 +196,7 @@ func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow
 		&i.Label,
 		&i.RaceID,
 		&i.Mode,
+		&i.HostUserID,
 	)
 	return i, err
 }

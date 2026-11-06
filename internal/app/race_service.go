@@ -419,7 +419,11 @@ type RacePacer struct {
 }
 
 // RoomRace returns the race view for a room participant. Rooms that are still
-// waiting or were dissolved report ErrRaceNotStarted.
+// waiting or were dissolved report ErrRaceNotStarted, except a solo session
+// (time_trial or warmup) dissolved before its start: its host gets
+// ErrSessionNotConnected. Begin dissolves such a room when the host's rowing
+// machine never connected, which also removes the host's participant row, so
+// the host is recognised from the room itself.
 func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (RoomRace, error) {
 	row, err := s.q.GetRoomRace(ctx, roomID)
 	if err != nil {
@@ -431,6 +435,9 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 	isParticipant, err := s.q.RoomParticipantExists(ctx, db.RoomParticipantExistsParams{RoomID: roomID, UserID: userID})
 	if err != nil {
 		return RoomRace{}, fmt.Errorf("check room participant: %w", err)
+	}
+	if !isParticipant && row.Status == "dissolved" && row.Mode != ModeRace && row.HostUserID == userID {
+		return RoomRace{}, ErrSessionNotConnected
 	}
 	if !isParticipant {
 		return RoomRace{}, ErrParticipantNotFound

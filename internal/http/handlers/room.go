@@ -294,8 +294,9 @@ func (h *RoomHandler) beginRace(ctx context.Context, roomID uuid.UUID) {
 	race, err := h.beginner.Begin(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, app.ErrNoRacersReady) {
-			// Begin dissolved the room; there is no lobby to return to.
-			slog.InfoContext(ctx, "race abandoned: no racer was ready", "room_id", roomID)
+			// Begin dissolved the room; there is no lobby to return to. The
+			// host's race page reads the dissolved room and says why.
+			slog.InfoContext(ctx, "race abandoned: no racer was ready", "room_id", roomID, "error", err)
 			return
 		}
 		slog.ErrorContext(ctx, "race begin failed", "room_id", roomID, "error", err)

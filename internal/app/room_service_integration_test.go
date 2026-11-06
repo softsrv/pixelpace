@@ -573,3 +573,106 @@ func TestRoomIntegrationCreateInvalidModeRejected(t *testing.T) {
 	}
 }
 
+// roomIntegrationTimeTrial creates a time trial through CreateRoom, as the
+// dashboard's 'Start time trial' does, with cleanup of what it leaves behind.
+func roomIntegrationTimeTrial(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) (uuid.UUID, string) {
+	t.Helper()
+	ctx := context.Background()
+	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID, ModeTimeTrial, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, sql := range []string{
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
+			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM rooms WHERE id = $1",
+		} {
+			if _, err := pool.Exec(context.Background(), sql, roomID); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	return roomID, code
+}
+
+// A time trial needs no lobby: CreateRoom leaves the host as its only
+// participant with the room already counting down, and the begin the handler
+// launches schedules the race one 10-second countdown later and creates a
+// time_trial race.
+func TestRoomIntegrationCreateTimeTrialBeginsWithoutLobby(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host, outsider := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	roomID, code := roomIntegrationTimeTrial(t, pool, host)
+	q := db.New(pool)
+	rooms := NewRoomService(q, pool)
+
+	room, err := q.GetRoomForUpdate(ctx, roomID)
+	if err != nil || room.Status != "counting_down" || room.Mode != ModeTimeTrial || room.HostUserID != host {
+		t.Fatalf("created room = %+v, %v; want a counting-down time_trial hosted by %s", room, err, host)
+	}
+	if count, err := q.CountRoomParticipants(ctx, roomID); err != nil || count != 1 {
+		t.Fatalf("participants = %d, %v; want the host alone", count, err)
+	}
+	// Nobody joins a time trial: there is no lobby to join.
+	if _, err := rooms.JoinRoom(ctx, outsider, code); !errors.Is(err, ErrRoomNotJoinable) {
+		t.Fatalf("join time trial = %v, want ErrRoomNotJoinable", err)
+	}
+
+	begunAt := time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
+	races := NewRaceService(q, pool, realtime.NewFake(), RaceServiceConfig{
+		EquipmentTimeout: 50 * time.Millisecond, EquipmentPollInterval: 5 * time.Millisecond,
+		Now:   func() time.Time { return begunAt },
+		Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() },
+	})
+	// The host's race page connects their machine during the countdown.
+	if err := races.MarkEquipmentReady(ctx, roomID, host); err != nil {
+		t.Fatal(err)
+	}
+	race, err := races.Begin(ctx, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mode string
+	var timeTrial bool
+	if err := pool.QueryRow(ctx, "SELECT mode, time_trial FROM races WHERE id = $1", race.ID).Scan(&mode, &timeTrial); err != nil {
+		t.Fatal(err)
+	}
+	if mode != ModeTimeTrial || !timeTrial {
+		t.Fatalf("races.mode = %q, time_trial = %v; want time_trial, true", mode, timeTrial)
+	}
+	row, err := q.GetRoomRace(ctx, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status == "waiting" || row.Mode != ModeTimeTrial {
+		t.Fatalf("room race = %+v; want past waiting in time_trial mode", row)
+	}
+	if want := begunAt.Add(10 * time.Second); !row.RaceStartsAt.Valid || !row.RaceStartsAt.Time.Equal(want) {
+		t.Fatalf("race starts at %v, want %v (10 s after begin)", row.RaceStartsAt, want)
+	}
+}
+
+// A time trial whose begin fails has no lobby to return to: ResetCountdown
+// dissolves it rather than leaving a joinable waiting room behind.
+func TestRoomIntegrationTimeTrialFailedBeginDissolves(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host := roomIntegrationUser(t, pool)
+	roomID, _ := roomIntegrationTimeTrial(t, pool, host)
+	q := db.New(pool)
+	roomIntegrationEquipmentReady(t, pool, roomID, host)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := roomIntegrationRaceService(q, pool).Begin(cancelled, roomID); err == nil {
+		t.Fatal("expected begin failure")
+	}
+	if err := NewRoomService(q, pool).ResetCountdown(ctx, roomID); err != nil {
+		t.Fatal(err)
+	}
+	room, err := q.GetRoomForUpdate(ctx, roomID)
+	if err != nil || room.Status != "dissolved" {
+		t.Fatalf("time trial after failed begin = %+v, %v; want dissolved", room, err)
+	}
+}

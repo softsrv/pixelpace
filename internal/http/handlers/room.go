@@ -75,7 +75,7 @@ func NewRoomHandler(ctx context.Context, roomSvc roomServicer, beginner raceBegi
 	return &RoomHandler{ctx: ctx, room: roomSvc, beginner: beginner}
 }
 
-// Wait blocks until every race begin launched by Start has finished.
+// Wait blocks until every race begin launched by Create or Start has finished.
 func (h *RoomHandler) Wait() {
 	h.background.Wait()
 }
@@ -123,8 +123,15 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
-	// HTMX forms follow the redirect to the new room's lobby.
-	w.Header().Set("HX-Redirect", lobbyPath(roomID))
+	if mode == app.ModeRace {
+		// HTMX forms follow the redirect to the new room's lobby.
+		w.Header().Set("HX-Redirect", lobbyPath(roomID))
+	} else {
+		// A solo session has no lobby: CreateRoom left it counting down, so
+		// its race begins now and the host goes straight to the race page.
+		h.beginInBackground(r.Context(), roomID)
+		w.Header().Set("HX-Redirect", racePath(roomID))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"room_id": roomID.String(), "join_code": code})
@@ -262,10 +269,18 @@ func (h *RoomHandler) Start(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
-	// The countdown outlives the request, so begin on a context the response
-	// does not cancel. It is cancelled when the handler's lifetime ends.
-	// A failed begin returns the room to waiting.
-	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	h.beginInBackground(r.Context(), roomID)
+	// The host goes straight to the race page; guests follow from the lobby.
+	w.Header().Set("HX-Redirect", racePath(roomID))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// beginInBackground begins a counting-down room's race outside the request.
+// The countdown outlives the request, so begin runs on a context the response
+// does not cancel; it is cancelled when the handler's lifetime ends. A failed
+// begin returns the room to waiting.
+func (h *RoomHandler) beginInBackground(reqCtx context.Context, roomID uuid.UUID) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(reqCtx))
 	stop := context.AfterFunc(h.ctx, cancel)
 	h.background.Add(1)
 	go func() {
@@ -273,9 +288,6 @@ func (h *RoomHandler) Start(w http.ResponseWriter, r *http.Request) {
 		defer stop()
 		h.beginRace(ctx, roomID)
 	}()
-	// The host goes straight to the race page; guests follow from the lobby.
-	w.Header().Set("HX-Redirect", racePath(roomID))
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *RoomHandler) beginRace(ctx context.Context, roomID uuid.UUID) {

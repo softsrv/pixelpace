@@ -377,7 +377,6 @@ func TestRoomCreateInvalidOrMissingModeRejected(t *testing.T) {
 	}
 }
 
-
 func serveRosterRequest(t *testing.T, svc *stubRoomService, userID uuid.UUID, pathID string) *httptest.ResponseRecorder {
 	t.Helper()
 	h := handlers.NewRoomHandler(context.Background(), svc, &fakeBeginner{}, nil, false)
@@ -681,6 +680,43 @@ func TestRoomHandlersHTMXNavigation(t *testing.T) {
 				t.Errorf("create began %d races, want none", begun)
 			}
 		})
+	}
+}
+
+// Creating a time trial skips the lobby: the created room's race begins once,
+// outside the request, and the host is sent straight to its race page.
+func TestRoomCreateTimeTrialBeginsAndOpensRacePage(t *testing.T) {
+	raceTypeID := uuid.New()
+	var modes []string
+	svc := recordingRoomService(func(c roomCall) error { modes = append(modes, c.mode); return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Error("reset after a successful begin")
+		return nil
+	}
+	beginner := &fakeBeginner{}
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	form := url.Values{"race_type_id": {raceTypeID.String()}, "mode": {app.ModeTimeTrial}}
+	op := roomOperations()[0]
+	rr := serveRoomRequestWith(t, h, op, uuid.New(), form.Encode(), "", true)
+	h.Wait()
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%q", rr.Code, rr.Body.String())
+	}
+	if len(modes) != 1 || modes[0] != app.ModeTimeTrial {
+		t.Fatalf("CreateRoom modes = %v, want one time_trial", modes)
+	}
+	if got, want := rr.Header().Get("HX-Redirect"), "/rooms/"+stubRoomID.String()+"/race"; got != want {
+		t.Fatalf("HX-Redirect = %q, want %q", got, want)
+	}
+	if len(beginner.rooms) != 1 || beginner.rooms[0] != stubRoomID {
+		t.Fatalf("begins = %v, want one for %s", beginner.rooms, stubRoomID)
+	}
+	// httptest's request context ends with the handler; the begin context must not.
+	if err := beginner.ctxs[0].Err(); err != nil {
+		t.Fatalf("begin context done after the request: %v", err)
+	}
+	if len(beginner.runs) != 1 {
+		t.Fatalf("runs = %v, want 1 run", beginner.runs)
 	}
 }
 

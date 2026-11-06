@@ -369,6 +369,10 @@ func TestRoomCreate(t *testing.T) {
 					steps = append(steps,
 						roomDBStep{name: "InsertRoom", args: []any{nil, roomTestID, roomTestHost, "ABCDEF", tc.mode, tc.duration}},
 						roomDBStep{name: "InsertRoomParticipant", args: []any{nil, nil, roomTestHost}, err: tc.participantErr})
+					// A time trial has no lobby: it is counting down as it is created.
+					if tc.mode == ModeTimeTrial {
+						steps = append(steps, roomDBStep{name: "StartRoomCountdown", args: []any{nil}})
+					}
 				}
 			}
 			s, d := newRoomTestService(t, steps...)

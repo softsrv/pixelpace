@@ -54,10 +54,12 @@ const (
 	ModeWarmup    = "warmup"
 )
 
-// CreateRoom atomically creates a waiting room in the given mode and its host
-// participant. warmupMinutes is the length of a warmup session and is nil for
-// every other mode. It returns the room id, which addresses the roster,
-// alongside the join code.
+// CreateRoom atomically creates a room in the given mode and its host
+// participant. A race room is waiting in its lobby; a time trial room is
+// already counting down, ready for the caller to Begin with no lobby step.
+// warmupMinutes is the length of a warmup session and is nil for every other
+// mode. It returns the room id, which addresses the roster, alongside the join
+// code.
 func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
 	switch mode {
 	case ModeRace, ModeTimeTrial:
@@ -131,6 +133,14 @@ func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTyp
 		ID: participantID, RoomID: roomID, UserID: hostUserID,
 	}); err != nil {
 		return uuid.Nil, false, fmt.Errorf("insert host participant: %w", err)
+	}
+	// A solo session (every mode but race) has no lobby: the host is its only
+	// participant and it is counting down from the start, so the caller can
+	// begin it at once and nobody can join it.
+	if mode != ModeRace {
+		if err := qtx.StartRoomCountdown(ctx, roomID); err != nil {
+			return uuid.Nil, false, fmt.Errorf("start solo countdown: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, false, fmt.Errorf("commit: %w", err)
@@ -283,13 +293,21 @@ func (s *RoomService) BeginRace(ctx context.Context, roomID uuid.UUID) error {
 	})
 }
 
-// ResetCountdown returns a counting-down room to waiting after its race could
-// not begin, so it is joinable and can be started again. A room in any other
-// status is left unchanged and reported as ErrInvalidStatusTransition.
+// ResetCountdown returns a counting-down race room to waiting after its race
+// could not begin, so it is joinable and can be started again. A solo room
+// (time trial) has no lobby to return to, so it is dissolved instead. A room
+// in any other status is left unchanged and reported as
+// ErrInvalidStatusTransition.
 func (s *RoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) error {
 	return s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
 		if room.Status != "counting_down" {
 			return ErrInvalidStatusTransition
+		}
+		if room.Mode != ModeRace {
+			if err := qtx.DissolveRoom(ctx, roomID); err != nil {
+				return fmt.Errorf("dissolve solo room: %w", err)
+			}
+			return nil
 		}
 		if err := qtx.ResetRoomCountdown(ctx, roomID); err != nil {
 			return fmt.Errorf("reset countdown: %w", err)

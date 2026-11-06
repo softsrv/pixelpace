@@ -197,9 +197,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
-			Mode:   "time_trial",
-			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
-			Pacer:  nil,
+			ActivityType: "time_trial",
+			Racers:       []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:        nil,
 		}, nil
 	}}
 
@@ -244,9 +244,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	oneRacerRaceViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
-			Mode:   "race",
-			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
-			Pacer:  nil,
+			ActivityType: "race",
+			Racers:       []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:        nil,
 		}, nil
 	}}
 	rrOne := serveRaceWith(t, newProductionRenderer(t), oneRacerRaceViewer, user, roomID.String(), racePageEndpoint)
@@ -265,7 +265,7 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		return app.RoomRace{
 			RoomID:               roomID,
 			Label:                "Warmup",
-			Mode:                 app.ModeWarmup,
+			ActivityType:         app.ActivityTypeWarmup,
 			DurationMilliseconds: 300000,
 			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
 			Pacer:                nil,
@@ -312,9 +312,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	twoRacerViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
-			Mode:   "race",
-			Racers: []app.RaceRacer{racer(user.ID, "Me", true), racer(rival, "Rival", true)},
-			Pacer:  nil,
+			ActivityType: "race",
+			Racers:       []app.RaceRacer{racer(user.ID, "Me", true), racer(rival, "Rival", true)},
+			Pacer:        nil,
 		}, nil
 	}}
 	rrTwo := serveRaceWith(t, newProductionRenderer(t), twoRacerViewer, user, roomID.String(), racePageEndpoint)
@@ -409,7 +409,7 @@ func TestRacePageServiceErrors(t *testing.T) {
 		{app.ErrRoomNotFound, http.StatusNotFound},
 		{app.ErrParticipantNotFound, http.StatusNotFound},
 		{app.ErrRaceNotStarted, http.StatusConflict},
-		{app.ErrInvalidRaceType, http.StatusConflict},
+		{app.ErrInvalidPreset, http.StatusConflict},
 		{app.ErrSessionNotConnected, http.StatusGone},
 		{errors.New("private database failure"), http.StatusInternalServerError},
 	} {
@@ -508,7 +508,7 @@ func TestRacePageRendersFinishedWarmupSummary(t *testing.T) {
 			RoomID:               roomID,
 			RaceID:               &raceID,
 			Label:                "Warmup",
-			Mode:                 app.ModeWarmup,
+			ActivityType:         app.ActivityTypeWarmup,
 			DurationMilliseconds: 300000,
 			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
 			Finished:             true,

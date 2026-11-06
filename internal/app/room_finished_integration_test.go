@@ -97,7 +97,7 @@ func TestRoomIntegrationFinishedRoomReleasesPlayers(t *testing.T) {
 	}
 
 	// Case (a): Former host can create a new room
-	room2ID, code2, err := roomSvc.CreateRoom(ctx, host, roomTestID, ModeRace, nil)
+	room2ID, code2, err := roomSvc.CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil)
 	if err != nil {
 		t.Fatalf("former host create room: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestRoomIntegrationFinishedRoomReleasesPlayers(t *testing.T) {
 			return code1, nil
 		},
 	}
-	room3ID, reusedCode, err := roomSvcCustom.CreateRoom(ctx, outsider, roomTestID, ModeRace, nil)
+	room3ID, reusedCode, err := roomSvcCustom.CreateRoom(ctx, outsider, roomTestID, ActivityTypeRace, nil)
 	if err != nil {
 		t.Fatalf("create room reusing code: %v", err)
 	}

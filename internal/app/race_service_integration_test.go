@@ -294,8 +294,8 @@ func TestRaceServiceBeginModeComesFromRoomAndOwnsTimeTrial(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := seedModeRoom(t, tc.mode, tc.racers, 500000, time.Minute)
 			if tc.mode == "warmup" {
-				// A warmup room runs on the warmup race type.
-				if _, err := f.pool.Exec(ctx, "UPDATE rooms SET race_type_id = '01950000-0000-7000-8000-000000000009' WHERE id = $1", f.room); err != nil {
+				// A warmup room runs on the warm-up preset.
+				if _, err := f.pool.Exec(ctx, "UPDATE rooms SET race_type_id = $1 WHERE id = $2", app.WarmupPresetID, f.room); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -761,13 +761,13 @@ func TestRaceServiceRoomRaceTimeTrialPacerIsFastestEarlierTimeTrial(t *testing.T
 		t.Fatal(err)
 	}
 	f.seedHistory(t, 0,
-		// The two earlier finished Time Trials at this race type: 110000 is the best.
+		// The two earlier finished Time Trials at this preset: 110000 is the best.
 		pastResult{raceType, start.Add(-2 * time.Hour), true, "finished", 120000},
 		pastResult{raceType, start.Add(-time.Hour), true, "finished", 110000},
 		// Decoys, each faster, each excluded by one rule.
 		pastResult{raceType, start.Add(-time.Hour), false, "finished", 90000}, // a Race, not a Time Trial
 		pastResult{raceType, start.Add(-time.Hour), true, "dnf", 80000},       // did not finish
-		pastResult{otherType, start.Add(-time.Hour), true, "finished", 70000}, // another race type
+		pastResult{otherType, start.Add(-time.Hour), true, "finished", 70000}, // another preset
 		pastResult{raceType, start, true, "finished", 60000},                  // started at this race's start
 		pastResult{raceType, start.Add(time.Minute), true, "finished", 50000}, // started after it
 	)
@@ -781,7 +781,7 @@ func TestRaceServiceRoomRaceTimeTrialPacerIsFastestEarlierTimeTrial(t *testing.T
 	}
 }
 
-// raceType reads the fixture room's race type.
+// raceType reads the fixture room's preset.
 func (f *raceFixture) raceType(t *testing.T) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
@@ -883,7 +883,7 @@ func TestRaceServiceRoomRaceNoPersonalBestHasNoPacer(t *testing.T) {
 	logs := captureLogs(t)
 	f.begin(t)
 	start, raceType := f.race.StartedAt.Time, f.raceType(t)
-	want := app.RoomRace{RoomID: f.room, RaceID: &f.race.ID, RaceStartsAt: &start, Label: "500m", TargetMillimeters: 500000, Mode: "time_trial"}
+	want := app.RoomRace{RoomID: f.room, RaceID: &f.race.ID, RaceStartsAt: &start, Label: "500m", TargetMillimeters: 500000, ActivityType: app.ActivityTypeTimeTrial}
 
 	check := func(name string) {
 		t.Helper()
@@ -1057,7 +1057,7 @@ func TestRaceServiceRoomRacePacerIsNotAnEntrant(t *testing.T) {
 	}
 }
 
-// CLM-13: a solo room on a timed race type gets no pacer, even with earlier
+// CLM-13: a solo room on a time-kind preset gets no pacer, even with earlier
 // finished Time Trials at that type.
 func TestRaceServiceRoomRaceTimedRaceHasNoPacer(t *testing.T) {
 	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
@@ -1072,8 +1072,8 @@ func TestRaceServiceRoomRaceTimedRaceHasNoPacer(t *testing.T) {
 	f.begin(t)
 	f.seedHistory(t, 0, pastResult{timed, f.race.StartedAt.Time.Add(-time.Hour), true, "finished", 100000})
 	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
-	if !errors.Is(err, app.ErrInvalidRaceType) || view.Pacer != nil {
-		t.Fatalf("pacer = %+v err=%v, want ErrInvalidRaceType and no pacer", view.Pacer, err)
+	if !errors.Is(err, app.ErrInvalidPreset) || view.Pacer != nil {
+		t.Fatalf("pacer = %+v err=%v, want ErrInvalidPreset and no pacer", view.Pacer, err)
 	}
 }
 
@@ -1160,7 +1160,7 @@ func TestRaceServiceRoomRacePacerIgnoresTimeTrialFinishedMidRace(t *testing.T) {
 }
 
 // CLM-5: only a time_trial-mode finish paces a time trial. A faster finished
-// race, and a finished warmup, at the same race type never become the pacer;
+// race, and a finished warmup, at the same preset never become the pacer;
 // races.mode decides, not the kept time_trial column (one race row here
 // carries a stale time_trial=true to prove it).
 func TestRaceServiceRoomRacePacerIsNeverARaceOrWarmup(t *testing.T) {
@@ -1184,8 +1184,8 @@ func TestRaceServiceRoomRacePacerIsNeverARaceOrWarmup(t *testing.T) {
 		}
 	}
 	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
-	if err != nil || view.Mode != "time_trial" || view.Pacer != nil {
-		t.Fatalf("mode=%q pacer=%+v err=%v, want a time_trial view with no pacer from races or warmups", view.Mode, view.Pacer, err)
+	if err != nil || view.ActivityType != app.ActivityTypeTimeTrial || view.Pacer != nil {
+		t.Fatalf("mode=%q pacer=%+v err=%v, want a time_trial view with no pacer from races or warmups", view.ActivityType, view.Pacer, err)
 	}
 	f.seedHistory(t, 0, pastResult{raceType, start.Add(-time.Hour), true, "finished", 120000})
 	view, err = f.svc.RoomRace(ctx, f.room, f.users[0])
@@ -1673,12 +1673,12 @@ func TestRaceServiceUnfinishedRaces(t *testing.T) {
 	}
 }
 
-// seedWarmupRoom seeds a counting-down one-minute warmup room on the warmup
-// race type, as the dashboard's 'Start warmup' creates.
+// seedWarmupRoom seeds a counting-down one-minute warmup room on the warm-up
+// preset, as the dashboard's 'Start warmup' creates.
 func seedWarmupRoom(t *testing.T, threshold time.Duration) *raceFixture {
 	t.Helper()
 	f := seedModeRoom(t, "warmup", 1, 500000, threshold)
-	if _, err := f.pool.Exec(context.Background(), "UPDATE rooms SET race_type_id = '01950000-0000-7000-8000-000000000009' WHERE id = $1", f.room); err != nil {
+	if _, err := f.pool.Exec(context.Background(), "UPDATE rooms SET race_type_id = $1 WHERE id = $2", app.WarmupPresetID, f.room); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -1781,14 +1781,14 @@ func TestRaceServiceRoomRaceWarmupNeverReturnsPacer(t *testing.T) {
 	start := f.race.StartedAt.Time
 
 	// Seed an earlier finished Time Trial for the host at both a standard distance
-	// and at the Warmup sentinel race type (which matches f.room's race_type_id).
+	// and at the warm-up sentinel preset (which matches f.room's race_type_id).
 	// Without the sentinel PB, timeTrialPacer finds nothing regardless of the mode
 	// guard; with it, only the mode guard prevents the warmup getting a pacer.
 	var distanceType uuid.UUID
 	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' ORDER BY target_value LIMIT 1").Scan(&distanceType); err != nil {
 		t.Fatal(err)
 	}
-	sentinelType := app.WarmupRaceTypeID
+	sentinelType := app.WarmupPresetID
 	f.seedHistory(t, 0,
 		pastResult{distanceType, start.Add(-time.Hour), true, "finished", 110000},
 		pastResult{sentinelType, start.Add(-time.Hour), true, "finished", 100000},
@@ -1798,8 +1798,8 @@ func TestRaceServiceRoomRaceWarmupNeverReturnsPacer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RoomRace for warmup room: %v", err)
 	}
-	if view.Mode != app.ModeWarmup {
-		t.Fatalf("view.Mode = %q, want %q", view.Mode, app.ModeWarmup)
+	if view.ActivityType != app.ActivityTypeWarmup {
+		t.Fatalf("view.ActivityType = %q, want %q", view.ActivityType, app.ActivityTypeWarmup)
 	}
 	if view.Pacer != nil {
 		t.Fatalf("view.Pacer = %+v, want nil for warmup", view.Pacer)
@@ -1841,8 +1841,8 @@ func TestRaceServiceResultsWarmupSummary(t *testing.T) {
 	if results.TargetMillimeters != 0 {
 		t.Fatalf("results.TargetMillimeters = %d, want 0 (no target)", results.TargetMillimeters)
 	}
-	if results.Mode != app.ModeWarmup {
-		t.Fatalf("results.Mode = %q, want %q", results.Mode, app.ModeWarmup)
+	if results.ActivityType != app.ActivityTypeWarmup {
+		t.Fatalf("results.ActivityType = %q, want %q", results.ActivityType, app.ActivityTypeWarmup)
 	}
 	if len(results.Results) != 1 {
 		t.Fatalf("len(results.Results) = %d, want 1", len(results.Results))

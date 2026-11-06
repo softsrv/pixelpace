@@ -817,7 +817,7 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 			}
 		}
 		lobby := app.RoomLobby{
-			RoomID: roomID, Status: "waiting", JoinCode: "ABC234", RaceTypeID: typeB, RaceLabel: "2000m",
+			RoomID: roomID, Status: "waiting", JoinCode: "ABC234", PresetID: typeB, RaceLabel: "2000m",
 			IsHost: isHost, CanStart: canStart, SelfReady: selfReady,
 			Participants: roster,
 		}
@@ -825,7 +825,7 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 		err = tmpl.ExecuteTemplate(&buf, "base.html", map[string]any{
 			"User":      map[string]any{"Email": "host@example.com"},
 			"Lobby":     lobby,
-			"RaceTypes": []app.RaceTypeOption{{ID: typeA, Label: "500m"}, {ID: typeB, Label: "2000m"}},
+			"RaceTypes": []app.PresetOption{{ID: typeA, Label: "500m"}, {ID: typeB, Label: "2000m"}},
 			"Friends":   []map[string]any{{"UserID": friendID, "Name": "Friendly", "Invited": false, "Joined": false}},
 			"JoinURL":   "https://pixelpace.test/join/ABC234",
 		})
@@ -910,7 +910,7 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	inviteID := uuid.MustParse("01950000-0000-7000-8000-0000000000ff")
 	var card, invites strings.Builder
 	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{
-		"RaceTypes":        []app.RaceTypeOption{{ID: typeID, Label: "2000m"}},
+		"RaceTypes":        []app.PresetOption{{ID: typeID, Label: "2000m"}},
 		"WarmupMinutesMin": app.MinWarmupMinutes,
 		"WarmupMinutesMax": app.MaxWarmupMinutes,
 	}); err != nil {

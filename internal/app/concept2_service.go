@@ -446,16 +446,17 @@ func (s *Concept2Service) awaitReconnect(ctx context.Context, post db.ClaimDueCo
 	return nil
 }
 
-// concept2ResultFor builds the rower result for a finished distance race:
-// the race target in meters, the recorded finish time in tenths of a second
+// concept2ResultFor builds the rower result for a finished race or time
+// trial on a distance-kind preset: the preset's target in meters, the recorded finish time in tenths of a second
 // (truncated, as the monitor shows it) and the finish as the date, in the
 // connection's timezone, with the detail the racer's samples and PM5 give.
 // Detail that is not known is left out. verified is never set: only clients
-// Concept2 trusts may verify a result. Warmup sessions are excluded upstream
-// by ListConcept2PostCandidates and never reach this.
+// Concept2 trusts may verify a result. Only distance-kind presets post; a
+// result on a time- or interval-kind preset is refused. Warm-up activities are
+// excluded upstream by ListConcept2PostCandidates and never reach this.
 func concept2ResultFor(p db.GetConcept2PostPayloadRow, strokes []db.ListConcept2PostStrokesRow) (concept2.Result, error) {
 	if p.Kind != "distance" {
-		return concept2.Result{}, fmt.Errorf("concept2 posts need a distance race, got %q", p.Kind)
+		return concept2.Result{}, fmt.Errorf("concept2 posts need a distance-kind preset, got kind %q", p.Kind)
 	}
 	if !p.ElapsedMilliseconds.Valid || !p.FinishedAt.Valid {
 		return concept2.Result{}, errors.New("finished participant has no recorded finish time")

@@ -12,7 +12,7 @@ import (
 	"github.com/softsrv/starter/internal/db"
 )
 
-// ErrInvalidLeaderboardFilter indicates an unsupported scope, time window, or mode.
+// ErrInvalidLeaderboardFilter indicates an unsupported scope, time window, or activity type.
 var ErrInvalidLeaderboardFilter = errors.New("invalid leaderboard filter")
 
 type friendLister interface {
@@ -44,15 +44,16 @@ func NewLeaderboardService(q *db.Queries, friends friendLister, cfg LeaderboardS
 // Windows use completion time: month is a trailing calendar month in UTC,
 // week is seven days, and all-time has no lower bound. Friends includes only
 // the caller's friends, not the caller, unless they are in that resolved set.
-// Mode "race" ranks races and "time-trial" ranks time trials, as chosen when
-// the session began, never inferred from entrant count. The two never mix, so
-// a 500m race and a 500m time trial rank separately. Warmups rank on neither.
-func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window, mode string, raceTypeID, callerID uuid.UUID) ([]LeaderboardRow, error) {
+// Activity type "race" ranks races and "time-trial" ranks time trials, as
+// chosen when the activity began, never inferred from entrant count. The two
+// never mix, so a 500m race and a 500m time trial rank separately. Warm-ups
+// rank on neither. presetID picks the preset the board ranks.
+func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window, activityType string, presetID, callerID uuid.UUID) ([]LeaderboardRow, error) {
 	if scope != "global" && scope != "friends" {
 		return nil, ErrInvalidLeaderboardFilter
 	}
-	params := db.LeaderboardPersonalBestParams{RaceTypeID: raceTypeID}
-	switch mode {
+	params := db.LeaderboardPersonalBestParams{RaceTypeID: presetID}
+	switch activityType {
 	case "race":
 		params.Mode = "race"
 	case "time-trial":

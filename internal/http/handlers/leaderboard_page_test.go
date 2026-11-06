@@ -22,16 +22,16 @@ var (
 	lbType2000 = uuid.MustParse("01950000-0000-7000-8000-000000000003")
 )
 
-type stubRaceTypeOptions struct {
-	options []app.RaceTypeOption
+type stubPresetOptions struct {
+	options []app.PresetOption
 	err     error
 }
 
-func (s stubRaceTypeOptions) RaceTypeOptions(context.Context) ([]app.RaceTypeOption, error) {
+func (s stubPresetOptions) PresetOptions(context.Context) ([]app.PresetOption, error) {
 	return s.options, s.err
 }
 
-var lbOptions = stubRaceTypeOptions{options: []app.RaceTypeOption{
+var lbOptions = stubPresetOptions{options: []app.PresetOption{
 	{ID: lbType500, Label: "500m", TargetMillimeters: 500000},
 	{ID: lbType2000, Label: "2000m", TargetMillimeters: 2000000},
 }}
@@ -205,8 +205,8 @@ func TestLeaderboardPageErrors(t *testing.T) {
 		return nil, errors.New("private database details")
 	}}
 	for name, h := range map[string]*handlers.LeaderboardPageHandler{
-		"race types":  handlers.NewLeaderboardPageHandler(&stubLeaderboardService{}, stubRaceTypeOptions{err: errors.New("private database details")}, newProductionRenderer(t)),
-		"no types":    handlers.NewLeaderboardPageHandler(&stubLeaderboardService{}, stubRaceTypeOptions{}, newProductionRenderer(t)),
+		"race types":  handlers.NewLeaderboardPageHandler(&stubLeaderboardService{}, stubPresetOptions{err: errors.New("private database details")}, newProductionRenderer(t)),
+		"no types":    handlers.NewLeaderboardPageHandler(&stubLeaderboardService{}, stubPresetOptions{}, newProductionRenderer(t)),
 		"leaderboard": handlers.NewLeaderboardPageHandler(failing, lbOptions, newProductionRenderer(t)),
 	} {
 		rr := serveAuthenticated(t, user, http.HandlerFunc(h.Page), httptest.NewRequest(http.MethodGet, "/leaderboards", nil))

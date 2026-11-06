@@ -167,7 +167,7 @@ func (q *Queries) GetRoomInviteForInvitee(ctx context.Context, arg GetRoomInvite
 }
 
 const getRoomLobby = `-- name: GetRoomLobby :one
-SELECT r.id, r.status, r.join_code, r.host_user_id, r.race_type_id, rt.label AS race_label, rt.kind AS race_kind
+SELECT r.id, r.status, r.join_code, r.host_user_id, r.race_type_id, rt.label AS race_label, rt.kind AS race_kind, r.mode
 FROM rooms r JOIN race_types rt ON rt.id = r.race_type_id
 WHERE r.id = $1
 `
@@ -180,6 +180,7 @@ type GetRoomLobbyRow struct {
 	RaceTypeID uuid.UUID `json:"race_type_id"`
 	RaceLabel  string    `json:"race_label"`
 	RaceKind   string    `json:"race_kind"`
+	Mode       string    `json:"mode"`
 }
 
 func (q *Queries) GetRoomLobby(ctx context.Context, id uuid.UUID) (GetRoomLobbyRow, error) {
@@ -193,6 +194,7 @@ func (q *Queries) GetRoomLobby(ctx context.Context, id uuid.UUID) (GetRoomLobbyR
 		&i.RaceTypeID,
 		&i.RaceLabel,
 		&i.RaceKind,
+		&i.Mode,
 	)
 	return i, err
 }

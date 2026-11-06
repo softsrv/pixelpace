@@ -104,7 +104,7 @@ var (
 )
 
 func roomStep(name, status string) roomDBStep {
-	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
+	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}, pgtype.Timestamptz{}, "race", pgtype.Int4{}}}
 }
 func participantStep(userID uuid.UUID, ready bool) roomDBStep {
 	return roomDBStep{name: "GetRoomParticipant", args: []any{roomTestID, userID}, values: []any{roomTestID, roomTestID, userID, ready, pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
@@ -286,7 +286,7 @@ func TestRoomStartRaceGuards(t *testing.T) {
 		{"finished", "finished", roomTestHost, 2, false, ErrInvalidStatusTransition},
 		{"dissolved", "dissolved", roomTestHost, 2, false, ErrInvalidStatusTransition},
 		{"empty", "waiting", roomTestHost, 0, false, ErrNotEnoughParticipants},
-		{"one (time trial)", "waiting", roomTestHost, 1, false, nil},
+		{"one", "waiting", roomTestHost, 1, false, ErrNotEnoughParticipants},
 		{"nine", "waiting", roomTestHost, 9, false, ErrRoomFull},
 		{"unready", "waiting", roomTestHost, 2, true, ErrNotAllReady},
 	} {
@@ -294,7 +294,7 @@ func TestRoomStartRaceGuards(t *testing.T) {
 			steps := []roomDBStep{roomStep("GetRoomForUpdate", tc.status)}
 			if tc.caller == roomTestHost && tc.status == "waiting" {
 				steps = append(steps, countStep(tc.count))
-				if tc.count >= 1 && tc.count <= 8 {
+				if tc.count >= 2 && tc.count <= 8 {
 					steps = append(steps, roomDBStep{name: "RoomHasUnreadyGuests", args: []any{roomTestID, roomTestHost}, values: []any{tc.unready}})
 				}
 			}

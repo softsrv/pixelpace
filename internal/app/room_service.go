@@ -222,8 +222,8 @@ func (s *RoomService) MarkReady(ctx context.Context, userID, roomID uuid.UUID) e
 }
 
 // StartRace transitions a lobby whose guests are all ready to counting_down.
-// The host need not mark themselves ready. A host alone in the room may start,
-// which makes the race a Time Trial. The caller owns the countdown.
+// The host need not mark themselves ready. Starting is only for race-mode rooms,
+// and a race needs at least 2 participants to start. The caller owns the countdown.
 func (s *RoomService) StartRace(ctx context.Context, callerUserID, roomID uuid.UUID) error {
 	return s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
 		if callerUserID != room.HostUserID {
@@ -236,7 +236,7 @@ func (s *RoomService) StartRace(ctx context.Context, callerUserID, roomID uuid.U
 		if err != nil {
 			return fmt.Errorf("count participants: %w", err)
 		}
-		if count < 1 {
+		if count < 2 {
 			return ErrNotEnoughParticipants
 		}
 		if count > maxRoomParticipants {

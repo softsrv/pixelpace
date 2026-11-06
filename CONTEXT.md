@@ -13,7 +13,7 @@ Defines a race's win condition and target, chosen from a **fixed preset catalog*
 _Avoid_: Race format, workout type, game mode
 
 **Time Trial**:
-A Race that begins with a single entrant: a racer rowing alone against the clock to set a personal best. Same Room, Race Types, Countdown, and race options as any other Race — the only difference is the entrant count when the Race begins, recorded on the Race at that instant. A Race that begins with others stays a Race even if the rest later DNF; a Room whose other participants are dropped before the start (equipment never connected) begins as a Time Trial.
+A mode chosen on the dashboard, not an entrant count: a racer rowing alone against the clock to set a personal best. A begun race stays a race even if others drop out; a race room never silently turns into a time trial.
 A Time Trial whose racer has an earlier finished Time Trial at that Race Type shows a **Pacer**: a boat that rows the distance at the racer's personal best (their fastest such time). The Pacer is a lane only — never an entrant, never ranked, never on a Leaderboard. A first Time Trial at a Race Type has no Pacer.
 _Avoid_: Solo race, practice, workout
 
@@ -42,7 +42,7 @@ The Room participant with control — configures the Race, can kick a non-Ready 
 _Avoid_: Owner, organizer
 
 **Ready**:
-A per-participant status in a Room signaling they're prepared to race. The Host can only start once every participant is Ready, and a Room needs at least 1 participant (max 8) to start. A Host alone in their Room may start immediately, making the Race a Time Trial.
+A per-participant status in a Room signaling they're prepared to race. The Host can only start once every participant is Ready, and a Room needs at least 2 participants (max 8) to start. Once started, a begun race stays a race.
 _Avoid_: Ready-up (as a verb, fine informally, but the status itself is "Ready")
 
 **Countdown**:

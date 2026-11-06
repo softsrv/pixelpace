@@ -358,6 +358,7 @@ test('resultRows: warmup rows show distance, time and pace, with no rank column 
   assert.equal(res.hasRank, false, 'hasRank must be false for warmup');
   assert.equal(res.isWarmup, true, 'isWarmup must be true for warmup');
   assert.equal(res.activityType, 'warmup');
+  assert.equal('mode' in res, false, 'result must not have a mode property');
   assert.equal(res.rows[0].rank, null, 'rank must be null for warmup row');
   assert.equal(res.rows[0].name, 'Warmup Rower');
   assert.equal(res.rows[0].time, '5:00.0');

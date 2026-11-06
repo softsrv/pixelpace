@@ -245,6 +245,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if pacerVal != nil {
 		t.Errorf("pacer = %v, want null", pacerVal)
 	}
+	if _, ok := statusData["mode"]; ok {
+		t.Errorf("status JSON unexpectedly contains mode key: %s", statusRR.Body.String())
+	}
 
 	// 1-entrant race in mode 'race': note is absent
 	oneRacerRaceViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
@@ -548,7 +551,7 @@ func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 		if gotRoom != roomID || gotUser != user.ID {
 			t.Errorf("Results(%s, %s), want (%s, %s)", gotRoom, gotUser, roomID, user.ID)
 		}
-		return app.RaceResults{RaceID: raceID, Finished: true, TargetMillimeters: 2000000, Results: []app.RaceResult{
+		return app.RaceResults{RaceID: raceID, Finished: true, TargetMillimeters: 2000000, ActivityType: "race", Results: []app.RaceResult{
 			{PublicPlayer: app.PublicPlayer{UserID: user.ID, Name: "Me"}, Rank: &rank, Status: "finished",
 				ElapsedMilliseconds: &elapsed, DistanceMillimeters: 2000000, PaceMillisecondsPer500m: &pace},
 			{PublicPlayer: app.PublicPlayer{UserID: rival, Name: "Ada"}, Status: "dnf", DistanceMillimeters: 750000},
@@ -566,7 +569,7 @@ func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
-	want := `{"race_id":"` + raceID.String() + `","finished":true,"target_millimeters":2000000,"results":[` +
+	want := `{"race_id":"` + raceID.String() + `","finished":true,"target_millimeters":2000000,"activityType":"race","results":[` +
 		`{"user_id":"` + user.ID.String() + `","name":"Me","rank":1,"status":"finished","elapsed_milliseconds":400000,"distance_millimeters":2000000,"pace_milliseconds_per_500m":100000},` +
 		`{"user_id":"` + rival.String() + `","name":"Ada","rank":null,"status":"dnf","elapsed_milliseconds":null,"distance_millimeters":750000,"pace_milliseconds_per_500m":null}]}`
 	var got, wantJSON any

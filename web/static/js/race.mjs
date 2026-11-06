@@ -520,7 +520,7 @@ export async function startRaceView(trackEl, PIXI) {
     var tbody = modalEl.querySelector('tbody');
     if (!tbody) return showResultsError();
     tbody.textContent = '';
-    var isWarmup = Boolean((result && (result.activityType === 'warmup' || result.mode === 'warmup' || result.isWarmup || result.hasRank === false)) || activityType === 'warmup');
+    var isWarmup = Boolean((result && (result.activityType === 'warmup' || result.isWarmup || result.hasRank === false)) || activityType === 'warmup');
     var rankTh = modalEl.querySelector('th:first-child');
     if (rankTh && rankTh.textContent.trim().toLowerCase() === 'rank') {
       setHidden(rankTh, isWarmup);

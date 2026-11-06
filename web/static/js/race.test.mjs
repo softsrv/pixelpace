@@ -134,7 +134,6 @@ function setupPage(options) {
   Object.assign(track.dataset, {
     selfId: 'u-self', targetMm: options.targetMm || '500000',
     activityType: activityType,
-    mode: activityType,
     statusUrl: '/rooms/r1/race/status', pageUrl: '/rooms/r1/race', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
     resultsUrl: '/rooms/r1/race/results', dashboardUrl: '/dashboard',
     finished: options.finished ? 'true' : 'false', raceId: options.finished ? 'race-1' : '',

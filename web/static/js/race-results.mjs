@@ -56,8 +56,8 @@ export function resultRows(data, viewerId, activityType) {
     if (Array.isArray(data.results)) {
       list = data.results;
     }
-    if (!currentActivityType && (data.activityType || data.mode)) {
-      currentActivityType = data.activityType || data.mode;
+    if (!currentActivityType && data.activityType) {
+      currentActivityType = data.activityType;
     }
   }
 
@@ -139,6 +139,5 @@ export function resultRows(data, viewerId, activityType) {
   result.hasRank = !isWarmup;
   result.isWarmup = isWarmup;
   result.activityType = currentActivityType || 'race';
-  result.mode = result.activityType;
   return result;
 }

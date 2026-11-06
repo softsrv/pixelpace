@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +105,41 @@ func TestLeaderboardRoutesAuthenticate(t *testing.T) {
 				t.Fatalf("ranking = %s (%v)", rr.Body, err)
 			}
 		}
+	}
+}
+
+func TestRoomsRaceTypeRoute(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	actor := uuid.Must(uuid.NewV7())
+	roomID := uuid.Must(uuid.NewV7())
+	user := db.User{ID: actor, Email: "racer@example.com", EmailVerified: true}
+	token, err := auth.IssueAccessToken(actor, user.Email, routerTestJWTSecret, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewRouter(ctx, RouterConfig{
+		Queries:   routerUserFetcher{user: user},
+		JWTSecret: routerTestJWTSecret,
+	})
+
+	// 1. Unauthenticated request redirects to /login.
+	unauthedReq := httptest.NewRequest(http.MethodPost, "/rooms/"+roomID.String()+"/race-type", strings.NewReader("race_type_id=invalid"))
+	unauthedReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	unauthedRR := httptest.NewRecorder()
+	h.ServeHTTP(unauthedRR, unauthedReq)
+	if unauthedRR.Code != http.StatusSeeOther || unauthedRR.Header().Get("Location") != "/login" {
+		t.Fatalf("unauthenticated: status=%d location=%q", unauthedRR.Code, unauthedRR.Header().Get("Location"))
+	}
+
+	// 2. Authenticated request routes POST /rooms/{id}/race-type to ChangePreset (returns 400 Bad Request on invalid preset ID).
+	authedReq := httptest.NewRequest(http.MethodPost, "/rooms/"+roomID.String()+"/race-type", strings.NewReader("race_type_id=invalid"))
+	authedReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	authedReq.AddCookie(&http.Cookie{Name: "access_token", Value: token.AccessToken})
+	authedRR := httptest.NewRecorder()
+	h.ServeHTTP(authedRR, authedReq)
+	if authedRR.Code != http.StatusBadRequest {
+		t.Fatalf("authenticated route status=%d, want %d", authedRR.Code, http.StatusBadRequest)
 	}
 }

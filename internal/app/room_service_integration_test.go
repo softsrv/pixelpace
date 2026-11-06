@@ -57,7 +57,7 @@ func roomIntegrationUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 func roomIntegrationCreate(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) (uuid.UUID, string) {
 	t.Helper()
 	ctx := context.Background()
-	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID, ModeRace, nil)
+	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 		}
 		return generateJoinCode()
 	}
-	_, code, err := s.CreateRoom(ctx, host, roomTestID, ModeRace, nil)
+	_, code, err := s.CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 		t.Fatalf("collision did not recover: code %q, calls %d, observations %+v", code, calls, observed)
 	}
 	for _, sql := range observed.queries {
-		if strings.Contains(sql, "SELECT") && !strings.HasPrefix(sql, "-- name: GetRaceType ") {
+		if strings.Contains(sql, "SELECT") && !strings.HasPrefix(sql, "-- name: GetPreset ") {
 			t.Fatalf("unexpected precheck: %s", sql)
 		}
 	}
@@ -165,7 +165,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if room.Status != "waiting" || room.HostUserID != host || room.JoinCode != code || room.Mode != ModeRace || room.DurationSeconds.Valid {
+	if room.Status != "waiting" || room.HostUserID != host || room.JoinCode != code || room.ActivityType != ActivityTypeRace || room.DurationSeconds.Valid {
 		t.Fatalf("created room: %+v", room)
 	}
 	participant, err := db.New(pool).GetRoomParticipant(ctx, db.GetRoomParticipantParams{RoomID: room.ID, UserID: host})
@@ -279,7 +279,7 @@ func TestRoomIntegrationAtomicFailures(t *testing.T) {
 	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
 	observed := &roomObservedPool{Pool: pool, failQuery: "InsertRoomParticipant"}
 	s := NewRoomService(db.New(observed), observed)
-	if _, _, err := s.CreateRoom(ctx, host, roomTestID, ModeRace, nil); err == nil {
+	if _, _, err := s.CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil); err == nil {
 		t.Fatal("expected create failure")
 	}
 	var count int
@@ -387,11 +387,11 @@ func TestRoomIntegrationRoster(t *testing.T) {
 		}
 	}
 	raceID := uuid.Must(uuid.NewV7())
-	if _, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at) VALUES ($1, $2, $3, now())", raceID, roomID, roomTestID); err != nil {
+	if _, err := pool.Exec(ctx, "INSERT INTO activities (id, room_id, preset_id, started_at) VALUES ($1, $2, $3, now())", raceID, roomID, roomTestID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), "DELETE FROM races WHERE id = $1", raceID); err != nil {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM activities WHERE id = $1", raceID); err != nil {
 			t.Error(err)
 		}
 	})
@@ -410,8 +410,8 @@ func roomIntegrationReadyRoom(t *testing.T, pool *pgxpool.Pool) (uuid.UUID, uuid
 	roomID, code := roomIntegrationCreate(t, pool, host)
 	t.Cleanup(func() {
 		for _, sql := range []string{
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 		} {
 			if _, err := pool.Exec(context.Background(), sql, roomID); err != nil {
 				t.Error(err)
@@ -466,7 +466,7 @@ func TestRoomIntegrationStartBeginsRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	var races int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 1 {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM activities WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 1 {
 		t.Fatalf("races for room = %d, %v; want 1", races, err)
 	}
 	rows, err := pool.Query(ctx, "SELECT user_id FROM race_participants WHERE race_id = $1", race.ID)
@@ -533,7 +533,7 @@ func TestRoomIntegrationFailedBeginResetsRoom(t *testing.T) {
 				t.Fatalf("equipment unready after reset = %d, %v; want every racer to reconnect", unready, err)
 			}
 			var races int
-			if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {
+			if err := pool.QueryRow(ctx, "SELECT count(*) FROM activities WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {
 				t.Fatalf("races after failed begin = %d, %v; want 0", races, err)
 			}
 			if err := s.ResetCountdown(ctx, roomID); !errors.Is(err, ErrInvalidStatusTransition) {
@@ -546,30 +546,215 @@ func TestRoomIntegrationFailedBeginResetsRoom(t *testing.T) {
 	}
 }
 
-func TestRoomIntegrationCreateInvalidModeRejected(t *testing.T) {
+// roomIntegrationHostRooms counts the rooms a host has, so a rejected create
+// can be shown to leave nothing behind.
+func roomIntegrationHostRooms(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM rooms WHERE host_user_id = $1", host).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// TestRoomIntegrationCreateRaceHasLobbyAndJoinCode pins that creating a race
+// activity (dashboard submit label "Create race") creates a room in waiting
+// status (with a joinable lobby) and a non-empty join code, and that a second
+// verified user who joins with that code becomes a participant.
+func TestRoomIntegrationCreateRaceHasLobbyAndJoinCode(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	q := db.New(pool)
+	s := NewRoomService(q, pool)
+
+	roomID, code, err := s.CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil)
+	if err != nil {
+		t.Fatalf("CreateRoom(race) failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if code == "" {
+		t.Fatal("join code is empty")
+	}
+
+	room, err := q.GetRoomForUpdate(ctx, roomID)
+	if err != nil {
+		t.Fatalf("get room: %v", err)
+	}
+	if room.Status != "waiting" {
+		t.Fatalf("room status = %q, want waiting (lobby)", room.Status)
+	}
+	if room.ActivityType != ActivityTypeRace {
+		t.Fatalf("room mode = %q, want %q", room.ActivityType, ActivityTypeRace)
+	}
+
+	// Host is initially the sole participant.
+	countBefore, err := q.CountRoomParticipants(ctx, roomID)
+	if err != nil || countBefore != 1 {
+		t.Fatalf("participants before join = %d, %v; want 1", countBefore, err)
+	}
+
+	// A second verified user joins with the join code and becomes a participant.
+	joinedRoomID, err := s.JoinRoom(ctx, guest, code)
+	if err != nil {
+		t.Fatalf("JoinRoom with code %q failed: %v", code, err)
+	}
+	if joinedRoomID != roomID {
+		t.Fatalf("joinedRoomID = %s, want %s", joinedRoomID, roomID)
+	}
+
+	countAfter, err := q.CountRoomParticipants(ctx, roomID)
+	if err != nil || countAfter != 2 {
+		t.Fatalf("participants after join = %d, %v; want 2", countAfter, err)
+	}
+
+	roster, err := s.Roster(ctx, guest, roomID)
+	if err != nil {
+		t.Fatalf("Roster failed: %v", err)
+	}
+	foundGuest := false
+	for _, p := range roster.Participants {
+		if p.UserID == guest {
+			foundGuest = true
+			break
+		}
+	}
+	if !foundGuest {
+		t.Fatalf("guest %s not found in roster: %+v", guest, roster.Participants)
+	}
+}
+
+// A time trial or warm-up starts counting down immediately: it has no waiting
+// room (no joinable lobby), and a second user's join attempt is refused without
+// adding a participant.
+func TestRoomIntegrationSoloStartsCountdownAndRefusesJoin(t *testing.T) {
+	minutes := int32(5)
+	for _, tc := range []struct {
+		activityType string
+		presetID     uuid.UUID
+		minutes      *int32
+	}{
+		{activityType: ActivityTypeTimeTrial, presetID: roomTestID, minutes: nil},
+		{activityType: ActivityTypeWarmup, presetID: WarmupPresetID, minutes: &minutes},
+	} {
+		t.Run(tc.activityType, func(t *testing.T) {
+			pool := roomIntegrationDB(t)
+			ctx := context.Background()
+			host, outsider := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+			q := db.New(pool)
+			s := NewRoomService(q, pool)
+
+			roomID, code, err := s.CreateRoom(ctx, host, tc.presetID, tc.activityType, tc.minutes)
+			if err != nil {
+				t.Fatalf("CreateRoom(%s) failed: %v", tc.activityType, err)
+			}
+			t.Cleanup(func() {
+				if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+					t.Error(err)
+				}
+			})
+
+			room, err := q.GetRoomForUpdate(ctx, roomID)
+			if err != nil {
+				t.Fatalf("get room: %v", err)
+			}
+			if room.Status != "counting_down" {
+				t.Fatalf("room status = %q, want counting_down", room.Status)
+			}
+			if room.ActivityType != tc.activityType {
+				t.Fatalf("room mode = %q, want %q", room.ActivityType, tc.activityType)
+			}
+
+			// Initial participants: host only.
+			countBefore, err := q.CountRoomParticipants(ctx, roomID)
+			if err != nil || countBefore != 1 {
+				t.Fatalf("participants before join = %d, %v; want 1", countBefore, err)
+			}
+
+			// Attempt to join must be refused with ErrRoomNotJoinable (room is not waiting/in a lobby).
+			if _, err := s.JoinRoom(ctx, outsider, code); !errors.Is(err, ErrRoomNotJoinable) {
+				t.Fatalf("JoinRoom returned %v, want ErrRoomNotJoinable", err)
+			}
+
+			// Participant count remains unchanged.
+			countAfter, err := q.CountRoomParticipants(ctx, roomID)
+			if err != nil || countAfter != 1 {
+				t.Fatalf("participants after join = %d, %v; want 1", countAfter, err)
+			}
+
+			// Verify participants list contains only the host.
+			rows, err := pool.Query(ctx, "SELECT user_id FROM room_participants WHERE room_id = $1", roomID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var participants []uuid.UUID
+			for rows.Next() {
+				var id uuid.UUID
+				if err := rows.Scan(&id); err != nil {
+					t.Fatal(err)
+				}
+				participants = append(participants, id)
+			}
+			if len(participants) != 1 || participants[0] != host {
+				t.Fatalf("participants = %v, want [%s]", participants, host)
+			}
+		})
+	}
+}
+
+func TestRoomIntegrationCreateInvalidActivityTypeRejected(t *testing.T) {
 	pool := roomIntegrationDB(t)
 	ctx := context.Background()
 	host := roomIntegrationUser(t, pool)
 	s := NewRoomService(db.New(pool), pool)
 
-	var countBefore int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&countBefore); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, mode := range []string{"", "sprint", "invalid"} {
-		_, _, err := s.CreateRoom(ctx, host, roomTestID, mode, nil)
-		if !errors.Is(err, ErrInvalidSessionMode) {
-			t.Fatalf("mode %q err = %v, want ErrInvalidSessionMode", mode, err)
+	for _, activityType := range []string{"", "sprint", "invalid"} {
+		_, _, err := s.CreateRoom(ctx, host, roomTestID, activityType, nil)
+		if !errors.Is(err, ErrInvalidActivityType) {
+			t.Fatalf("activity type %q err = %v, want ErrInvalidActivityType", activityType, err)
 		}
 	}
+	if n := roomIntegrationHostRooms(t, pool, host); n != 0 {
+		t.Fatalf("rooms after rejected creates = %d, want 0", n)
+	}
+}
 
-	var countAfter int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&countAfter); err != nil {
+// A race or time trial needs a distance-kind preset: a time-kind or
+// interval-kind preset is refused as an invalid preset and creates no room.
+func TestRoomIntegrationCreateNonDistancePresetRejected(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host := roomIntegrationUser(t, pool)
+	s := NewRoomService(db.New(pool), pool)
+
+	timePreset := uuid.MustParse("01950000-0000-7000-8000-000000000006") // seeded "5 min", kind time
+	intervalPreset := uuid.Must(uuid.NewV7())
+	if _, err := pool.Exec(ctx, "INSERT INTO presets (id, kind, target_value, label) VALUES ($1, 'interval', 60000, 'test interval')", intervalPreset); err != nil {
 		t.Fatal(err)
 	}
-	if countAfter != countBefore {
-		t.Fatalf("rooms count changed: before = %d, after = %d", countBefore, countAfter)
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM presets WHERE id = $1", intervalPreset); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, activityType := range []string{ActivityTypeRace, ActivityTypeTimeTrial} {
+		for kind, preset := range map[string]uuid.UUID{"time": timePreset, "interval": intervalPreset} {
+			if _, _, err := s.CreateRoom(ctx, host, preset, activityType, nil); !errors.Is(err, ErrInvalidPreset) {
+				t.Fatalf("%s with a %s-kind preset err = %v, want ErrInvalidPreset", activityType, kind, err)
+			}
+		}
+	}
+	if n := roomIntegrationHostRooms(t, pool, host); n != 0 {
+		t.Fatalf("rooms after rejected creates = %d, want 0", n)
+	}
+	if ErrInvalidPreset.Error() != "invalid preset" {
+		t.Fatalf("ErrInvalidPreset message = %q, want %q", ErrInvalidPreset.Error(), "invalid preset")
 	}
 }
 
@@ -578,14 +763,14 @@ func TestRoomIntegrationCreateInvalidModeRejected(t *testing.T) {
 func roomIntegrationTimeTrial(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) (uuid.UUID, string) {
 	t.Helper()
 	ctx := context.Background()
-	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID, ModeTimeTrial, nil)
+	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID, ActivityTypeTimeTrial, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		for _, sql := range []string{
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 			"DELETE FROM rooms WHERE id = $1",
 		} {
 			if _, err := pool.Exec(context.Background(), sql, roomID); err != nil {
@@ -609,7 +794,7 @@ func TestRoomIntegrationCreateTimeTrialBeginsWithoutLobby(t *testing.T) {
 	rooms := NewRoomService(q, pool)
 
 	room, err := q.GetRoomForUpdate(ctx, roomID)
-	if err != nil || room.Status != "counting_down" || room.Mode != ModeTimeTrial || room.HostUserID != host {
+	if err != nil || room.Status != "counting_down" || room.ActivityType != ActivityTypeTimeTrial || room.HostUserID != host {
 		t.Fatalf("created room = %+v, %v; want a counting-down time_trial hosted by %s", room, err, host)
 	}
 	if count, err := q.CountRoomParticipants(ctx, roomID); err != nil || count != 1 {
@@ -636,17 +821,17 @@ func TestRoomIntegrationCreateTimeTrialBeginsWithoutLobby(t *testing.T) {
 	}
 	var mode string
 	var timeTrial bool
-	if err := pool.QueryRow(ctx, "SELECT mode, time_trial FROM races WHERE id = $1", race.ID).Scan(&mode, &timeTrial); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT activity_type, time_trial FROM activities WHERE id = $1", race.ID).Scan(&mode, &timeTrial); err != nil {
 		t.Fatal(err)
 	}
-	if mode != ModeTimeTrial || !timeTrial {
-		t.Fatalf("races.mode = %q, time_trial = %v; want time_trial, true", mode, timeTrial)
+	if mode != ActivityTypeTimeTrial || !timeTrial {
+		t.Fatalf("activities.activity_type = %q, time_trial = %v; want time_trial, true", mode, timeTrial)
 	}
 	row, err := q.GetRoomRace(ctx, roomID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Status == "waiting" || row.Mode != ModeTimeTrial {
+	if row.Status == "waiting" || row.ActivityType != ActivityTypeTimeTrial {
 		t.Fatalf("room race = %+v; want past waiting in time_trial mode", row)
 	}
 	if want := begunAt.Add(10 * time.Second); !row.RaceStartsAt.Valid || !row.RaceStartsAt.Time.Equal(want) {
@@ -654,38 +839,55 @@ func TestRoomIntegrationCreateTimeTrialBeginsWithoutLobby(t *testing.T) {
 	}
 }
 
-// A time trial whose begin fails has no lobby to return to: ResetCountdown
-// dissolves it rather than leaving a joinable waiting room behind.
-func TestRoomIntegrationTimeTrialFailedBeginDissolves(t *testing.T) {
-	pool := roomIntegrationDB(t)
-	ctx := context.Background()
-	host := roomIntegrationUser(t, pool)
-	roomID, _ := roomIntegrationTimeTrial(t, pool, host)
-	q := db.New(pool)
-	roomIntegrationEquipmentReady(t, pool, roomID, host)
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	if _, err := roomIntegrationRaceService(q, pool).Begin(cancelled, roomID); err == nil {
-		t.Fatal("expected begin failure")
-	}
-	if err := NewRoomService(q, pool).ResetCountdown(ctx, roomID); err != nil {
-		t.Fatal(err)
-	}
-	room, err := q.GetRoomForUpdate(ctx, roomID)
-	if err != nil || room.Status != "dissolved" {
-		t.Fatalf("time trial after failed begin = %+v, %v; want dissolved", room, err)
+// A time trial or warm-up whose begin fails has no lobby to return to:
+// ResetCountdown dissolves it rather than leaving a joinable waiting room
+// behind. Only a race goes back to its lobby (TestRoomIntegrationFailedBeginResetsRoom).
+func TestRoomIntegrationSoloFailedBeginDissolves(t *testing.T) {
+	minutes := int32(5)
+	for _, tc := range []struct {
+		activityType string
+		minutes      *int32
+	}{{ActivityTypeTimeTrial, nil}, {ActivityTypeWarmup, &minutes}} {
+		t.Run(tc.activityType, func(t *testing.T) {
+			pool := roomIntegrationDB(t)
+			ctx := context.Background()
+			host := roomIntegrationUser(t, pool)
+			q := db.New(pool)
+			roomID, _, err := NewRoomService(q, pool).CreateRoom(ctx, host, roomTestID, tc.activityType, tc.minutes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+					t.Error(err)
+				}
+			})
+			roomIntegrationEquipmentReady(t, pool, roomID, host)
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			if _, err := roomIntegrationRaceService(q, pool).Begin(cancelled, roomID); err == nil {
+				t.Fatal("expected begin failure")
+			}
+			if err := NewRoomService(q, pool).ResetCountdown(ctx, roomID); err != nil {
+				t.Fatal(err)
+			}
+			room, err := q.GetRoomForUpdate(ctx, roomID)
+			if err != nil || room.Status != "dissolved" || room.ActivityType != tc.activityType {
+				t.Fatalf("%s after failed begin = %+v, %v; want dissolved, never waiting", tc.activityType, room, err)
+			}
+		})
 	}
 }
 
-// A warmup is created solo and already counting down, on the warmup race type
-// with its length stored in seconds, whatever race type the caller names.
+// A warmup is created solo and already counting down, on the warm-up preset
+// with its length stored in seconds, whatever preset the caller names.
 func TestRoomIntegrationCreateWarmupIsSoloAndCountingDown(t *testing.T) {
 	pool := roomIntegrationDB(t)
 	ctx := context.Background()
 	host, outsider := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
 	minutes := int32(5)
 	s := NewRoomService(db.New(pool), pool)
-	roomID, code, err := s.CreateRoom(ctx, host, uuid.Nil, ModeWarmup, &minutes)
+	roomID, code, err := s.CreateRoom(ctx, host, uuid.Nil, ActivityTypeWarmup, &minutes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,11 +900,11 @@ func TestRoomIntegrationCreateWarmupIsSoloAndCountingDown(t *testing.T) {
 	var mode, status string
 	var raceType uuid.UUID
 	var duration int32
-	if err := pool.QueryRow(ctx, "SELECT mode, status, race_type_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&mode, &status, &raceType, &duration); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT activity_type, status, preset_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&mode, &status, &raceType, &duration); err != nil {
 		t.Fatal(err)
 	}
-	if mode != ModeWarmup || status != "counting_down" || raceType != WarmupRaceTypeID || duration != 300 {
-		t.Fatalf("room = %q/%q/%s/%ds; want warmup/counting_down/%s/300s", mode, status, raceType, duration, WarmupRaceTypeID)
+	if mode != ActivityTypeWarmup || status != "counting_down" || raceType != WarmupPresetID || duration != 300 {
+		t.Fatalf("room = %q/%q/%s/%ds; want warmup/counting_down/%s/300s", mode, status, raceType, duration, WarmupPresetID)
 	}
 	var participants []uuid.UUID
 	rows, err := pool.Query(ctx, "SELECT user_id FROM room_participants WHERE room_id = $1", roomID)
@@ -726,27 +928,50 @@ func TestRoomIntegrationCreateWarmupIsSoloAndCountingDown(t *testing.T) {
 }
 
 // A warmup whose minutes are outside 1-20 or missing is refused with the typed
-// error and leaves no room behind.
+// error, and a race or time trial carrying minutes is refused as an invalid
+// activity type; neither leaves a room behind. 1 and 20 minutes are accepted
+// and carry the warm-up preset.
 func TestRoomIntegrationCreateWarmupInvalidMinutesRejected(t *testing.T) {
 	pool := roomIntegrationDB(t)
 	ctx := context.Background()
 	host := roomIntegrationUser(t, pool)
 	s := NewRoomService(db.New(pool), pool)
-	var before int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&before); err != nil {
-		t.Fatal(err)
-	}
 	zero, negative, over, huge := int32(0), int32(-1), int32(21), int32(1<<30)
 	for name, minutes := range map[string]*int32{"missing": nil, "zero": &zero, "negative": &negative, "over": &over, "huge": &huge} {
-		if _, _, err := s.CreateRoom(ctx, host, WarmupRaceTypeID, ModeWarmup, minutes); !errors.Is(err, ErrInvalidWarmupMinutes) {
+		if _, _, err := s.CreateRoom(ctx, host, WarmupPresetID, ActivityTypeWarmup, minutes); !errors.Is(err, ErrInvalidWarmupMinutes) {
 			t.Fatalf("%s minutes err = %v, want ErrInvalidWarmupMinutes", name, err)
 		}
 	}
-	var after int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&after); err != nil {
-		t.Fatal(err)
+	five := int32(5)
+	for _, activityType := range []string{ActivityTypeRace, ActivityTypeTimeTrial} {
+		if _, _, err := s.CreateRoom(ctx, host, roomTestID, activityType, &five); !errors.Is(err, ErrInvalidActivityType) {
+			t.Fatalf("%s carrying minutes err = %v, want ErrInvalidActivityType", activityType, err)
+		}
 	}
-	if after != before {
-		t.Fatalf("rooms before = %d, after = %d; want unchanged", before, after)
+	if n := roomIntegrationHostRooms(t, pool, host); n != 0 {
+		t.Fatalf("rooms after rejected creates = %d, want 0", n)
+	}
+	for _, minutes := range []int32{MinWarmupMinutes, MaxWarmupMinutes} {
+		roomID, _, err := s.CreateRoom(ctx, host, roomTestID, ActivityTypeWarmup, &minutes)
+		if err != nil {
+			t.Fatalf("%d-minute warm-up: %v", minutes, err)
+		}
+		var preset uuid.UUID
+		var duration int32
+		if err := pool.QueryRow(ctx, "SELECT preset_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&preset, &duration); err != nil {
+			t.Fatal(err)
+		}
+		if preset != WarmupPresetID || duration != minutes*60 {
+			t.Fatalf("%d-minute warm-up = preset %s, %ds; want %s, %ds", minutes, preset, duration, WarmupPresetID, minutes*60)
+		}
+		// Dissolve it so the host is free to create the next one.
+		if err := s.ResetCountdown(ctx, roomID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 }

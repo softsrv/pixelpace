@@ -32,17 +32,17 @@ type Querier interface {
 	CountRecentVerificationCodesByUserID(ctx context.Context, userID uuid.UUID) (int64, error)
 	CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUID) (int64, error)
 	CountRoomParticipants(ctx context.Context, roomID uuid.UUID) (int64, error)
+	// activity_type owns the activity's type; time_trial is kept for older readers
+	// and is always derived from it, never passed separately.
+	CreateActivity(ctx context.Context, arg CreateActivityParams) (Activity, error)
 	CreateFriendRequest(ctx context.Context, arg CreateFriendRequestParams) (FriendRequest, error)
 	CreateFriendship(ctx context.Context, arg CreateFriendshipParams) error
-	// mode owns the race's kind; time_trial is kept for older readers and is
-	// always derived from it, never passed separately.
-	CreateRace(ctx context.Context, arg CreateRaceParams) (Race, error)
 	CreateRaceParticipant(ctx context.Context, arg CreateRaceParticipantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	DecideFriendRequest(ctx context.Context, arg DecideFriendRequestParams) (FriendRequest, error)
 	// Disconnect: deletes the connection and, in the same statement, the user's
 	// pending result posts, so a later reconnect (possibly to another Concept2
-	// account) never sends races finished before it. Posted and failed rows are
+	// account) never sends activities finished before it. Posted and failed rows are
 	// kept: results already in the Logbook are left alone.
 	DeleteConcept2Connection(ctx context.Context, userID uuid.UUID) (int64, error)
 	DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
@@ -55,8 +55,9 @@ type Querier interface {
 	DissolveRoom(ctx context.Context, id uuid.UUID) error
 	// Idempotent: a (user, race) pair already queued is left as it is.
 	EnqueueConcept2ResultPost(ctx context.Context, arg EnqueueConcept2ResultPostParams) (int64, error)
+	// Writes only preset_id; the 000021 sync trigger fills its old twin column.
 	EnqueueQuickMatch(ctx context.Context, arg EnqueueQuickMatchParams) error
-	FinishRace(ctx context.Context, arg FinishRaceParams) error
+	FinishActivity(ctx context.Context, arg FinishActivityParams) error
 	FinishRaceParticipant(ctx context.Context, arg FinishRaceParticipantParams) error
 	FinishRaceRoom(ctx context.Context, id uuid.UUID) error
 	FriendshipExists(ctx context.Context, arg FriendshipExistsParams) (bool, error)
@@ -71,7 +72,7 @@ type Querier interface {
 	GetOldestRecentVerificationCode(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	GetPasswordResetTokenByHash(ctx context.Context, tokenHash string) (PasswordResetToken, error)
 	GetPendingFriendRequest(ctx context.Context, arg GetPendingFriendRequestParams) (FriendRequest, error)
-	GetRaceType(ctx context.Context, id uuid.UUID) (RaceType, error)
+	GetPreset(ctx context.Context, id uuid.UUID) (Preset, error)
 	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (RefreshToken, error)
 	GetRefreshTokenByID(ctx context.Context, id uuid.UUID) (RefreshToken, error)
 	GetRemainingRoomParticipant(ctx context.Context, roomID uuid.UUID) (uuid.UUID, error)
@@ -89,6 +90,8 @@ type Querier interface {
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
 	InsertRaceTelemetry(ctx context.Context, arg InsertRaceTelemetryParams) error
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) (RefreshToken, error)
+	// Writes only the new columns; the 000021 sync trigger fills the old twins
+	// until the contract migration drops them.
 	InsertRoom(ctx context.Context, arg InsertRoomParams) error
 	InsertRoomInvite(ctx context.Context, arg InsertRoomInviteParams) error
 	InsertRoomParticipant(ctx context.Context, arg InsertRoomParticipantParams) error
@@ -107,7 +110,7 @@ type Querier interface {
 	// The post's racer's samples of its race, up to their recorded finish, in
 	// rowing order: the stroke data, splits and totals one post sends.
 	ListConcept2PostStrokes(ctx context.Context, arg ListConcept2PostStrokesParams) ([]ListConcept2PostStrokesRow, error)
-	ListDistanceRaceTypes(ctx context.Context) ([]RaceType, error)
+	ListDistancePresets(ctx context.Context) ([]Preset, error)
 	ListFriendEntries(ctx context.Context, userIDA uuid.UUID) ([]ListFriendEntriesRow, error)
 	ListFriends(ctx context.Context, userIDA uuid.UUID) ([]uuid.UUID, error)
 	ListIncomingFriendRequests(ctx context.Context, recipientID uuid.UUID) ([]ListIncomingFriendRequestsRow, error)
@@ -124,11 +127,11 @@ type Querier interface {
 	// Lanes follow the same order Begin seeds race participants in.
 	ListRoomLineup(ctx context.Context, roomID uuid.UUID) ([]ListRoomLineupRow, error)
 	ListRoomRoster(ctx context.Context, roomID uuid.UUID) ([]ListRoomRosterRow, error)
-	// Begun races not yet finalized whose room is still racing, for resuming Run.
-	ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error)
-	ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error)
+	// Begun activities not yet finalized whose room is still in progress, for resuming Run.
+	ListUnfinishedActivities(ctx context.Context) ([]uuid.UUID, error)
+	ListWaitingByPreset(ctx context.Context, presetID uuid.UUID) ([]ListWaitingByPresetRow, error)
 	LockAccount(ctx context.Context, arg LockAccountParams) error
-	LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error)
+	LockActivity(ctx context.Context, id uuid.UUID) (LockActivityRow, error)
 	MarkConcept2NeedsReconnect(ctx context.Context, userID uuid.UUID) (int64, error)
 	// Fails the post for good: a failed post is never claimed again.
 	MarkConcept2PostFailed(ctx context.Context, arg MarkConcept2PostFailedParams) (int64, error)
@@ -140,7 +143,7 @@ type Querier interface {
 	MarkRoomParticipantUnready(ctx context.Context, arg MarkRoomParticipantUnreadyParams) error
 	MarkVerificationCodeUsed(ctx context.Context, id uuid.UUID) error
 	ReassignRoomHost(ctx context.Context, arg ReassignRoomHostParams) error
-	RecentFinishesByRaceType(ctx context.Context, arg RecentFinishesByRaceTypeParams) ([]RecentFinishesByRaceTypeRow, error)
+	RecentFinishesByPreset(ctx context.Context, arg RecentFinishesByPresetParams) ([]RecentFinishesByPresetRow, error)
 	// Keeps the post pending for another attempt at retry_at. A transient failure
 	// never fails a post: only a permanent rejection does (MarkConcept2PostFailed).
 	RecordConcept2PostError(ctx context.Context, arg RecordConcept2PostErrorParams) (int64, error)
@@ -158,7 +161,7 @@ type Querier interface {
 	RoomHasUnreadyGuests(ctx context.Context, arg RoomHasUnreadyGuestsParams) (bool, error)
 	RoomParticipantExists(ctx context.Context, arg RoomParticipantExistsParams) (bool, error)
 	// Switching auto-post off also deletes the user's pending result posts in the
-	// same statement, so switching it back on never sends races finished while it
+	// same statement, so switching it back on never sends activities finished while it
 	// was off (no back-posting). Switching it on deletes nothing.
 	SetConcept2AutoPost(ctx context.Context, arg SetConcept2AutoPostParams) (Concept2Connection, error)
 	SetEmailVerified(ctx context.Context, id uuid.UUID) error
@@ -168,7 +171,7 @@ type Querier interface {
 	SetRoomRaceStartsAt(ctx context.Context, arg SetRoomRaceStartsAtParams) error
 	SetUserDisplayName(ctx context.Context, arg SetUserDisplayNameParams) error
 	StartRoomCountdown(ctx context.Context, id uuid.UUID) error
-	// The racer's own fastest finished Time Trial at a race type, from races that
+	// The racer's own fastest finished Time Trial at a preset, from activities that
 	// started and were finished by the racer before the given instant (the minimum
 	// elapsed time). No row when there is none. A Time Trial's pacer rows at this
 	// time; bounding on the finish keeps it fixed for the whole race.
@@ -178,7 +181,7 @@ type Querier interface {
 	// A refresh also slides the token's expiry: a session stays alive for as long
 	// as it keeps being used, and ends once it goes unused for the idle lifetime.
 	UpdateRefreshTokenLastUsed(ctx context.Context, arg UpdateRefreshTokenLastUsedParams) error
-	UpdateRoomRaceType(ctx context.Context, arg UpdateRoomRaceTypeParams) error
+	UpdateRoomPreset(ctx context.Context, arg UpdateRoomPresetParams) error
 	// Every query here is keyed by the PixelPace user's id (user_id), so acting
 	// for one user can never read or change another user's connection.
 	// Connect or reconnect: a reconnect overwrites the stored tokens, account and

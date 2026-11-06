@@ -14,23 +14,23 @@ import (
 	"github.com/softsrv/starter/internal/http/middleware"
 )
 
-// raceTypeOptioner lists the race types a leaderboard can be shown for.
-type raceTypeOptioner interface {
-	RaceTypeOptions(ctx context.Context) ([]app.RaceTypeOption, error)
+// presetOptioner lists the presets a leaderboard can be shown for.
+type presetOptioner interface {
+	PresetOptions(ctx context.Context) ([]app.PresetOption, error)
 }
 
-var _ raceTypeOptioner = (*app.RoomService)(nil)
+var _ presetOptioner = (*app.RoomService)(nil)
 
 // LeaderboardPageHandler serves the leaderboards page.
 type LeaderboardPageHandler struct {
 	leaderboard leaderboardServicer
-	raceTypes   raceTypeOptioner
+	presets     presetOptioner
 	renderer    *TemplateRenderer
 }
 
 // NewLeaderboardPageHandler constructs a LeaderboardPageHandler.
-func NewLeaderboardPageHandler(leaderboard leaderboardServicer, raceTypes raceTypeOptioner, renderer *TemplateRenderer) *LeaderboardPageHandler {
-	return &LeaderboardPageHandler{leaderboard: leaderboard, raceTypes: raceTypes, renderer: renderer}
+func NewLeaderboardPageHandler(leaderboard leaderboardServicer, presets presetOptioner, renderer *TemplateRenderer) *LeaderboardPageHandler {
+	return &LeaderboardPageHandler{leaderboard: leaderboard, presets: presets, renderer: renderer}
 }
 
 // LeaderboardFilter is one choice in a row of filter tabs.
@@ -58,15 +58,15 @@ type LeaderboardEntry struct {
 
 // LeaderboardBoard is everything the board region renders.
 type LeaderboardBoard struct {
-	Mode      LeaderboardTabs
-	Distance  LeaderboardTabs
-	Scope     LeaderboardTabs
-	Period    LeaderboardTabs
-	RaceLabel string
-	TimeTrial bool
-	Friends   bool
-	Window    string
-	Entries   []LeaderboardEntry
+	ActivityType LeaderboardTabs
+	Distance     LeaderboardTabs
+	Scope        LeaderboardTabs
+	Period       LeaderboardTabs
+	RaceLabel    string
+	TimeTrial    bool
+	Friends      bool
+	Window       string
+	Entries      []LeaderboardEntry
 	// You is the caller's entry, when they are ranked.
 	You *LeaderboardEntry
 }
@@ -81,14 +81,14 @@ var (
 
 // leaderboardQuery is the page's selected filters.
 type leaderboardQuery struct {
-	raceType            uuid.UUID
-	mode, scope, window string
+	preset                  uuid.UUID
+	activity, scope, window string
 }
 
 func (q leaderboardQuery) url() string {
 	v := url.Values{}
-	v.Set("race_type", q.raceType.String())
-	v.Set("mode", q.mode)
+	v.Set("race_type", q.preset.String())
+	v.Set("activity", q.activity)
 	v.Set("scope", q.scope)
 	v.Set("window", q.window)
 	return "/leaderboards?" + v.Encode()
@@ -106,7 +106,7 @@ func choose(value string, choices []leaderboardChoice) string {
 
 // Page renders the leaderboards page for the race_type, mode, scope and
 // window query parameters. Missing or unknown values fall back to the first
-// race type, races, everyone and all-time, so any link lands on a board. An
+// preset, races, everyone and all-time, so any link lands on a board. An
 // htmx request gets only the board region, which carries its own filters.
 func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.UserFromContext(r.Context())
@@ -114,9 +114,9 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	options, err := h.raceTypes.RaceTypeOptions(r.Context())
+	options, err := h.presets.PresetOptions(r.Context())
 	if err == nil && len(options) == 0 {
-		err = errors.New("no race types")
+		err = errors.New("no presets")
 	}
 	if err != nil {
 		leaderboardPageError(w, r, err)
@@ -131,13 +131,17 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	activity := params.Get("activity")
+	if activity == "" {
+		activity = params.Get("mode")
+	}
 	q := leaderboardQuery{
-		raceType: selected.ID,
-		mode:     choose(params.Get("mode"), leaderboardModes),
+		preset:   selected.ID,
+		activity: choose(activity, leaderboardModes),
 		scope:    choose(params.Get("scope"), leaderboardScopes),
 		window:   choose(params.Get("window"), leaderboardWindows),
 	}
-	rows, err := h.leaderboard.Leaderboard(r.Context(), q.scope, q.window, q.mode, q.raceType, user.ID)
+	rows, err := h.leaderboard.Leaderboard(r.Context(), q.scope, q.window, q.activity, q.preset, user.ID)
 	if err != nil {
 		leaderboardPageError(w, r, err)
 		return
@@ -145,7 +149,7 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 
 	board := LeaderboardBoard{
 		RaceLabel: selected.Label,
-		TimeTrial: q.mode == "time-trial",
+		TimeTrial: q.activity == "time-trial",
 		Friends:   q.scope == "friends",
 		Window:    q.window,
 		Entries:   make([]LeaderboardEntry, 0, len(rows)),
@@ -153,10 +157,10 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 	board.Distance = LeaderboardTabs{Label: "Distance"}
 	for _, o := range options {
 		next := q
-		next.raceType = o.ID
-		board.Distance.Filters = append(board.Distance.Filters, LeaderboardFilter{Label: o.Label, URL: next.url(), Active: o.ID == q.raceType})
+		next.preset = o.ID
+		board.Distance.Filters = append(board.Distance.Filters, LeaderboardFilter{Label: o.Label, URL: next.url(), Active: o.ID == q.preset})
 	}
-	board.Mode = LeaderboardTabs{Label: "Mode", Big: true, Filters: filters(leaderboardModes, q.mode, func(v string) string { next := q; next.mode = v; return next.url() })}
+	board.ActivityType = LeaderboardTabs{Label: "Activity type", Big: true, Filters: filters(leaderboardModes, q.activity, func(v string) string { next := q; next.activity = v; return next.url() })}
 	board.Scope = LeaderboardTabs{Label: "Racers", Filters: filters(leaderboardScopes, q.scope, func(v string) string { next := q; next.scope = v; return next.url() })}
 	board.Period = LeaderboardTabs{Label: "Period", Filters: filters(leaderboardWindows, q.window, func(v string) string { next := q; next.window = v; return next.url() })}
 

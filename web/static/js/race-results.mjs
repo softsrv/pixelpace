@@ -46,22 +46,22 @@ export function formatDistance(meters) {
 // metres and pace per 500m. DNF rows follow finishers with no rank or finish
 // time, marked DNF with their distance and pace. Flags the viewer's own row.
 // If there are no finishers, message is 'No one finished' (except in warmup
-// mode, which has no rank and never shows 'No one finished').
-export function resultRows(data, viewerId, mode) {
+// activity type, which has no rank and never shows 'No one finished').
+export function resultRows(data, viewerId, activityType) {
   var list = [];
-  var sessionMode = mode;
+  var currentActivityType = activityType;
   if (Array.isArray(data)) {
     list = data;
   } else if (data && typeof data === 'object') {
     if (Array.isArray(data.results)) {
       list = data.results;
     }
-    if (!sessionMode && data.mode) {
-      sessionMode = data.mode;
+    if (!currentActivityType && data.activityType) {
+      currentActivityType = data.activityType;
     }
   }
 
-  var isWarmup = sessionMode === 'warmup';
+  var isWarmup = currentActivityType === 'warmup';
   var finishers = [];
   var dnfs = [];
 
@@ -138,6 +138,6 @@ export function resultRows(data, viewerId, mode) {
   result.message = message;
   result.hasRank = !isWarmup;
   result.isWarmup = isWarmup;
-  result.mode = sessionMode || 'race';
+  result.activityType = currentActivityType || 'race';
   return result;
 }

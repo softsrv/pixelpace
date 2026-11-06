@@ -19,7 +19,7 @@ import (
 
 // roomServicer defines the subset of app.RoomService that RoomHandler requires.
 type roomServicer interface {
-	CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error)
+	CreateRoom(ctx context.Context, hostUserID, presetID uuid.UUID, activityType string, warmupMinutes *int32) (uuid.UUID, string, error)
 	JoinRoom(ctx context.Context, userID uuid.UUID, joinCode string) (uuid.UUID, error)
 	Roster(ctx context.Context, callerUserID, roomID uuid.UUID) (app.RoomRoster, error)
 	LeaveRoom(ctx context.Context, userID, roomID uuid.UUID) error
@@ -33,7 +33,7 @@ var _ roomServicer = (*app.RoomService)(nil)
 
 // raceBeginner runs a started room's countdown and creates its race.
 type raceBeginner interface {
-	Begin(ctx context.Context, roomID uuid.UUID) (db.Race, error)
+	Begin(ctx context.Context, roomID uuid.UUID) (db.Activity, error)
 	Run(ctx context.Context, raceID uuid.UUID) error
 }
 
@@ -112,12 +112,21 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	mode := r.PostForm.Get("mode")
+	activityType := r.PostForm.Get("activity_type")
+	if activityType == "" {
+		activityType = r.PostForm.Get("mode")
+	}
+	switch activityType {
+	case app.ActivityTypeRace, app.ActivityTypeTimeTrial, app.ActivityTypeWarmup:
+	default:
+		writeRoomError(w, r, app.ErrInvalidActivityType)
+		return
+	}
 	// A warmup has no distance: its length is the only choice, parsed here
-	// strictly and the race type left to the service.
-	var raceTypeID uuid.UUID
+	// strictly and the preset left to the service.
+	var presetID uuid.UUID
 	var warmupMinutes *int32
-	if mode == app.ModeWarmup {
+	if activityType == app.ActivityTypeWarmup {
 		minutes, err := app.ParseWarmupMinutes(r.PostForm.Get("minutes"))
 		if err != nil {
 			writeRoomError(w, r, err)
@@ -126,18 +135,18 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		warmupMinutes = &minutes
 	} else {
 		var err error
-		raceTypeID, err = uuid.Parse(r.PostForm.Get("race_type_id"))
+		presetID, err = uuid.Parse(r.PostForm.Get("race_type_id"))
 		if err != nil {
-			http.Error(w, "Invalid race type ID", http.StatusBadRequest)
+			http.Error(w, "Invalid preset ID", http.StatusBadRequest)
 			return
 		}
 	}
-	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, raceTypeID, mode, warmupMinutes)
+	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, presetID, activityType, warmupMinutes)
 	if err != nil {
 		writeRoomError(w, r, err)
 		return
 	}
-	if mode == app.ModeRace {
+	if activityType == app.ActivityTypeRace {
 		// HTMX forms follow the redirect to the new room's lobby.
 		w.Header().Set("HX-Redirect", lobbyPath(roomID))
 	} else {
@@ -340,7 +349,7 @@ func writeRoomError(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, app.ErrNotHost):
 		status = http.StatusForbidden
-	case errors.Is(err, app.ErrInvalidSessionMode):
+	case errors.Is(err, app.ErrInvalidActivityType):
 		status = http.StatusBadRequest
 	case errors.Is(err, app.ErrInvalidWarmupMinutes):
 		// The message names the rule. The body carries it for any client; the
@@ -351,7 +360,7 @@ func writeRoomError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, app.ErrRoomFull), errors.Is(err, app.ErrAlreadyParticipant),
 		errors.Is(err, app.ErrNotAllReady), errors.Is(err, app.ErrInvalidStatusTransition),
 		errors.Is(err, app.ErrRoomNotJoinable), errors.Is(err, app.ErrParticipantReady),
-		errors.Is(err, app.ErrNotEnoughParticipants), errors.Is(err, app.ErrInvalidRaceType):
+		errors.Is(err, app.ErrNotEnoughParticipants), errors.Is(err, app.ErrInvalidPreset):
 		status = http.StatusConflict
 	}
 	if status == http.StatusInternalServerError {

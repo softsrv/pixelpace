@@ -197,9 +197,9 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
-			Mode:   "time_trial",
-			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
-			Pacer:  nil,
+			ActivityType: "time_trial",
+			Racers:       []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:        nil,
 		}, nil
 	}}
 
@@ -209,6 +209,12 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
+	if !strings.Contains(body, `data-activity-type="time_trial"`) {
+		t.Errorf("page body missing data-activity-type=\"time_trial\"; body=%q", body)
+	}
+	if strings.Contains(body, "data-mode") {
+		t.Errorf("page body unexpectedly contains data-mode: %q", body)
+	}
 	wantNote := "No personal best yet: set your first time."
 	if !strings.Contains(body, wantNote) {
 		t.Errorf("page body missing %q; body=%q", wantNote, body)
@@ -239,14 +245,17 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if pacerVal != nil {
 		t.Errorf("pacer = %v, want null", pacerVal)
 	}
+	if _, ok := statusData["mode"]; ok {
+		t.Errorf("status JSON unexpectedly contains mode key: %s", statusRR.Body.String())
+	}
 
-	// 1-entrant race in mode 'race': note is absent
+	// 1-entrant race activity: note is absent
 	oneRacerRaceViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
-			Mode:   "race",
-			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
-			Pacer:  nil,
+			ActivityType: "race",
+			Racers:       []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:        nil,
 		}, nil
 	}}
 	rrOne := serveRaceWith(t, newProductionRenderer(t), oneRacerRaceViewer, user, roomID.String(), racePageEndpoint)
@@ -254,10 +263,10 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Fatalf("status = %d, want 200; body=%q", rrOne.Code, rrOne.Body.String())
 	}
 	if strings.Contains(rrOne.Body.String(), "set your first time") {
-		t.Errorf("1-entrant mode=race unexpectedly has note: %q", rrOne.Body.String())
+		t.Errorf("1-entrant race unexpectedly has note: %q", rrOne.Body.String())
 	}
 	if strings.Contains(rrOne.Body.String(), `id="race-pacer-note"`) {
-		t.Errorf("1-entrant mode=race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
+		t.Errorf("1-entrant race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
 	}
 
 	// 1-entrant session in mode 'warmup': note is absent, pacer is null in status
@@ -265,7 +274,7 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		return app.RoomRace{
 			RoomID:               roomID,
 			Label:                "Warmup",
-			Mode:                 app.ModeWarmup,
+			ActivityType:         app.ActivityTypeWarmup,
 			DurationMilliseconds: 300000,
 			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
 			Pacer:                nil,
@@ -284,8 +293,8 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if strings.Contains(rrWarmup.Body.String(), "data-pacer") {
 		t.Errorf("warmup unexpectedly has data-pacer: %q", rrWarmup.Body.String())
 	}
-	// CLM-6: the warmup page carries its mode and duration and no track.
-	for _, want := range []string{`data-mode="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
+	// CLM-10: the warmup page carries its activity type and duration and no track.
+	for _, want := range []string{`data-activity-type="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
 		if !strings.Contains(rrWarmup.Body.String(), want) {
 			t.Errorf("warmup page missing %s; body=%q", want, rrWarmup.Body.String())
 		}
@@ -312,14 +321,20 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	twoRacerViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
-			Mode:   "race",
-			Racers: []app.RaceRacer{racer(user.ID, "Me", true), racer(rival, "Rival", true)},
-			Pacer:  nil,
+			ActivityType: "race",
+			Racers:       []app.RaceRacer{racer(user.ID, "Me", true), racer(rival, "Rival", true)},
+			Pacer:        nil,
 		}, nil
 	}}
 	rrTwo := serveRaceWith(t, newProductionRenderer(t), twoRacerViewer, user, roomID.String(), racePageEndpoint)
 	if rrTwo.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rrTwo.Code)
+	}
+	if !strings.Contains(rrTwo.Body.String(), `data-activity-type="race"`) {
+		t.Errorf("race page missing data-activity-type=\"race\"; body=%q", rrTwo.Body.String())
+	}
+	if strings.Contains(rrTwo.Body.String(), `id="warmup-clock"`) {
+		t.Errorf("race page unexpectedly has the warmup clock: %q", rrTwo.Body.String())
 	}
 	if strings.Contains(rrTwo.Body.String(), "set your first time") {
 		t.Errorf("2-entrant race unexpectedly has note: %q", rrTwo.Body.String())
@@ -409,7 +424,7 @@ func TestRacePageServiceErrors(t *testing.T) {
 		{app.ErrRoomNotFound, http.StatusNotFound},
 		{app.ErrParticipantNotFound, http.StatusNotFound},
 		{app.ErrRaceNotStarted, http.StatusConflict},
-		{app.ErrInvalidRaceType, http.StatusConflict},
+		{app.ErrInvalidPreset, http.StatusConflict},
 		{app.ErrSessionNotConnected, http.StatusGone},
 		{errors.New("private database failure"), http.StatusInternalServerError},
 	} {
@@ -508,7 +523,7 @@ func TestRacePageRendersFinishedWarmupSummary(t *testing.T) {
 			RoomID:               roomID,
 			RaceID:               &raceID,
 			Label:                "Warmup",
-			Mode:                 app.ModeWarmup,
+			ActivityType:         app.ActivityTypeWarmup,
 			DurationMilliseconds: 300000,
 			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
 			Finished:             true,
@@ -524,7 +539,7 @@ func TestRacePageRendersFinishedWarmupSummary(t *testing.T) {
 		`<dialog id="race-finish-modal" class="modal">`,
 		`FINISH!`,
 		`<th>Pace / 500m</th>`,
-		`data-mode="warmup"`,
+		`data-activity-type="warmup"`,
 		`data-finished="true"`,
 		`data-results-url="/rooms/` + roomID.String() + `/race/results"`,
 	} {
@@ -542,7 +557,7 @@ func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 		if gotRoom != roomID || gotUser != user.ID {
 			t.Errorf("Results(%s, %s), want (%s, %s)", gotRoom, gotUser, roomID, user.ID)
 		}
-		return app.RaceResults{RaceID: raceID, Finished: true, TargetMillimeters: 2000000, Results: []app.RaceResult{
+		return app.RaceResults{RaceID: raceID, Finished: true, TargetMillimeters: 2000000, ActivityType: "race", Results: []app.RaceResult{
 			{PublicPlayer: app.PublicPlayer{UserID: user.ID, Name: "Me"}, Rank: &rank, Status: "finished",
 				ElapsedMilliseconds: &elapsed, DistanceMillimeters: 2000000, PaceMillisecondsPer500m: &pace},
 			{PublicPlayer: app.PublicPlayer{UserID: rival, Name: "Ada"}, Status: "dnf", DistanceMillimeters: 750000},
@@ -560,7 +575,7 @@ func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
-	want := `{"race_id":"` + raceID.String() + `","finished":true,"target_millimeters":2000000,"results":[` +
+	want := `{"race_id":"` + raceID.String() + `","finished":true,"target_millimeters":2000000,"activityType":"race","results":[` +
 		`{"user_id":"` + user.ID.String() + `","name":"Me","rank":1,"status":"finished","elapsed_milliseconds":400000,"distance_millimeters":2000000,"pace_milliseconds_per_500m":100000},` +
 		`{"user_id":"` + rival.String() + `","name":"Ada","rank":null,"status":"dnf","elapsed_milliseconds":null,"distance_millimeters":750000,"pace_milliseconds_per_500m":null}]}`
 	var got, wantJSON any
@@ -570,6 +585,9 @@ func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 	_ = json.Unmarshal([]byte(want), &wantJSON)
 	if fmt.Sprint(got) != fmt.Sprint(wantJSON) {
 		t.Errorf("body = %s, want %s", rr.Body.String(), want)
+	}
+	if strings.Contains(rr.Body.String(), `"mode"`) {
+		t.Errorf("results JSON unexpectedly contains mode key: %s", rr.Body.String())
 	}
 	if strings.Contains(rr.Body.String(), "@") {
 		t.Errorf("results leaked an email: %s", rr.Body.String())

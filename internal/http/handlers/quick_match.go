@@ -31,11 +31,11 @@ func NewQuickMatchHandler(svc quickMatchServicer) *QuickMatchHandler {
 }
 
 func (h *QuickMatchHandler) Enqueue(w http.ResponseWriter, r *http.Request) {
-	userID, raceTypeID, ok := quickMatchIdentity(w, r)
+	userID, presetID, ok := quickMatchIdentity(w, r)
 	if !ok {
 		return
 	}
-	if err := h.quickMatch.Enqueue(r.Context(), userID, raceTypeID); err != nil {
+	if err := h.quickMatch.Enqueue(r.Context(), userID, presetID); err != nil {
 		writeQuickMatchError(w, r, err)
 		return
 	}
@@ -43,11 +43,11 @@ func (h *QuickMatchHandler) Enqueue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *QuickMatchHandler) Leave(w http.ResponseWriter, r *http.Request) {
-	userID, raceTypeID, ok := quickMatchIdentity(w, r)
+	userID, presetID, ok := quickMatchIdentity(w, r)
 	if !ok {
 		return
 	}
-	if err := h.quickMatch.Leave(r.Context(), userID, raceTypeID); err != nil {
+	if err := h.quickMatch.Leave(r.Context(), userID, presetID); err != nil {
 		writeQuickMatchError(w, r, err)
 		return
 	}
@@ -56,11 +56,11 @@ func (h *QuickMatchHandler) Leave(w http.ResponseWriter, r *http.Request) {
 
 // Match is a client-driven retry: 202 while waiting, 201 with the room id and join code.
 func (h *QuickMatchHandler) Match(w http.ResponseWriter, r *http.Request) {
-	userID, raceTypeID, ok := quickMatchIdentity(w, r)
+	userID, presetID, ok := quickMatchIdentity(w, r)
 	if !ok {
 		return
 	}
-	roomID, code, err := h.quickMatch.Match(r.Context(), userID, raceTypeID)
+	roomID, code, err := h.quickMatch.Match(r.Context(), userID, presetID)
 	if err != nil {
 		writeQuickMatchError(w, r, err)
 		return
@@ -84,12 +84,12 @@ func quickMatchIdentity(w http.ResponseWriter, r *http.Request) (uuid.UUID, uuid
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return uuid.Nil, uuid.Nil, false
 	}
-	raceTypeID, err := uuid.Parse(r.PostForm.Get("race_type_id"))
+	presetID, err := uuid.Parse(r.PostForm.Get("race_type_id"))
 	if err != nil {
-		http.Error(w, "Invalid race type ID", http.StatusBadRequest)
+		http.Error(w, "Invalid preset ID", http.StatusBadRequest)
 		return uuid.Nil, uuid.Nil, false
 	}
-	return user.ID, raceTypeID, true
+	return user.ID, presetID, true
 }
 
 func writeQuickMatchError(w http.ResponseWriter, r *http.Request, err error) {
@@ -97,7 +97,7 @@ func writeQuickMatchError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrNotQueued):
 		status = http.StatusNotFound
-	case errors.Is(err, app.ErrAlreadyQueued), errors.Is(err, app.ErrInvalidRaceType),
+	case errors.Is(err, app.ErrAlreadyQueued), errors.Is(err, app.ErrInvalidPreset),
 		errors.Is(err, app.ErrRoomFull), errors.Is(err, app.ErrAlreadyParticipant),
 		errors.Is(err, app.ErrRoomNotJoinable):
 		status = http.StatusConflict

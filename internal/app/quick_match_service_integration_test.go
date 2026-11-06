@@ -64,18 +64,27 @@ func quickMatchIntegrationWait(t *testing.T, pool *pgxpool.Pool, user, raceType 
 
 func quickMatchIntegrationFinish(t *testing.T, pool *pgxpool.Pool, user, raceType uuid.UUID, milliseconds int32, finished time.Time, status string) {
 	t.Helper()
+	quickMatchIntegrationFinishMode(t, pool, user, raceType, milliseconds, finished, status, ModeRace)
+}
+
+func quickMatchIntegrationFinishMode(t *testing.T, pool *pgxpool.Pool, user, raceType uuid.UUID, milliseconds int32, finished time.Time, status, mode string) {
+	t.Helper()
 	ctx := context.Background()
-	q := db.New(pool)
-	_, code, err := NewRoomService(q, pool).CreateRoom(ctx, user, raceType, ModeRace, nil)
-	if err != nil {
-		t.Fatal(err)
+	// The room is seeded directly so every mode can be placed without going
+	// through CreateRoom; a warmup room carries its duration, others none.
+	var duration *int32
+	if mode == ModeWarmup {
+		seconds := int32(300)
+		duration = &seconds
 	}
-	room, err := q.GetActiveRoomByJoinCode(ctx, code)
-	if err != nil {
+	roomID := uuid.Must(uuid.NewV7())
+	// A finished room is outside the active join-code index, so a fixed code is safe.
+	const code = "QMTEST"
+	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'finished', $4, $5, $6)", roomID, raceType, user, code, mode, duration); err != nil {
 		t.Fatal(err)
 	}
 	raceID := uuid.Must(uuid.NewV7())
-	_, err = pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at) VALUES ($1, $2, $3, $4, $5)", raceID, room.ID, raceType, finished.Add(-time.Duration(milliseconds)*time.Millisecond), finished)
+	_, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, mode, time_trial) VALUES ($1, $2, $3, $4, $5, $6, $7)", raceID, roomID, raceType, finished.Add(-time.Duration(milliseconds)*time.Millisecond), finished, mode, mode == ModeTimeTrial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +94,7 @@ func quickMatchIntegrationFinish(t *testing.T, pool *pgxpool.Pool, user, raceTyp
 				t.Error(err)
 			}
 		}
-		if _, err := pool.Exec(ctx, "DELETE FROM rooms WHERE id = $1", room.ID); err != nil {
+		if _, err := pool.Exec(ctx, "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
 			t.Error(err)
 		}
 	})
@@ -201,6 +210,7 @@ func TestQuickMatchIntegrationRecentFinishes(t *testing.T) {
 	quickMatchIntegrationFinish(t, pool, user, otherType, 1, now, "finished")
 	quickMatchIntegrationFinish(t, pool, other, raceType, 2, now, "finished")
 	quickMatchIntegrationFinish(t, pool, user, raceType, 3, now, "dnf")
+	quickMatchIntegrationFinishMode(t, pool, user, raceType, 4, now, "finished", ModeWarmup)
 	rows, err := db.New(pool).RecentFinishesByRaceType(context.Background(), db.RecentFinishesByRaceTypeParams{RaceTypeID: raceType, UserID: user})
 	if err != nil || len(rows) != 7 {
 		t.Fatalf("finishes = %+v, %v", rows, err)

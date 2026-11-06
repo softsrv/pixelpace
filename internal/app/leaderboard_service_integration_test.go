@@ -182,6 +182,16 @@ func TestLeaderboardTimeTrialSeparationIntegration(t *testing.T) {
 	// Race board, and a warmup ranks on neither board.
 	f.result(t, 3, f.raceType, "finished", 2200, f.now)
 	f.resultMode(t, "warmup", 2, f.raceType, "finished", 100, f.now)
+	// The Warmup sentinel race type is never offered as a distance option.
+	types, err := db.New(f.pool).ListDistanceRaceTypes(context.Background())
+	if err != nil || len(types) == 0 {
+		t.Fatalf("distance race types = %+v, %v", types, err)
+	}
+	for _, rt := range types {
+		if rt.Kind != "distance" || rt.ID == uuid.MustParse("01950000-0000-7000-8000-000000000009") {
+			t.Fatalf("distance options include %+v", rt)
+		}
+	}
 	for _, window := range []string{"all-time", "month", "week"} {
 		f.checkMode(t, "race", "global", window, 0,
 			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 2000},

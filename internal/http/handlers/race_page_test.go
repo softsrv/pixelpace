@@ -284,6 +284,17 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if strings.Contains(rrWarmup.Body.String(), "data-pacer") {
 		t.Errorf("warmup unexpectedly has data-pacer: %q", rrWarmup.Body.String())
 	}
+	// CLM-6: the warmup page carries its mode and duration and no track.
+	for _, want := range []string{`data-mode="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
+		if !strings.Contains(rrWarmup.Body.String(), want) {
+			t.Errorf("warmup page missing %s; body=%q", want, rrWarmup.Body.String())
+		}
+	}
+	for _, unwanted := range []string{`id="race-track"`, `id="race-lanes"`, "pixi.min.js", "lanes</span>"} {
+		if strings.Contains(rrWarmup.Body.String(), unwanted) {
+			t.Errorf("warmup page unexpectedly contains %s; body=%q", unwanted, rrWarmup.Body.String())
+		}
+	}
 	warmupStatusRR := serveRacePage(t, warmupViewer, user, roomID.String(), raceStatusEndpoint)
 	if warmupStatusRR.Code != http.StatusOK {
 		t.Fatalf("warmup status code = %d, want 200", warmupStatusRR.Code)

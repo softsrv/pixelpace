@@ -499,6 +499,41 @@ func TestRacePageRendersFinishModalAndFinishedState(t *testing.T) {
 	}
 }
 
+// CLM-7: Rendering a finished warmup carries the finished state and summary modal markup.
+func TestRacePageRendersFinishedWarmupSummary(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID, raceID := uuid.New(), uuid.New()
+	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID:               roomID,
+			RaceID:               &raceID,
+			Label:                "Warmup",
+			Mode:                 app.ModeWarmup,
+			DurationMilliseconds: 300000,
+			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
+			Finished:             true,
+		}, nil
+	}}
+
+	rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`<dialog id="race-finish-modal" class="modal">`,
+		`FINISH!`,
+		`<th>Pace / 500m</th>`,
+		`data-mode="warmup"`,
+		`data-finished="true"`,
+		`data-results-url="/rooms/` + roomID.String() + `/race/results"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("race page missing %q", want)
+		}
+	}
+}
+
 func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
 	roomID, raceID, rival := uuid.New(), uuid.New(), uuid.New()

@@ -316,6 +316,7 @@ type RaceResults struct {
 	RaceID            uuid.UUID    `json:"race_id"`
 	Finished          bool         `json:"finished"`
 	TargetMillimeters int64        `json:"target_millimeters"`
+	Mode              string       `json:"mode,omitempty"`
 	Results           []RaceResult `json:"results"`
 }
 
@@ -346,7 +347,16 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 	if err != nil {
 		return RaceResults{}, fmt.Errorf("list race results: %w", err)
 	}
-	out := RaceResults{RaceID: raceID, Finished: room.Status == "finished", TargetMillimeters: room.TargetValue, Results: make([]RaceResult, 0, len(rows))}
+	out := RaceResults{
+		RaceID:            raceID,
+		Finished:          room.Status == "finished",
+		TargetMillimeters: room.TargetValue,
+		Mode:              room.Mode,
+		Results:           make([]RaceResult, 0, len(rows)),
+	}
+	if room.Mode == ModeWarmup {
+		out.TargetMillimeters = 0
+	}
 	for _, row := range rows {
 		result := RaceResult{PublicPlayer: NewPublicPlayer(row.UserID, row.DisplayName), Status: row.Status}
 		var elapsed int64
@@ -354,7 +364,13 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 		case row.Status == "finished" && row.FinishElapsedMilliseconds.Valid:
 			elapsed = int64(row.FinishElapsedMilliseconds.Int32)
 			result.ElapsedMilliseconds = &elapsed
-			result.DistanceMillimeters = room.TargetValue
+			if room.Mode == ModeWarmup {
+				if row.DistanceMillimeters.Valid {
+					result.DistanceMillimeters = row.DistanceMillimeters.Int64
+				}
+			} else {
+				result.DistanceMillimeters = room.TargetValue
+			}
 		case row.DistanceMillimeters.Valid && row.SampledAt.Valid && row.StartedAt.Valid:
 			result.DistanceMillimeters = row.DistanceMillimeters.Int64
 			elapsed = row.SampledAt.Time.Sub(row.StartedAt.Time).Milliseconds()
@@ -366,6 +382,9 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 		out.Results = append(out.Results, result)
 	}
 	sort.SliceStable(out.Results, func(i, j int) bool {
+		if room.Mode == ModeWarmup {
+			return out.Results[i].DistanceMillimeters > out.Results[j].DistanceMillimeters
+		}
 		a, b := out.Results[i], out.Results[j]
 		if (a.ElapsedMilliseconds != nil) != (b.ElapsedMilliseconds != nil) {
 			return a.ElapsedMilliseconds != nil
@@ -375,12 +394,14 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 		}
 		return a.DistanceMillimeters > b.DistanceMillimeters
 	})
-	for i := range out.Results {
-		if out.Results[i].ElapsedMilliseconds == nil {
-			break
+	if room.Mode != ModeWarmup {
+		for i := range out.Results {
+			if out.Results[i].ElapsedMilliseconds == nil {
+				break
+			}
+			rank := i + 1
+			out.Results[i].Rank = &rank
 		}
-		rank := i + 1
-		out.Results[i].Rank = &rank
 	}
 	return out, nil
 }

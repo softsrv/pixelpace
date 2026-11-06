@@ -1803,3 +1803,70 @@ func TestRaceServiceRoomRaceWarmupNeverReturnsPacer(t *testing.T) {
 		t.Fatalf("view.DurationMilliseconds = %d, want 60000 (1 minute)", view.DurationMilliseconds)
 	}
 }
+
+// CLM-7: after a warmup finishes, Results read fresh from the DB returns
+// distance, elapsed time and average pace, with no rank and no target.
+func TestRaceServiceResultsWarmupSummary(t *testing.T) {
+	const duration = time.Minute
+	f := seedWarmupRoom(t, duration)
+	ctx := context.Background()
+	f.begin(t)
+
+	// Ingest telemetry samples during the warmup.
+	const distanceMillimeters int64 = 250000 // 250m
+	f.ingest(t, 0, 30000, distanceMillimeters, f.now.Add(30*time.Second))
+
+	// Fast-forward to the end of warmup and let Run finalize.
+	f.now = f.race.StartedAt.Time.Add(duration)
+	if err := f.svc.Run(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished"}) {
+		t.Fatalf("statuses=%v, want finished", got)
+	}
+
+	// Read Results fresh from DB.
+	results, err := f.svc.Results(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatalf("Results failed: %v", err)
+	}
+	if !results.Finished {
+		t.Fatalf("results.Finished = false, want true")
+	}
+	if results.TargetMillimeters != 0 {
+		t.Fatalf("results.TargetMillimeters = %d, want 0 (no target)", results.TargetMillimeters)
+	}
+	if results.Mode != app.ModeWarmup {
+		t.Fatalf("results.Mode = %q, want %q", results.Mode, app.ModeWarmup)
+	}
+	if len(results.Results) != 1 {
+		t.Fatalf("len(results.Results) = %d, want 1", len(results.Results))
+	}
+	res := results.Results[0]
+	if res.UserID != f.users[0] {
+		t.Fatalf("res.UserID = %v, want %v", res.UserID, f.users[0])
+	}
+	if res.Rank != nil {
+		t.Fatalf("res.Rank = %+v, want nil (no rank)", res.Rank)
+	}
+	if res.DistanceMillimeters != distanceMillimeters {
+		t.Fatalf("res.DistanceMillimeters = %d, want %d", res.DistanceMillimeters, distanceMillimeters)
+	}
+	if res.ElapsedMilliseconds == nil || *res.ElapsedMilliseconds != duration.Milliseconds() {
+		t.Fatalf("res.ElapsedMilliseconds = %v, want %d", res.ElapsedMilliseconds, duration.Milliseconds())
+	}
+	// Pace: 60000ms * 500000 / 250000mm = 120000ms (2:00.0)
+	expectedPace := duration.Milliseconds() * 500000 / distanceMillimeters
+	if res.PaceMillisecondsPer500m == nil || *res.PaceMillisecondsPer500m != expectedPace {
+		t.Fatalf("res.PaceMillisecondsPer500m = %v, want %d", res.PaceMillisecondsPer500m, expectedPace)
+	}
+
+	// Reloading (a fresh call) returns the same persisted results.
+	reloaded, err := f.svc.Results(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatalf("reloaded Results: %v", err)
+	}
+	if !reflect.DeepEqual(reloaded, results) {
+		t.Fatalf("reloaded results differ from initial:\ninitial:  %+v\nreloaded: %+v", results, reloaded)
+	}
+}

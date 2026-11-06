@@ -507,7 +507,7 @@ export async function startRaceView(trackEl, PIXI) {
     if (!body) return showResultsError();
     try {
       var helpers = await import('./race-results.mjs');
-      renderResults(helpers.resultRows(body, selfId));
+      renderResults(helpers.resultRows(body, selfId, mode));
     } catch (_) {
       showResultsError();
     }
@@ -519,10 +519,15 @@ export async function startRaceView(trackEl, PIXI) {
     var tbody = modalEl.querySelector('tbody');
     if (!tbody) return showResultsError();
     tbody.textContent = '';
+    var isWarmup = Boolean((result && (result.mode === 'warmup' || result.isWarmup || result.hasRank === false)) || mode === 'warmup');
+    var rankTh = modalEl.querySelector('th:first-child');
+    if (rankTh && rankTh.textContent.trim().toLowerCase() === 'rank') {
+      setHidden(rankTh, isWarmup);
+    }
     if (message) {
       var messageRow = document.createElement('tr');
       var messageCell = document.createElement('td');
-      messageCell.colSpan = 5;
+      messageCell.colSpan = isWarmup ? 4 : 5;
       messageCell.textContent = message;
       messageRow.appendChild(messageCell);
       tbody.appendChild(messageRow);
@@ -531,7 +536,10 @@ export async function startRaceView(trackEl, PIXI) {
       var tr = document.createElement('tr');
       if (row.isSelf) tr.classList.add('font-bold');
       var isDnf = String(row.status || '').toLowerCase() === 'dnf';
-      [row.rank || (isDnf ? 'DNF' : ''), row.name, row.time, row.distance, row.pace].forEach(function (text) {
+      var cols = isWarmup
+        ? [row.name, row.time, row.distance, row.pace]
+        : [row.rank || (isDnf ? 'DNF' : ''), row.name, row.time, row.distance, row.pace];
+      cols.forEach(function (text) {
         var td = document.createElement('td');
         td.textContent = text == null ? '' : String(text);
         tr.appendChild(td);

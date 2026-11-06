@@ -47,8 +47,8 @@ func (q *Queries) CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUI
 }
 
 const createRace = `-- name: CreateRace :one
-INSERT INTO races (id, room_id, race_type_id, started_at, time_trial)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO races (id, room_id, race_type_id, started_at, mode, time_trial)
+VALUES ($1, $2, $3, $4, $5::text, $5::text = 'time_trial')
 RETURNING id, room_id, race_type_id, started_at, finished_at, time_trial, mode
 `
 
@@ -57,16 +57,18 @@ type CreateRaceParams struct {
 	RoomID     uuid.UUID          `json:"room_id"`
 	RaceTypeID uuid.UUID          `json:"race_type_id"`
 	StartedAt  pgtype.Timestamptz `json:"started_at"`
-	TimeTrial  bool               `json:"time_trial"`
+	Mode       string             `json:"mode"`
 }
 
+// mode owns the race's kind; time_trial is kept for older readers and is
+// always derived from it, never passed separately.
 func (q *Queries) CreateRace(ctx context.Context, arg CreateRaceParams) (Race, error) {
 	row := q.db.QueryRow(ctx, createRace,
 		arg.ID,
 		arg.RoomID,
 		arg.RaceTypeID,
 		arg.StartedAt,
-		arg.TimeTrial,
+		arg.Mode,
 	)
 	var i Race
 	err := row.Scan(
@@ -163,7 +165,7 @@ func (q *Queries) FinishRaceRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRoomRace = `-- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id
@@ -178,6 +180,7 @@ type GetRoomRaceRow struct {
 	TargetValue  int64              `json:"target_value"`
 	Label        string             `json:"label"`
 	RaceID       pgtype.UUID        `json:"race_id"`
+	Mode         string             `json:"mode"`
 }
 
 func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow, error) {
@@ -191,6 +194,7 @@ func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow
 		&i.TargetValue,
 		&i.Label,
 		&i.RaceID,
+		&i.Mode,
 	)
 	return i, err
 }

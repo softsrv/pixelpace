@@ -157,12 +157,12 @@ func (s *RaceService) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, err
 	if err != nil {
 		return db.Race{}, fmt.Errorf("list room participants: %w", err)
 	}
-	// A race that begins with one entrant is a Time Trial, even if others
-	// were in the room but dropped while their equipment connected.
+	// The race takes the mode the room was created with, fixed at this
+	// instant: a race stays a race even if only one entrant is left.
 	race, err := q.CreateRace(ctx, db.CreateRaceParams{
 		ID: uuid.Must(uuid.NewV7()), RoomID: room.ID, RaceTypeID: room.RaceTypeID,
 		StartedAt: pgtype.Timestamptz{Time: startsAt, Valid: true},
-		TimeTrial: len(participants) == 1,
+		Mode:      room.Mode,
 	})
 	if err != nil {
 		return db.Race{}, fmt.Errorf("create race: %w", err)
@@ -459,7 +459,7 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 		raceID := uuid.UUID(row.RaceID.Bytes)
 		view.RaceID = &raceID
 	}
-	if len(lineup) == 1 && row.RaceStartsAt.Valid {
+	if row.Mode == "time_trial" && len(lineup) == 1 && row.RaceStartsAt.Valid {
 		view.Pacer = s.timeTrialPacer(ctx, roomID, row.RaceTypeID, lineup[0].ID, row.RaceStartsAt)
 	}
 	return view, nil

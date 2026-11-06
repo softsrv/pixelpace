@@ -334,9 +334,8 @@ func (s *RoomService) BeginRace(ctx context.Context, roomID uuid.UUID) error {
 // ResetCountdown returns a counting-down race activity to waiting after its
 // race could not begin, so it is joinable and can be started again. A solo
 // activity (time trial or warm-up) has no lobby to return to, so it is
-// dissolved instead. A room
-// in any other status is left unchanged and reported as
-// ErrInvalidStatusTransition.
+// dissolved instead. A room in any other status is left unchanged and reported
+// as ErrInvalidStatusTransition.
 func (s *RoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) error {
 	return s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
 		if room.Status != "counting_down" {

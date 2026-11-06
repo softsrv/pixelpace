@@ -112,12 +112,21 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	mode := r.PostForm.Get("mode")
+	activityType := r.PostForm.Get("activity_type")
+	if activityType == "" {
+		activityType = r.PostForm.Get("mode")
+	}
+	switch activityType {
+	case app.ActivityTypeRace, app.ActivityTypeTimeTrial, app.ActivityTypeWarmup:
+	default:
+		writeRoomError(w, r, app.ErrInvalidActivityType)
+		return
+	}
 	// A warmup has no distance: its length is the only choice, parsed here
 	// strictly and the preset left to the service.
 	var presetID uuid.UUID
 	var warmupMinutes *int32
-	if mode == app.ActivityTypeWarmup {
+	if activityType == app.ActivityTypeWarmup {
 		minutes, err := app.ParseWarmupMinutes(r.PostForm.Get("minutes"))
 		if err != nil {
 			writeRoomError(w, r, err)
@@ -132,12 +141,12 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, presetID, mode, warmupMinutes)
+	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, presetID, activityType, warmupMinutes)
 	if err != nil {
 		writeRoomError(w, r, err)
 		return
 	}
-	if mode == app.ActivityTypeRace {
+	if activityType == app.ActivityTypeRace {
 		// HTMX forms follow the redirect to the new room's lobby.
 		w.Header().Set("HX-Redirect", lobbyPath(roomID))
 	} else {

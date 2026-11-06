@@ -557,6 +557,157 @@ func roomIntegrationHostRooms(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) 
 	return n
 }
 
+// TestRoomIntegrationCreateRaceHasLobbyAndJoinCode pins that creating a race
+// activity (dashboard submit label "Create race") creates a room in waiting
+// status (with a joinable lobby) and a non-empty join code, and that a second
+// verified user who joins with that code becomes a participant.
+func TestRoomIntegrationCreateRaceHasLobbyAndJoinCode(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	q := db.New(pool)
+	s := NewRoomService(q, pool)
+
+	roomID, code, err := s.CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil)
+	if err != nil {
+		t.Fatalf("CreateRoom(race) failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if code == "" {
+		t.Fatal("join code is empty")
+	}
+
+	room, err := q.GetRoomForUpdate(ctx, roomID)
+	if err != nil {
+		t.Fatalf("get room: %v", err)
+	}
+	if room.Status != "waiting" {
+		t.Fatalf("room status = %q, want waiting (lobby)", room.Status)
+	}
+	if room.Mode != ActivityTypeRace {
+		t.Fatalf("room mode = %q, want %q", room.Mode, ActivityTypeRace)
+	}
+
+	// Host is initially the sole participant.
+	countBefore, err := q.CountRoomParticipants(ctx, roomID)
+	if err != nil || countBefore != 1 {
+		t.Fatalf("participants before join = %d, %v; want 1", countBefore, err)
+	}
+
+	// A second verified user joins with the join code and becomes a participant.
+	joinedRoomID, err := s.JoinRoom(ctx, guest, code)
+	if err != nil {
+		t.Fatalf("JoinRoom with code %q failed: %v", code, err)
+	}
+	if joinedRoomID != roomID {
+		t.Fatalf("joinedRoomID = %s, want %s", joinedRoomID, roomID)
+	}
+
+	countAfter, err := q.CountRoomParticipants(ctx, roomID)
+	if err != nil || countAfter != 2 {
+		t.Fatalf("participants after join = %d, %v; want 2", countAfter, err)
+	}
+
+	roster, err := s.Roster(ctx, guest, roomID)
+	if err != nil {
+		t.Fatalf("Roster failed: %v", err)
+	}
+	foundGuest := false
+	for _, p := range roster.Participants {
+		if p.UserID == guest {
+			foundGuest = true
+			break
+		}
+	}
+	if !foundGuest {
+		t.Fatalf("guest %s not found in roster: %+v", guest, roster.Participants)
+	}
+}
+
+// A time trial or warm-up starts counting down immediately: it has no waiting
+// room (no joinable lobby), and a second user's join attempt is refused without
+// adding a participant.
+func TestRoomIntegrationSoloStartsCountdownAndRefusesJoin(t *testing.T) {
+	minutes := int32(5)
+	for _, tc := range []struct {
+		activityType string
+		presetID     uuid.UUID
+		minutes      *int32
+	}{
+		{activityType: ActivityTypeTimeTrial, presetID: roomTestID, minutes: nil},
+		{activityType: ActivityTypeWarmup, presetID: WarmupPresetID, minutes: &minutes},
+	} {
+		t.Run(tc.activityType, func(t *testing.T) {
+			pool := roomIntegrationDB(t)
+			ctx := context.Background()
+			host, outsider := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+			q := db.New(pool)
+			s := NewRoomService(q, pool)
+
+			roomID, code, err := s.CreateRoom(ctx, host, tc.presetID, tc.activityType, tc.minutes)
+			if err != nil {
+				t.Fatalf("CreateRoom(%s) failed: %v", tc.activityType, err)
+			}
+			t.Cleanup(func() {
+				if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+					t.Error(err)
+				}
+			})
+
+			room, err := q.GetRoomForUpdate(ctx, roomID)
+			if err != nil {
+				t.Fatalf("get room: %v", err)
+			}
+			if room.Status != "counting_down" {
+				t.Fatalf("room status = %q, want counting_down", room.Status)
+			}
+			if room.Mode != tc.activityType {
+				t.Fatalf("room mode = %q, want %q", room.Mode, tc.activityType)
+			}
+
+			// Initial participants: host only.
+			countBefore, err := q.CountRoomParticipants(ctx, roomID)
+			if err != nil || countBefore != 1 {
+				t.Fatalf("participants before join = %d, %v; want 1", countBefore, err)
+			}
+
+			// Attempt to join must be refused with ErrRoomNotJoinable (room is not waiting/in a lobby).
+			if _, err := s.JoinRoom(ctx, outsider, code); !errors.Is(err, ErrRoomNotJoinable) {
+				t.Fatalf("JoinRoom returned %v, want ErrRoomNotJoinable", err)
+			}
+
+			// Participant count remains unchanged.
+			countAfter, err := q.CountRoomParticipants(ctx, roomID)
+			if err != nil || countAfter != 1 {
+				t.Fatalf("participants after join = %d, %v; want 1", countAfter, err)
+			}
+
+			// Verify participants list contains only the host.
+			rows, err := pool.Query(ctx, "SELECT user_id FROM room_participants WHERE room_id = $1", roomID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var participants []uuid.UUID
+			for rows.Next() {
+				var id uuid.UUID
+				if err := rows.Scan(&id); err != nil {
+					t.Fatal(err)
+				}
+				participants = append(participants, id)
+			}
+			if len(participants) != 1 || participants[0] != host {
+				t.Fatalf("participants = %v, want [%s]", participants, host)
+			}
+		})
+	}
+}
+
 func TestRoomIntegrationCreateInvalidActivityTypeRejected(t *testing.T) {
 	pool := roomIntegrationDB(t)
 	ctx := context.Background()

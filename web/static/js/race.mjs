@@ -67,7 +67,6 @@ export async function startRaceView(trackEl, PIXI) {
   var selfId = trackEl.dataset.selfId;
   var targetMillimeters = Number(trackEl.dataset.targetMm);
   var activityType = trackEl.dataset.activityType;
-  var mode = activityType;
   // A warmup is a timed solo session: no track, no pacer, a countdown clock
   // beside the rower's live distance, pace and stroke rate.
   var warmup = activityType === 'warmup';
@@ -301,7 +300,7 @@ export async function startRaceView(trackEl, PIXI) {
       setHidden(pacerNoteEl, true);
     } else if (status.pacer === null) {
       removePacer();
-      if (mode === 'time_trial' && (!Array.isArray(status.racers) || status.racers.length <= 1)) {
+      if (activityType === 'time_trial' && (!Array.isArray(status.racers) || status.racers.length <= 1)) {
         setHidden(pacerNoteEl, false);
       } else {
         setHidden(pacerNoteEl, true);
@@ -311,7 +310,7 @@ export async function startRaceView(trackEl, PIXI) {
       // draws the boat, labelled by formatPace's '—' fallback, as on load.
       setPacer(Number(status.pacer.elapsed_milliseconds));
       setHidden(pacerNoteEl, true);
-    } else if (mode !== 'time_trial' || (Array.isArray(status.racers) && status.racers.length >= 2)) {
+    } else if (activityType !== 'time_trial' || (Array.isArray(status.racers) && status.racers.length >= 2)) {
       setHidden(pacerNoteEl, true);
     }
     if (status.race_starts_at && startsAt === null) {
@@ -508,7 +507,7 @@ export async function startRaceView(trackEl, PIXI) {
     if (!body) return showResultsError();
     try {
       var helpers = await import('./race-results.mjs');
-      renderResults(helpers.resultRows(body, selfId, mode));
+      renderResults(helpers.resultRows(body, selfId, activityType));
     } catch (_) {
       showResultsError();
     }

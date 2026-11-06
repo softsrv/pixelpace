@@ -249,7 +249,7 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Errorf("status JSON unexpectedly contains mode key: %s", statusRR.Body.String())
 	}
 
-	// 1-entrant race in mode 'race': note is absent
+	// 1-entrant race activity: note is absent
 	oneRacerRaceViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
@@ -263,10 +263,10 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Fatalf("status = %d, want 200; body=%q", rrOne.Code, rrOne.Body.String())
 	}
 	if strings.Contains(rrOne.Body.String(), "set your first time") {
-		t.Errorf("1-entrant mode=race unexpectedly has note: %q", rrOne.Body.String())
+		t.Errorf("1-entrant race unexpectedly has note: %q", rrOne.Body.String())
 	}
 	if strings.Contains(rrOne.Body.String(), `id="race-pacer-note"`) {
-		t.Errorf("1-entrant mode=race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
+		t.Errorf("1-entrant race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
 	}
 
 	// 1-entrant session in mode 'warmup': note is absent, pacer is null in status
@@ -293,7 +293,7 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	if strings.Contains(rrWarmup.Body.String(), "data-pacer") {
 		t.Errorf("warmup unexpectedly has data-pacer: %q", rrWarmup.Body.String())
 	}
-	// CLM-6: the warmup page carries its mode and duration and no track.
+	// CLM-10: the warmup page carries its activity type and duration and no track.
 	for _, want := range []string{`data-activity-type="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
 		if !strings.Contains(rrWarmup.Body.String(), want) {
 			t.Errorf("warmup page missing %s; body=%q", want, rrWarmup.Body.String())
@@ -329,6 +329,12 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	rrTwo := serveRaceWith(t, newProductionRenderer(t), twoRacerViewer, user, roomID.String(), racePageEndpoint)
 	if rrTwo.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rrTwo.Code)
+	}
+	if !strings.Contains(rrTwo.Body.String(), `data-activity-type="race"`) {
+		t.Errorf("race page missing data-activity-type=\"race\"; body=%q", rrTwo.Body.String())
+	}
+	if strings.Contains(rrTwo.Body.String(), `id="warmup-clock"`) {
+		t.Errorf("race page unexpectedly has the warmup clock: %q", rrTwo.Body.String())
 	}
 	if strings.Contains(rrTwo.Body.String(), "set your first time") {
 		t.Errorf("2-entrant race unexpectedly has note: %q", rrTwo.Body.String())

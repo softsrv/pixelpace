@@ -62,6 +62,7 @@ if (trackEl && window.PIXI) startRaceView(trackEl, window.PIXI);
 export async function startRaceView(trackEl, PIXI) {
   var selfId = trackEl.dataset.selfId;
   var targetMillimeters = Number(trackEl.dataset.targetMm);
+  var mode = trackEl.dataset.mode;
   var statusUrl = trackEl.dataset.statusUrl;
   var readyUrl = trackEl.dataset.readyUrl;
   var lobbyUrl = trackEl.dataset.lobbyUrl;
@@ -268,16 +269,17 @@ export async function startRaceView(trackEl, PIXI) {
     // An absent key leaves the pacer as it is; null means there is none.
     if (status.pacer === null) {
       removePacer();
-      if (Array.isArray(status.racers)) {
-        if (status.racers.length === 1) setHidden(pacerNoteEl, false);
-        else if (status.racers.length >= 2) setHidden(pacerNoteEl, true);
+      if (mode === 'time_trial' && (!Array.isArray(status.racers) || status.racers.length <= 1)) {
+        setHidden(pacerNoteEl, false);
+      } else {
+        setHidden(pacerNoteEl, true);
       }
     } else if (status.pacer) {
       // The server decides whether a pacer exists; an unusable time still
       // draws the boat, labelled by formatPace's '—' fallback, as on load.
       setPacer(Number(status.pacer.elapsed_milliseconds));
       setHidden(pacerNoteEl, true);
-    } else if (Array.isArray(status.racers) && status.racers.length >= 2) {
+    } else if (mode !== 'time_trial' || (Array.isArray(status.racers) && status.racers.length >= 2)) {
       setHidden(pacerNoteEl, true);
     }
     if (status.race_starts_at && startsAt === null) {

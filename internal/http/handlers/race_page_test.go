@@ -197,6 +197,7 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Mode:   "time_trial",
 			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
 			Pacer:  nil,
 		}, nil
@@ -239,11 +240,32 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Errorf("pacer = %v, want null", pacerVal)
 	}
 
+	// 1-entrant race in mode 'race': note is absent
+	oneRacerRaceViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Mode:   "race",
+			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:  nil,
+		}, nil
+	}}
+	rrOne := serveRaceWith(t, newProductionRenderer(t), oneRacerRaceViewer, user, roomID.String(), racePageEndpoint)
+	if rrOne.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rrOne.Code, rrOne.Body.String())
+	}
+	if strings.Contains(rrOne.Body.String(), "set your first time") {
+		t.Errorf("1-entrant mode=race unexpectedly has note: %q", rrOne.Body.String())
+	}
+	if strings.Contains(rrOne.Body.String(), `id="race-pacer-note"`) {
+		t.Errorf("1-entrant mode=race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
+	}
+
 	// 2-entrant race: note is absent
 	rival := uuid.New()
 	twoRacerViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Mode:   "race",
 			Racers: []app.RaceRacer{racer(user.ID, "Me", true), racer(rival, "Rival", true)},
 			Pacer:  nil,
 		}, nil

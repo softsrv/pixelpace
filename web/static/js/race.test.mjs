@@ -132,6 +132,7 @@ function setupPage(options) {
   var track = fakeElement('div');
   Object.assign(track.dataset, {
     selfId: 'u-self', targetMm: options.targetMm || '500000',
+    mode: options.mode || 'race',
     statusUrl: '/rooms/r1/race/status', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
     resultsUrl: '/rooms/r1/race/results', dashboardUrl: '/dashboard',
     finished: options.finished ? 'true' : 'false', raceId: options.finished ? 'race-1' : '',
@@ -909,6 +910,7 @@ test('note shown again on pacer null in a solo race', async function () {
   var phase = 0;
   var served = [0, 0];
   var page = setupPage({
+    mode: 'time_trial',
     finished: false,
     pacerNote: true,
     lanes: [laneItem('u-self', 'Me', true)],
@@ -933,6 +935,36 @@ test('note shown again on pacer null in a solo race', async function () {
   await until(function () { return pacerLanes(page).length === 0 && !page.pacerNote.hidden; });
   assert.equal(page.pacerNote.hidden, false, 'note is shown again on pacer null in a solo race');
   assert.equal(page.pacerNote.classList.contains('hidden'), false);
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('note hidden on pacer null in a race with one racer', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var page = setupPage({
+    mode: 'race',
+    finished: false,
+    pacerNote: true,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        return jsonResponse(200, {
+          server_time: new Date().toISOString(),
+          racers: self,
+          pacer: null
+        });
+      }
+    }
+  });
+  assert.equal(page.pacerNote.hidden, false, 'note starts visible');
+
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+
+  await until(function () { return page.pacerNote.hidden; });
+  assert.equal(page.pacerNote.hidden, true, 'note is hidden in a race even with 1 racer');
+  assert.equal(page.pacerNote.classList.contains('hidden'), true);
 
   page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });

@@ -80,7 +80,7 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		"Race":                 race,
 		"Lanes":                lanes,
 		"Pacer":                race.Pacer,
-		"Mode":                 race.ActivityType,
+		"ActivityType":         race.ActivityType,
 		"DurationMilliseconds": race.DurationMilliseconds,
 		"LaneCount":            laneCount,
 	}

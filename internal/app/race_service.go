@@ -316,7 +316,7 @@ type RaceResults struct {
 	RaceID            uuid.UUID    `json:"race_id"`
 	Finished          bool         `json:"finished"`
 	TargetMillimeters int64        `json:"target_millimeters"`
-	ActivityType      string       `json:"mode,omitempty"`
+	ActivityType      string       `json:"activityType,omitempty"`
 	Results           []RaceResult `json:"results"`
 }
 
@@ -433,10 +433,6 @@ type RoomRace struct {
 	Finished             bool
 	Pacer                *RacePacer
 }
-
-// Mode returns ActivityType for web/templates/race.html, which still reads
-// .Race.Mode. It goes once that template reads .Race.ActivityType.
-func (r RoomRace) Mode() string { return r.ActivityType }
 
 // RacePacer is a Time Trial's pacer boat: it rows the target distance at the
 // racer's personal best elapsed time.

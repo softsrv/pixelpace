@@ -57,7 +57,7 @@ var trackEl = typeof document !== 'undefined'
   ? document.getElementById('race-track') || document.getElementById('race-warmup')
   : null;
 // A warmup draws no track, so it does not wait for PIXI.
-if (trackEl && (window.PIXI || trackEl.dataset.mode === 'warmup')) startRaceView(trackEl, window.PIXI);
+if (trackEl && (window.PIXI || trackEl.dataset.activityType === 'warmup')) startRaceView(trackEl, window.PIXI);
 
 // Once the race is over, the server sends a finished frame (app.js turns it
 // into `pixelpace:race-finished`) or, on a reload, renders data-finished="true".
@@ -66,10 +66,11 @@ if (trackEl && (window.PIXI || trackEl.dataset.mode === 'warmup')) startRaceView
 export async function startRaceView(trackEl, PIXI) {
   var selfId = trackEl.dataset.selfId;
   var targetMillimeters = Number(trackEl.dataset.targetMm);
-  var mode = trackEl.dataset.mode;
+  var activityType = trackEl.dataset.activityType;
+  var mode = activityType;
   // A warmup is a timed solo session: no track, no pacer, a countdown clock
   // beside the rower's live distance, pace and stroke rate.
-  var warmup = mode === 'warmup';
+  var warmup = activityType === 'warmup';
   var durationMs = Number(trackEl.dataset.durationMs);
   var statusUrl = trackEl.dataset.statusUrl;
   var readyUrl = trackEl.dataset.readyUrl;
@@ -519,7 +520,7 @@ export async function startRaceView(trackEl, PIXI) {
     var tbody = modalEl.querySelector('tbody');
     if (!tbody) return showResultsError();
     tbody.textContent = '';
-    var isWarmup = Boolean((result && (result.mode === 'warmup' || result.isWarmup || result.hasRank === false)) || mode === 'warmup');
+    var isWarmup = Boolean((result && (result.activityType === 'warmup' || result.mode === 'warmup' || result.isWarmup || result.hasRank === false)) || activityType === 'warmup');
     var rankTh = modalEl.querySelector('th:first-child');
     if (rankTh && rankTh.textContent.trim().toLowerCase() === 'rank') {
       setHidden(rankTh, isWarmup);

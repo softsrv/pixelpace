@@ -209,6 +209,12 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
+	if !strings.Contains(body, `data-activity-type="time_trial"`) {
+		t.Errorf("page body missing data-activity-type=\"time_trial\"; body=%q", body)
+	}
+	if strings.Contains(body, "data-mode") {
+		t.Errorf("page body unexpectedly contains data-mode: %q", body)
+	}
 	wantNote := "No personal best yet: set your first time."
 	if !strings.Contains(body, wantNote) {
 		t.Errorf("page body missing %q; body=%q", wantNote, body)
@@ -285,7 +291,7 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Errorf("warmup unexpectedly has data-pacer: %q", rrWarmup.Body.String())
 	}
 	// CLM-6: the warmup page carries its mode and duration and no track.
-	for _, want := range []string{`data-mode="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
+	for _, want := range []string{`data-activity-type="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
 		if !strings.Contains(rrWarmup.Body.String(), want) {
 			t.Errorf("warmup page missing %s; body=%q", want, rrWarmup.Body.String())
 		}
@@ -524,7 +530,7 @@ func TestRacePageRendersFinishedWarmupSummary(t *testing.T) {
 		`<dialog id="race-finish-modal" class="modal">`,
 		`FINISH!`,
 		`<th>Pace / 500m</th>`,
-		`data-mode="warmup"`,
+		`data-activity-type="warmup"`,
 		`data-finished="true"`,
 		`data-results-url="/rooms/` + roomID.String() + `/race/results"`,
 	} {
@@ -570,6 +576,9 @@ func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 	_ = json.Unmarshal([]byte(want), &wantJSON)
 	if fmt.Sprint(got) != fmt.Sprint(wantJSON) {
 		t.Errorf("body = %s, want %s", rr.Body.String(), want)
+	}
+	if strings.Contains(rr.Body.String(), `"mode"`) {
+		t.Errorf("results JSON unexpectedly contains mode key: %s", rr.Body.String())
 	}
 	if strings.Contains(rr.Body.String(), "@") {
 		t.Errorf("results leaked an email: %s", rr.Body.String())

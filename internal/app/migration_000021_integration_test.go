@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/softsrv/starter/internal/db"
 )
@@ -622,4 +623,127 @@ func migration21Contains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// For finishes seeded under 000020 and migrated by 000021, the race and
+// time-trial leaderboards (wire values "race" and "time-trial"), the
+// time-trial pacer and Quick Match's recent finishes read the renamed storage
+// and return the hand-computed rows for that seed. A warm-up finish, here
+// deliberately the fastest at the same preset, appears on none of them.
+func TestMigration000021LeaderboardsAndPacerIntegration(t *testing.T) {
+	tx := migration21Schema(t)
+	ctx := context.Background()
+	before := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC) // the pacer's bound
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := tx.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("seed %q: %v", sql, err)
+		}
+	}
+	preset := migration21Scalar[uuid.UUID](t, tx, "SELECT id FROM race_types WHERE kind = 'distance' AND target_value = 500000")
+	otherPreset := migration21Scalar[uuid.UUID](t, tx, "SELECT id FROM race_types WHERE kind = 'distance' AND target_value = 1000000")
+	users := [3]uuid.UUID{uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())}
+	names := [3]string{"Racer A", "Racer B", "Racer C"}
+	for i, u := range users {
+		exec("INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, 'unused', $3)", u, u.String()+"@migration21.example.com", names[i])
+	}
+	raceRoom, warmupRoom := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
+	exec("INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode) VALUES ($1, $2, $3, 'finished', 'BDRACE', 'race')", raceRoom, preset, users[0])
+	exec("INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'finished', 'BDWARM', 'warmup', 300)", warmupRoom, migration21WarmupPreset, users[0])
+	// finish seeds one activity of the given 000020 mode at a preset with one
+	// participant, started an hour before it finished.
+	finish := func(mode string, at uuid.UUID, user int, status string, elapsed any, finished time.Time) {
+		t.Helper()
+		room := raceRoom
+		if mode == "warmup" {
+			room = warmupRoom
+		}
+		activity := uuid.Must(uuid.NewV7())
+		var finishedAt any
+		if status == "finished" {
+			finishedAt = finished
+		}
+		exec("INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial, mode) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+			activity, room, at, finished.Add(-time.Hour), finished, mode == "time_trial", mode)
+		exec("INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, $4, $5, $6)",
+			uuid.Must(uuid.NewV7()), activity, users[user], status, finishedAt, elapsed)
+	}
+	early := before.Add(-48 * time.Hour)
+	finish("race", preset, 0, "finished", 95000, early)
+	finish("race", preset, 0, "finished", 85000, early.Add(time.Hour)) // A's race PB, faster than any A time trial before the bound
+	finish("race", preset, 1, "finished", 97000, early)
+	finish("race", preset, 2, "dnf", nil, early)
+	finish("time_trial", preset, 0, "finished", 92000, early.Add(2*time.Hour))
+	finish("time_trial", preset, 0, "finished", 90000, before.Add(2*time.Hour)) // after the bound: on the board, not the pacer
+	finish("time_trial", preset, 1, "finished", 91000, early)
+	finish("time_trial", otherPreset, 2, "finished", 1000, early) // another preset
+	finish("race", otherPreset, 2, "finished", 1000, early)
+	finish("warmup", preset, 0, "finished", 10000, early.Add(3*time.Hour)) // fastest of all, never ranked
+	finish("warmup", preset, 2, "finished", 10000, early)
+
+	applyMigration21(t, tx, "up")
+
+	q := db.New(tx)
+	boards := NewLeaderboardService(q, nil, LeaderboardServiceConfig{Now: func() time.Time { return before.Add(24 * time.Hour) }})
+	for _, c := range []struct {
+		activityType string
+		want         []LeaderboardRow
+	}{
+		{"race", []LeaderboardRow{
+			{UserID: users[0], Name: "Racer A", ElapsedMilliseconds: 85000},
+			{UserID: users[1], Name: "Racer B", ElapsedMilliseconds: 97000},
+		}},
+		{"time-trial", []LeaderboardRow{
+			{UserID: users[0], Name: "Racer A", ElapsedMilliseconds: 90000},
+			{UserID: users[1], Name: "Racer B", ElapsedMilliseconds: 91000},
+		}},
+	} {
+		for _, window := range []string{"all-time", "week"} {
+			got, err := boards.Leaderboard(ctx, "global", window, c.activityType, preset, users[0])
+			if err != nil {
+				t.Fatalf("%s/%s leaderboard: %v", c.activityType, window, err)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("%s/%s leaderboard = %+v, want %+v", c.activityType, window, got, c.want)
+			}
+		}
+	}
+
+	for _, c := range []struct {
+		user  int
+		want  int32
+		valid bool
+	}{
+		{0, 92000, true}, // not the 90000 after the bound, the 85000 race or the 10000 warm-up
+		{1, 91000, true},
+		{2, 0, false}, // only a dnf race and a warm-up here: no pacer
+	} {
+		pb, err := q.TimeTrialPersonalBest(ctx, db.TimeTrialPersonalBestParams{PresetID: preset, UserID: users[c.user], Before: pgtype.Timestamptz{Time: before, Valid: true}})
+		if !c.valid {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Errorf("%s pacer = %+v, %v; want no row", names[c.user], pb, err)
+			}
+			continue
+		}
+		if err != nil || !pb.Valid || pb.Int32 != c.want {
+			t.Errorf("%s pacer = %+v, %v; want %d", names[c.user], pb, err, c.want)
+		}
+	}
+
+	recent, err := q.RecentFinishesByPreset(ctx, db.RecentFinishesByPresetParams{PresetID: preset, UserID: users[0]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int32
+	for _, r := range recent {
+		got = append(got, r.ElapsedMilliseconds.Int32)
+	}
+	// Newest finish first; the warm-up (10000) is excluded.
+	if want := []int32{90000, 92000, 85000, 95000}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Racer A recent finishes = %v, want %v", got, want)
+	}
+	recent, err = q.RecentFinishesByPreset(ctx, db.RecentFinishesByPresetParams{PresetID: preset, UserID: users[2]})
+	if err != nil || len(recent) != 0 {
+		t.Errorf("Racer C recent finishes = %+v, %v; want none (a dnf and a warm-up)", recent, err)
+	}
 }

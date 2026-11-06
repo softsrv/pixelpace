@@ -157,7 +157,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 		t.Fatalf("collision did not recover: code %q, calls %d, observations %+v", code, calls, observed)
 	}
 	for _, sql := range observed.queries {
-		if strings.Contains(sql, "SELECT") && !strings.HasPrefix(sql, "-- name: GetRaceType ") {
+		if strings.Contains(sql, "SELECT") && !strings.HasPrefix(sql, "-- name: GetPreset ") {
 			t.Fatalf("unexpected precheck: %s", sql)
 		}
 	}
@@ -165,7 +165,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if room.Status != "waiting" || room.HostUserID != host || room.JoinCode != code || room.Mode != ActivityTypeRace || room.DurationSeconds.Valid {
+	if room.Status != "waiting" || room.HostUserID != host || room.JoinCode != code || room.ActivityType != ActivityTypeRace || room.DurationSeconds.Valid {
 		t.Fatalf("created room: %+v", room)
 	}
 	participant, err := db.New(pool).GetRoomParticipant(ctx, db.GetRoomParticipantParams{RoomID: room.ID, UserID: host})
@@ -387,11 +387,11 @@ func TestRoomIntegrationRoster(t *testing.T) {
 		}
 	}
 	raceID := uuid.Must(uuid.NewV7())
-	if _, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at) VALUES ($1, $2, $3, now())", raceID, roomID, roomTestID); err != nil {
+	if _, err := pool.Exec(ctx, "INSERT INTO activities (id, room_id, preset_id, started_at) VALUES ($1, $2, $3, now())", raceID, roomID, roomTestID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), "DELETE FROM races WHERE id = $1", raceID); err != nil {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM activities WHERE id = $1", raceID); err != nil {
 			t.Error(err)
 		}
 	})
@@ -410,8 +410,8 @@ func roomIntegrationReadyRoom(t *testing.T, pool *pgxpool.Pool) (uuid.UUID, uuid
 	roomID, code := roomIntegrationCreate(t, pool, host)
 	t.Cleanup(func() {
 		for _, sql := range []string{
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 		} {
 			if _, err := pool.Exec(context.Background(), sql, roomID); err != nil {
 				t.Error(err)
@@ -466,7 +466,7 @@ func TestRoomIntegrationStartBeginsRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	var races int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 1 {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM activities WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 1 {
 		t.Fatalf("races for room = %d, %v; want 1", races, err)
 	}
 	rows, err := pool.Query(ctx, "SELECT user_id FROM race_participants WHERE race_id = $1", race.ID)
@@ -533,7 +533,7 @@ func TestRoomIntegrationFailedBeginResetsRoom(t *testing.T) {
 				t.Fatalf("equipment unready after reset = %d, %v; want every racer to reconnect", unready, err)
 			}
 			var races int
-			if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {
+			if err := pool.QueryRow(ctx, "SELECT count(*) FROM activities WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {
 				t.Fatalf("races after failed begin = %d, %v; want 0", races, err)
 			}
 			if err := s.ResetCountdown(ctx, roomID); !errors.Is(err, ErrInvalidStatusTransition) {
@@ -589,8 +589,8 @@ func TestRoomIntegrationCreateRaceHasLobbyAndJoinCode(t *testing.T) {
 	if room.Status != "waiting" {
 		t.Fatalf("room status = %q, want waiting (lobby)", room.Status)
 	}
-	if room.Mode != ActivityTypeRace {
-		t.Fatalf("room mode = %q, want %q", room.Mode, ActivityTypeRace)
+	if room.ActivityType != ActivityTypeRace {
+		t.Fatalf("room mode = %q, want %q", room.ActivityType, ActivityTypeRace)
 	}
 
 	// Host is initially the sole participant.
@@ -666,8 +666,8 @@ func TestRoomIntegrationSoloStartsCountdownAndRefusesJoin(t *testing.T) {
 			if room.Status != "counting_down" {
 				t.Fatalf("room status = %q, want counting_down", room.Status)
 			}
-			if room.Mode != tc.activityType {
-				t.Fatalf("room mode = %q, want %q", room.Mode, tc.activityType)
+			if room.ActivityType != tc.activityType {
+				t.Fatalf("room mode = %q, want %q", room.ActivityType, tc.activityType)
 			}
 
 			// Initial participants: host only.
@@ -735,11 +735,11 @@ func TestRoomIntegrationCreateNonDistancePresetRejected(t *testing.T) {
 
 	timePreset := uuid.MustParse("01950000-0000-7000-8000-000000000006") // seeded "5 min", kind time
 	intervalPreset := uuid.Must(uuid.NewV7())
-	if _, err := pool.Exec(ctx, "INSERT INTO race_types (id, kind, target_value, label) VALUES ($1, 'interval', 60000, 'test interval')", intervalPreset); err != nil {
+	if _, err := pool.Exec(ctx, "INSERT INTO presets (id, kind, target_value, label) VALUES ($1, 'interval', 60000, 'test interval')", intervalPreset); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), "DELETE FROM race_types WHERE id = $1", intervalPreset); err != nil {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM presets WHERE id = $1", intervalPreset); err != nil {
 			t.Error(err)
 		}
 	})
@@ -769,8 +769,8 @@ func roomIntegrationTimeTrial(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) 
 	}
 	t.Cleanup(func() {
 		for _, sql := range []string{
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 			"DELETE FROM rooms WHERE id = $1",
 		} {
 			if _, err := pool.Exec(context.Background(), sql, roomID); err != nil {
@@ -794,7 +794,7 @@ func TestRoomIntegrationCreateTimeTrialBeginsWithoutLobby(t *testing.T) {
 	rooms := NewRoomService(q, pool)
 
 	room, err := q.GetRoomForUpdate(ctx, roomID)
-	if err != nil || room.Status != "counting_down" || room.Mode != ActivityTypeTimeTrial || room.HostUserID != host {
+	if err != nil || room.Status != "counting_down" || room.ActivityType != ActivityTypeTimeTrial || room.HostUserID != host {
 		t.Fatalf("created room = %+v, %v; want a counting-down time_trial hosted by %s", room, err, host)
 	}
 	if count, err := q.CountRoomParticipants(ctx, roomID); err != nil || count != 1 {
@@ -821,17 +821,17 @@ func TestRoomIntegrationCreateTimeTrialBeginsWithoutLobby(t *testing.T) {
 	}
 	var mode string
 	var timeTrial bool
-	if err := pool.QueryRow(ctx, "SELECT mode, time_trial FROM races WHERE id = $1", race.ID).Scan(&mode, &timeTrial); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT activity_type, time_trial FROM activities WHERE id = $1", race.ID).Scan(&mode, &timeTrial); err != nil {
 		t.Fatal(err)
 	}
 	if mode != ActivityTypeTimeTrial || !timeTrial {
-		t.Fatalf("races.mode = %q, time_trial = %v; want time_trial, true", mode, timeTrial)
+		t.Fatalf("activities.activity_type = %q, time_trial = %v; want time_trial, true", mode, timeTrial)
 	}
 	row, err := q.GetRoomRace(ctx, roomID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.Status == "waiting" || row.Mode != ActivityTypeTimeTrial {
+	if row.Status == "waiting" || row.ActivityType != ActivityTypeTimeTrial {
 		t.Fatalf("room race = %+v; want past waiting in time_trial mode", row)
 	}
 	if want := begunAt.Add(10 * time.Second); !row.RaceStartsAt.Valid || !row.RaceStartsAt.Time.Equal(want) {
@@ -872,7 +872,7 @@ func TestRoomIntegrationSoloFailedBeginDissolves(t *testing.T) {
 				t.Fatal(err)
 			}
 			room, err := q.GetRoomForUpdate(ctx, roomID)
-			if err != nil || room.Status != "dissolved" || room.Mode != tc.activityType {
+			if err != nil || room.Status != "dissolved" || room.ActivityType != tc.activityType {
 				t.Fatalf("%s after failed begin = %+v, %v; want dissolved, never waiting", tc.activityType, room, err)
 			}
 		})
@@ -900,7 +900,7 @@ func TestRoomIntegrationCreateWarmupIsSoloAndCountingDown(t *testing.T) {
 	var mode, status string
 	var raceType uuid.UUID
 	var duration int32
-	if err := pool.QueryRow(ctx, "SELECT mode, status, race_type_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&mode, &status, &raceType, &duration); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT activity_type, status, preset_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&mode, &status, &raceType, &duration); err != nil {
 		t.Fatal(err)
 	}
 	if mode != ActivityTypeWarmup || status != "counting_down" || raceType != WarmupPresetID || duration != 300 {
@@ -958,7 +958,7 @@ func TestRoomIntegrationCreateWarmupInvalidMinutesRejected(t *testing.T) {
 		}
 		var preset uuid.UUID
 		var duration int32
-		if err := pool.QueryRow(ctx, "SELECT race_type_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&preset, &duration); err != nil {
+		if err := pool.QueryRow(ctx, "SELECT preset_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&preset, &duration); err != nil {
 			t.Fatal(err)
 		}
 		if preset != WarmupPresetID || duration != minutes*60 {

@@ -104,7 +104,7 @@ var (
 )
 
 func roomStep(name, status string) roomDBStep {
-	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}, pgtype.Timestamptz{}, "race", pgtype.Int4{}}}
+	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}, pgtype.Timestamptz{}, "race", pgtype.Int4{}, "race", roomTestID}}
 }
 func participantStep(userID uuid.UUID, ready bool) roomDBStep {
 	return roomDBStep{name: "GetRoomParticipant", args: []any{roomTestID, userID}, values: []any{roomTestID, roomTestID, userID, ready, pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
@@ -374,7 +374,7 @@ func TestRoomCreate(t *testing.T) {
 			}
 			var steps []roomDBStep
 			if !tc.wantModeErr && !tc.wantMinutesErr {
-				steps = append(steps, roomDBStep{name: "GetRaceType", args: []any{typeID}, values: []any{typeID, kind, int64(500000), label}, err: tc.raceErr})
+				steps = append(steps, roomDBStep{name: "GetPreset", args: []any{typeID}, values: []any{typeID, kind, int64(500000), label}, err: tc.raceErr})
 				if tc.raceErr == nil && !tc.wantRaceErr {
 					steps = append(steps,
 						roomDBStep{name: "InsertRoom", args: []any{nil, typeID, roomTestHost, "ABCDEF", tc.mode, tc.duration}},
@@ -424,7 +424,7 @@ func TestRoomCreateDoesNotRetryOtherFailures(t *testing.T) {
 		t.Run(code, func(t *testing.T) {
 			cause := &pgconn.PgError{Code: code}
 			s, d := newRoomTestService(t,
-				roomDBStep{name: "GetRaceType", values: []any{roomTestID, "distance", int64(500000), "500m"}},
+				roomDBStep{name: "GetPreset", values: []any{roomTestID, "distance", int64(500000), "500m"}},
 				roomDBStep{name: "InsertRoom", err: cause})
 			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ActivityTypeRace, nil)
 			if !errors.Is(err, cause) || d.begins != 1 || d.rollbacks != 1 || d.commits != 0 {
@@ -487,7 +487,7 @@ func TestRoomMissingParticipant(t *testing.T) {
 }
 
 func TestRoomCreateRetryBound(t *testing.T) {
-	steps := []roomDBStep{{name: "GetRaceType", values: []any{roomTestID, "distance", int64(500000), "500m"}}}
+	steps := []roomDBStep{{name: "GetPreset", values: []any{roomTestID, "distance", int64(500000), "500m"}}}
 	for i := 0; i < 10; i++ {
 		steps = append(steps, roomDBStep{name: "InsertRoom", err: &pgconn.PgError{Code: "23505"}})
 	}

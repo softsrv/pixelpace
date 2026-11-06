@@ -2,8 +2,8 @@
 SELECT * FROM race_types WHERE id = $1;
 
 -- name: InsertRoom :exec
-INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code)
-VALUES ($1, $2, $3, 'waiting', $4);
+INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds)
+VALUES (@id, @race_type_id, @host_user_id, 'waiting', @join_code, @mode, sqlc.narg(duration_seconds));
 
 -- name: InsertRoomParticipant :exec
 INSERT INTO room_participants (id, room_id, user_id, ready)
@@ -82,7 +82,7 @@ SELECT * FROM race_types WHERE kind = 'distance' ORDER BY target_value;
 UPDATE rooms SET race_type_id = $2 WHERE id = $1;
 
 -- name: GetRoomLobby :one
-SELECT r.id, r.status, r.join_code, r.host_user_id, r.race_type_id, rt.label AS race_label, rt.kind AS race_kind
+SELECT r.id, r.status, r.join_code, r.host_user_id, r.race_type_id, rt.label AS race_label, rt.kind AS race_kind, r.mode
 FROM rooms r JOIN race_types rt ON rt.id = r.race_type_id
 WHERE r.id = $1;
 

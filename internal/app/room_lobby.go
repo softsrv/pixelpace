@@ -27,8 +27,7 @@ type RoomLobby struct {
 	RaceTypeID   uuid.UUID
 	RaceLabel    string
 	Participants []RoomRosterEntry
-	// DistanceRace reports whether the race type is a fixed distance; only
-	// those races get a Time Trial pacer.
+	// DistanceRace reports whether the race type is a fixed distance.
 	DistanceRace bool
 	// InvitedIDs are the users already holding an invite to this room.
 	InvitedIDs map[uuid.UUID]bool
@@ -36,6 +35,7 @@ type RoomLobby struct {
 	SelfReady  bool
 	// CanStart reports whether StartRace would accept the host's request now.
 	CanStart bool
+	Mode     string
 }
 
 // RoomInvite is a pending invitation as its invitee sees it.
@@ -78,6 +78,7 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 		RoomID: room.ID, Status: room.Status, JoinCode: room.JoinCode,
 		RaceTypeID: room.RaceTypeID, RaceLabel: room.RaceLabel, DistanceRace: room.RaceKind == "distance",
 		IsHost: callerUserID == room.HostUserID, InvitedIDs: map[uuid.UUID]bool{},
+		Mode: room.Mode,
 	}
 	member := false
 	guestsReady := true
@@ -98,7 +99,7 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 		return RoomLobby{}, ErrParticipantNotFound
 	}
 	count := len(lobby.Participants)
-	lobby.CanStart = lobby.IsHost && room.Status == "waiting" && guestsReady && count >= 1 && count <= maxRoomParticipants
+	lobby.CanStart = lobby.IsHost && room.Status == "waiting" && guestsReady && count >= 2 && count <= maxRoomParticipants
 	invited, err := s.q.ListRoomInviteeIDs(ctx, roomID)
 	if err != nil {
 		return RoomLobby{}, fmt.Errorf("list room invites: %w", err)

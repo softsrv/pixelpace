@@ -107,7 +107,8 @@ func (s *QuickMatchService) Match(ctx context.Context, userID, raceTypeID uuid.U
 	// transaction: a failed join or queue deletion cannot leave a partial room.
 	rooms := *s.rooms
 	rooms.q, rooms.pool = q, tx
-	roomID, code, err := rooms.CreateRoom(ctx, host, raceTypeID)
+	// Quick Match rooms are always races.
+	roomID, code, err := rooms.CreateRoom(ctx, host, raceTypeID, ModeRace, nil)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("create quick match room: %w", err)
 	}

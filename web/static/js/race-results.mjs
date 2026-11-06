@@ -45,15 +45,23 @@ export function formatDistance(meters) {
 // Builds result rows numbering finishers 1..n with time as m:ss.t, distance in
 // metres and pace per 500m. DNF rows follow finishers with no rank or finish
 // time, marked DNF with their distance and pace. Flags the viewer's own row.
-// If there are no finishers, message is 'No one finished'.
-export function resultRows(data, viewerId) {
+// If there are no finishers, message is 'No one finished' (except in warmup
+// mode, which has no rank and never shows 'No one finished').
+export function resultRows(data, viewerId, mode) {
   var list = [];
+  var sessionMode = mode;
   if (Array.isArray(data)) {
     list = data;
-  } else if (data && Array.isArray(data.results)) {
-    list = data.results;
+  } else if (data && typeof data === 'object') {
+    if (Array.isArray(data.results)) {
+      list = data.results;
+    }
+    if (!sessionMode && data.mode) {
+      sessionMode = data.mode;
+    }
   }
 
+  var isWarmup = sessionMode === 'warmup';
   var finishers = [];
   var dnfs = [];
 
@@ -67,7 +75,7 @@ export function resultRows(data, viewerId) {
   });
 
   var rows = [];
-  var message = finishers.length === 0 ? 'No one finished' : null;
+  var message = (finishers.length === 0 && !isWarmup) ? 'No one finished' : null;
 
   finishers.forEach(function (item, index) {
     var elapsed = item.elapsed_milliseconds != null ? item.elapsed_milliseconds
@@ -86,7 +94,7 @@ export function resultRows(data, viewerId) {
     var isSelf = Boolean(viewerId && userId && String(userId) === String(viewerId));
 
     rows.push({
-      rank: item.rank != null ? item.rank : (index + 1),
+      rank: isWarmup ? null : (item.rank != null ? item.rank : (index + 1)),
       name: item.name || item.displayName || item.display_name || '',
       time: formatDuration(elapsed),
       distance: formatDistance(meters),
@@ -128,5 +136,8 @@ export function resultRows(data, viewerId) {
   var result = rows.slice();
   result.rows = rows;
   result.message = message;
+  result.hasRank = !isWarmup;
+  result.isWarmup = isWarmup;
+  result.mode = sessionMode || 'race';
   return result;
 }

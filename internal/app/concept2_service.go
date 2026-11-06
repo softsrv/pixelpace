@@ -451,7 +451,8 @@ func (s *Concept2Service) awaitReconnect(ctx context.Context, post db.ClaimDueCo
 // (truncated, as the monitor shows it) and the finish as the date, in the
 // connection's timezone, with the detail the racer's samples and PM5 give.
 // Detail that is not known is left out. verified is never set: only clients
-// Concept2 trusts may verify a result.
+// Concept2 trusts may verify a result. Warmup sessions are excluded upstream
+// by ListConcept2PostCandidates and never reach this.
 func concept2ResultFor(p db.GetConcept2PostPayloadRow, strokes []db.ListConcept2PostStrokesRow) (concept2.Result, error) {
 	if p.Kind != "distance" {
 		return concept2.Result{}, fmt.Errorf("concept2 posts need a distance race, got %q", p.Kind)

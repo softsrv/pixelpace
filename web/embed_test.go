@@ -803,19 +803,23 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 	friendID := uuid.MustParse("01950000-0000-7000-8000-0000000000ee")
 	typeA := uuid.MustParse("01950000-0000-7000-8000-000000000001")
 	typeB := uuid.MustParse("01950000-0000-7000-8000-000000000003")
-	render := func(isHost, canStart, selfReady bool) string {
+	render := func(isHost, canStart, selfReady bool, participants ...app.RoomRosterEntry) string {
 		t.Helper()
 		tmpl, err := template.ParseFS(FS, "templates/base.html", "templates/lobby.html")
 		if err != nil {
 			t.Fatalf("parse lobby page: %v", err)
 		}
+		roster := participants
+		if len(roster) == 0 {
+			roster = []app.RoomRosterEntry{
+				{PublicPlayer: app.PublicPlayer{UserID: hostID, Name: "Hosty"}, Host: true},
+				{PublicPlayer: app.PublicPlayer{UserID: guestID, Name: "Guesty"}, Ready: true},
+			}
+		}
 		lobby := app.RoomLobby{
 			RoomID: roomID, Status: "waiting", JoinCode: "ABC234", RaceTypeID: typeB, RaceLabel: "2000m",
 			IsHost: isHost, CanStart: canStart, SelfReady: selfReady,
-			Participants: []app.RoomRosterEntry{
-				{PublicPlayer: app.PublicPlayer{UserID: hostID, Name: "Hosty"}, Host: true},
-				{PublicPlayer: app.PublicPlayer{UserID: guestID, Name: "Guesty"}, Ready: true},
-			},
+			Participants: roster,
 		}
 		var buf strings.Builder
 		err = tmpl.ExecuteTemplate(&buf, "base.html", map[string]any{
@@ -845,9 +849,18 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 		`hx-post="/rooms/` + roomID.String() + `/start"`,
 		`hx-post="/rooms/` + roomID.String() + `/leave"`,
 		`Guesty`,
+		`Start race`,
 	} {
 		if !strings.Contains(host, want) {
 			t.Errorf("host lobby missing %q", want)
+		}
+	}
+	for _, banned := range []string{
+		"Start time trial",
+		"Rowing solo counts as a time trial",
+	} {
+		if strings.Contains(host, banned) {
+			t.Errorf("host lobby contains banned string %q", banned)
 		}
 	}
 	if regexpDisabledStart.MatchString(host) {
@@ -855,6 +868,21 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 	}
 	if !regexpDisabledStart.MatchString(render(true, false, false)) {
 		t.Errorf("host lobby start button should be disabled until guests are ready")
+	}
+
+	// Solo host in lobby: start button still says 'Start race', disabled, and hint explains that a race needs at least one other rower.
+	soloHost := render(true, false, false, app.RoomRosterEntry{PublicPlayer: app.PublicPlayer{UserID: hostID, Name: "Hosty"}, Host: true})
+	if !strings.Contains(soloHost, "Start race") {
+		t.Errorf("solo host lobby missing 'Start race'")
+	}
+	if strings.Contains(soloHost, "Start time trial") {
+		t.Errorf("solo host lobby unexpectedly contains 'Start time trial'")
+	}
+	if strings.Contains(soloHost, "Rowing solo counts as a time trial") {
+		t.Errorf("solo host lobby unexpectedly contains 'Rowing solo counts as a time trial'")
+	}
+	if !strings.Contains(soloHost, "A race needs at least one other rower.") {
+		t.Errorf("solo host lobby missing 'A race needs at least one other rower.' hint")
 	}
 
 	guest := render(false, false, false)
@@ -881,10 +909,32 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	typeID := uuid.MustParse("01950000-0000-7000-8000-000000000003")
 	inviteID := uuid.MustParse("01950000-0000-7000-8000-0000000000ff")
 	var card, invites strings.Builder
-	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{"RaceTypes": []app.RaceTypeOption{{ID: typeID, Label: "2000m"}}}); err != nil {
+	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{
+		"RaceTypes":        []app.RaceTypeOption{{ID: typeID, Label: "2000m"}},
+		"WarmupMinutesMin": app.MinWarmupMinutes,
+		"WarmupMinutesMax": app.MaxWarmupMinutes,
+	}); err != nil {
 		t.Fatalf("execute race-card: %v", err)
 	}
-	for _, want := range []string{`hx-post="/rooms"`, `<option value="` + typeID.String() + `">2000m</option>`, `hx-post="/rooms/join"`, `name="join_code"`, `hx-get="/invites"`} {
+	for _, want := range []string{
+		`hx-post="/rooms"`,
+		`name="mode"`,
+		`data-submit-label-target="#create-room-submit-label"`,
+		`<option value="race" data-submit-label="Create race" selected>Race</option>`,
+		`<option value="time_trial" data-submit-label="Start time trial">Time trial</option>`,
+		`<option value="warmup" data-submit-label="Start warmup">Warmup</option>`,
+		`<span id="create-room-submit-label">Create race</span></button>`,
+		`name="minutes"`,
+		`min="1"`,
+		`max="20"`,
+		`step="1"`,
+		`Start warmup`,
+		`id="create-room-error"`,
+		`<option value="` + typeID.String() + `">2000m</option>`,
+		`hx-post="/rooms/join"`,
+		`name="join_code"`,
+		`hx-get="/invites"`,
+	} {
 		if !strings.Contains(card.String(), want) {
 			t.Errorf("race card missing %q", want)
 		}

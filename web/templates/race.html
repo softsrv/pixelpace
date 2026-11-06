@@ -1,8 +1,10 @@
-{{define "title"}}{{.Race.Label}} Race{{end}}
+{{define "title"}}{{if eq .Race.Mode "warmup"}}Warmup{{else}}{{.Race.Label}} Race{{end}}{{end}}
 
 {{define "scripts"}}
+{{if ne .Race.Mode "warmup"}}
 <script src="/static/js/vendor/pixi/pixi.min.js" defer></script>
 <script src="/static/js/vendor/pixi/unsafe-eval.min.js" defer></script>
+{{end}}
 <script type="module" src="/static/js/race.mjs"></script>
 {{end}}
 
@@ -14,20 +16,59 @@
     <div class="pp-section">
       <div class="flex flex-wrap items-end justify-between gap-3">
         <div>
+          {{if eq .Race.Mode "warmup"}}
+          <p class="pp-kicker pp-arcade">Now rowing</p>
+          <h1 id="pp-race-title" class="card-title pp-arcade">Warmup</h1>
+          {{else}}
           <p class="pp-kicker pp-arcade">Now racing</p>
           <h1 id="pp-race-title" class="card-title pp-arcade">{{.Race.Label}} race</h1>
+          {{end}}
         </div>
-        {{with .LaneCount}}<span class="pp-tag pp-arcade">{{.}} {{if eq . 1}}lane{{else}}lanes{{end}}</span>{{end}}
+        {{if ne .Race.Mode "warmup"}}{{with .LaneCount}}<span class="pp-tag pp-arcade">{{.}} {{if eq . 1}}lane{{else}}lanes{{end}}</span>{{end}}{{end}}
       </div>
       <p id="race-status" class="pp-status-line text-sm" role="status" aria-live="polite">Getting the start line ready…</p>
-      {{if and .Solo (not .Race.Pacer)}}
+      {{if and (eq .Race.Mode "time_trial") (not .Race.Pacer)}}
       <p id="race-pacer-note" class="pp-status-line text-sm">No personal best yet: set your first time.</p>
       {{end}}
+      {{if eq .Race.Mode "warmup"}}
+      {{/* A warmup has no track: a clock counts down to zero beside the rower's live numbers. */}}
+      <div id="race-warmup"
+           class="space-y-4"
+           data-self-id="{{.User.ID}}"
+           data-mode="warmup"
+           data-duration-ms="{{.Race.DurationMilliseconds}}"
+           data-status-url="/rooms/{{.Race.RoomID}}/race/status"
+           data-page-url="/rooms/{{.Race.RoomID}}/race"
+           data-ready-url="/rooms/{{.Race.RoomID}}/race/ready"
+           data-lobby-url="/rooms/{{.Race.RoomID}}/lobby"
+           data-results-url="/rooms/{{.Race.RoomID}}/race/results"
+           data-dashboard-url="/dashboard"
+           data-finished="{{if .Race.Finished}}true{{else}}false{{end}}"
+           data-race-id="{{with .Race.RaceID}}{{.}}{{end}}">
+        <p id="warmup-clock" class="pp-arcade text-6xl" role="timer" aria-label="Time left in the warmup">--:--</p>
+        <div class="grid grid-cols-3 gap-3" aria-live="off">
+          <div class="stat">
+            <div class="stat-title">Distance</div>
+            <div id="warmup-distance" class="stat-value text-xl">0 m</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">Pace / 500m</div>
+            <div id="warmup-pace" class="stat-value text-xl">&mdash;</div>
+          </div>
+          <div class="stat">
+            <div class="stat-title">Stroke rate</div>
+            <div id="warmup-stroke-rate" class="stat-value text-xl">0 spm</div>
+          </div>
+        </div>
+      </div>
+      {{else}}
       <div id="race-track"
            class="pp-track h-[70vh] min-h-96 w-full overflow-hidden"
            data-self-id="{{.User.ID}}"
            data-target-mm="{{.Race.TargetMillimeters}}"
+           data-mode="{{.Race.Mode}}"
            data-status-url="/rooms/{{.Race.RoomID}}/race/status"
+           data-page-url="/rooms/{{.Race.RoomID}}/race"
            data-ready-url="/rooms/{{.Race.RoomID}}/race/ready"
            data-lobby-url="/rooms/{{.Race.RoomID}}/lobby"
            data-results-url="/rooms/{{.Race.RoomID}}/race/results"
@@ -41,6 +82,7 @@
         {{end}}
         {{with .Race.Pacer}}<li data-user-id="pacer" data-pacer="true" data-pacer-ms="{{.ElapsedMilliseconds}}">{{$.PacerLabel}}</li>{{end}}
       </ol>
+      {{end}}
     </div>
   </section>
 

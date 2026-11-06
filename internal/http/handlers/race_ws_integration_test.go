@@ -73,7 +73,7 @@ func TestRaceWSIntegrationRosterIsFirstFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	rooms := app.NewRoomService(queries, pool)
-	roomID, code, err := rooms.CreateRoom(ctx, named.ID, raceType)
+	roomID, code, err := rooms.CreateRoom(ctx, named.ID, raceType, app.ModeRace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,9 +39,19 @@ export var GO_DISPLAY_MS = 1500;
 // The countdown overlay's text with `remainingMs` until the start: whole
 // seconds rounded up ("10" … "1"), then "GO!" instead of "0" for a moment
 // after the start, then nothing.
-export function countdownLabel(remainingMs) {
-  var remaining = Number(remainingMs);
-  if (Number.isNaN(remaining)) return '';
-  if (remaining > 0) return String(Math.ceil(remaining / 1000));
-  return remaining > -GO_DISPLAY_MS ? 'GO!' : '';
+// When called as countdownLabel(durationMs, elapsedMs), returns the remaining
+// time in m:ss clamped at 0:00.
+export function countdownLabel(durationMs, elapsedMs) {
+  if (arguments.length <= 1 || elapsedMs === undefined) {
+    var remaining = Number(durationMs);
+    if (Number.isNaN(remaining)) return '';
+    if (remaining > 0) return String(Math.ceil(remaining / 1000));
+    return remaining > -GO_DISPLAY_MS ? 'GO!' : '';
+  }
+  var remaining = Math.min(Number(durationMs), Number(durationMs) - Number(elapsedMs));
+  if (Number.isNaN(remaining) || remaining <= 0) return '0:00';
+  var totalSeconds = Math.ceil(remaining / 1000);
+  var minutes = Math.floor(totalSeconds / 60);
+  var seconds = totalSeconds % 60;
+  return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
 }

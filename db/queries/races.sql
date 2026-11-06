@@ -3,9 +3,11 @@ UPDATE rooms SET status = 'in_progress'
 WHERE id = $1 AND status = 'counting_down'
 RETURNING *;
 
+-- mode owns the race's kind; time_trial is kept for older readers and is
+-- always derived from it, never passed separately.
 -- name: CreateRace :one
-INSERT INTO races (id, room_id, race_type_id, started_at, time_trial)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO races (id, room_id, race_type_id, started_at, mode, time_trial)
+VALUES (@id, @room_id, @race_type_id, @started_at, @mode::text, @mode::text = 'time_trial')
 RETURNING *;
 
 -- name: ListRaceRoomParticipants :many
@@ -30,8 +32,10 @@ FROM race_participants p JOIN users u ON u.id = p.user_id
 WHERE p.race_id = $1 ORDER BY p.id;
 
 -- name: LockRace :one
-SELECT r.*, rt.kind, rt.target_value
-FROM races r JOIN race_types rt ON rt.id = r.race_type_id
+SELECT r.*, rt.kind, rt.target_value, ro.duration_seconds
+FROM races r
+JOIN race_types rt ON rt.id = r.race_type_id
+JOIN rooms ro ON ro.id = r.room_id
 WHERE r.id = $1 FOR UPDATE OF r;
 
 -- name: IsRaceParticipant :one
@@ -100,7 +104,7 @@ LEFT JOIN LATERAL (
 WHERE p.race_id = $1 ORDER BY p.id;
 
 -- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.duration_seconds, r.host_user_id
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id

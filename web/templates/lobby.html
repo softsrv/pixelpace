@@ -132,7 +132,7 @@
     {{if .IsHost}}
     <button id="lobby-start" type="button" class="pp-btn pp-btn-lg" hx-post="/rooms/{{.RoomID}}/start" hx-swap="none"
             data-error-target="#lobby-error" data-error-message="Couldn't start the race. Everyone else must be ready."
-            {{if not .CanStart}}disabled{{end}}><span aria-hidden="true">&#9654;</span> {{if eq (len .Participants) 1}}Start time trial{{else}}Start race{{end}}</button>
+            {{if not .CanStart}}disabled{{end}}><span aria-hidden="true">&#9654;</span> Start race</button>
     {{else if .SelfReady}}
     <button id="lobby-ready" type="button" class="pp-btn pp-btn-dark" hx-post="/rooms/{{.RoomID}}/unready" hx-swap="none"
             data-error-target="#lobby-error" data-error-message="Couldn't update your status.">Not ready</button>
@@ -142,9 +142,11 @@
     {{end}}
   </div>
   {{if and .IsHost (not .CanStart)}}
+  {{if eq (len .Participants) 1}}
+  <p class="pp-hint">A race needs at least one other rower.</p>
+  {{else}}
   <p class="pp-hint">You can start once everyone is ready.</p>
-  {{else if and .IsHost (eq (len .Participants) 1)}}
-  <p class="pp-hint">Rowing solo counts as a time trial, with its own leaderboard.{{if .DistanceRace}} Once you have a time at this distance, a pacer boat rows at your best.{{end}} Invite a friend to race instead.</p>
+  {{end}}
   {{end}}
 </div>
 {{end}}

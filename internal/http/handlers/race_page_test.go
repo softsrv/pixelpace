@@ -197,6 +197,7 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Mode:   "time_trial",
 			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
 			Pacer:  nil,
 		}, nil
@@ -239,11 +240,79 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Errorf("pacer = %v, want null", pacerVal)
 	}
 
+	// 1-entrant race in mode 'race': note is absent
+	oneRacerRaceViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Mode:   "race",
+			Racers: []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:  nil,
+		}, nil
+	}}
+	rrOne := serveRaceWith(t, newProductionRenderer(t), oneRacerRaceViewer, user, roomID.String(), racePageEndpoint)
+	if rrOne.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rrOne.Code, rrOne.Body.String())
+	}
+	if strings.Contains(rrOne.Body.String(), "set your first time") {
+		t.Errorf("1-entrant mode=race unexpectedly has note: %q", rrOne.Body.String())
+	}
+	if strings.Contains(rrOne.Body.String(), `id="race-pacer-note"`) {
+		t.Errorf("1-entrant mode=race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
+	}
+
+	// 1-entrant session in mode 'warmup': note is absent, pacer is null in status
+	warmupViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID:               roomID,
+			Label:                "Warmup",
+			Mode:                 app.ModeWarmup,
+			DurationMilliseconds: 300000,
+			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:                nil,
+		}, nil
+	}}
+	rrWarmup := serveRaceWith(t, newProductionRenderer(t), warmupViewer, user, roomID.String(), racePageEndpoint)
+	if rrWarmup.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rrWarmup.Code, rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), "set your first time") {
+		t.Errorf("warmup unexpectedly has note: %q", rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), `id="race-pacer-note"`) {
+		t.Errorf("warmup unexpectedly has id=\"race-pacer-note\": %q", rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), "data-pacer") {
+		t.Errorf("warmup unexpectedly has data-pacer: %q", rrWarmup.Body.String())
+	}
+	// CLM-6: the warmup page carries its mode and duration and no track.
+	for _, want := range []string{`data-mode="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
+		if !strings.Contains(rrWarmup.Body.String(), want) {
+			t.Errorf("warmup page missing %s; body=%q", want, rrWarmup.Body.String())
+		}
+	}
+	for _, unwanted := range []string{`id="race-track"`, `id="race-lanes"`, "pixi.min.js", "lanes</span>"} {
+		if strings.Contains(rrWarmup.Body.String(), unwanted) {
+			t.Errorf("warmup page unexpectedly contains %s; body=%q", unwanted, rrWarmup.Body.String())
+		}
+	}
+	warmupStatusRR := serveRacePage(t, warmupViewer, user, roomID.String(), raceStatusEndpoint)
+	if warmupStatusRR.Code != http.StatusOK {
+		t.Fatalf("warmup status code = %d, want 200", warmupStatusRR.Code)
+	}
+	var warmupStatusData map[string]any
+	if err := json.Unmarshal(warmupStatusRR.Body.Bytes(), &warmupStatusData); err != nil {
+		t.Fatalf("unmarshal warmup status JSON: %v", err)
+	}
+	if p, ok := warmupStatusData["pacer"]; !ok || p != nil {
+		t.Errorf("warmup status pacer = %v, want null (ok=%v)", p, ok)
+	}
+
 	// 2-entrant race: note is absent
 	rival := uuid.New()
 	twoRacerViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
 		return app.RoomRace{
 			RoomID: roomID, Label: "2000m", TargetMillimeters: 2000000,
+			Mode:   "race",
 			Racers: []app.RaceRacer{racer(user.ID, "Me", true), racer(rival, "Rival", true)},
 			Pacer:  nil,
 		}, nil
@@ -341,11 +410,15 @@ func TestRacePageServiceErrors(t *testing.T) {
 		{app.ErrParticipantNotFound, http.StatusNotFound},
 		{app.ErrRaceNotStarted, http.StatusConflict},
 		{app.ErrInvalidRaceType, http.StatusConflict},
+		{app.ErrSessionNotConnected, http.StatusGone},
 		{errors.New("private database failure"), http.StatusInternalServerError},
 	} {
 		for _, endpoint := range []raceEndpoint{racePageEndpoint, raceStatusEndpoint, raceReadyEndpoint, raceResultsEndpoint} {
 			if endpoint == racePageEndpoint && errors.Is(tc.err, app.ErrRaceNotStarted) {
 				continue // redirects to the lobby; covered above
+			}
+			if endpoint == racePageEndpoint && errors.Is(tc.err, app.ErrSessionNotConnected) {
+				continue // renders the not-connected page; covered below
 			}
 			t.Run(fmt.Sprintf("%v/%s", tc.err, endpoint), func(t *testing.T) {
 				fail := fmt.Errorf("wrapped: %w", tc.err)
@@ -426,6 +499,41 @@ func TestRacePageRendersFinishModalAndFinishedState(t *testing.T) {
 	}
 }
 
+// CLM-7: Rendering a finished warmup carries the finished state and summary modal markup.
+func TestRacePageRendersFinishedWarmupSummary(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID, raceID := uuid.New(), uuid.New()
+	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID:               roomID,
+			RaceID:               &raceID,
+			Label:                "Warmup",
+			Mode:                 app.ModeWarmup,
+			DurationMilliseconds: 300000,
+			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
+			Finished:             true,
+		}, nil
+	}}
+
+	rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`<dialog id="race-finish-modal" class="modal">`,
+		`FINISH!`,
+		`<th>Pace / 500m</th>`,
+		`data-mode="warmup"`,
+		`data-finished="true"`,
+		`data-results-url="/rooms/` + roomID.String() + `/race/results"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("race page missing %q", want)
+		}
+	}
+}
+
 func TestRacePageResultsReturnsResultsJSON(t *testing.T) {
 	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
 	roomID, raceID, rival := uuid.New(), uuid.New(), uuid.New()
@@ -491,5 +599,45 @@ func TestRacePageTellsADroppedRacerTheyWereRemoved(t *testing.T) {
 	}
 	if strings.Contains(body, "race-finish-modal") || strings.Contains(body, user.Email) {
 		t.Errorf("removed racer's page shows the race or an email: %q", body)
+	}
+}
+
+// A time trial or warmup whose rowing machine never connected was dissolved
+// by Begin (ErrNoRacersReady). Its host's race page says so and links back to
+// the dashboard, with 200, instead of a track whose countdown never moves, a
+// redirect to a lobby that is gone, or a bare error.
+func TestRacePageSoloSessionNotConnectedShowsMessageAndDashboardLink(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID := uuid.New()
+	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{}, fmt.Errorf("room race: %w", app.ErrSessionNotConnected)
+	}}
+
+	rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; Location=%q", rr.Code, rr.Header().Get("Location"))
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"Rowing machine not connected",
+		"Your rowing machine wasn&#39;t connected, so the session didn&#39;t start.",
+		`href="/dashboard"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page missing %q; body=%q", want, body)
+		}
+	}
+	for _, absent := range []string{`id="race-track"`, "race-finish-modal", "Race unavailable"} {
+		if strings.Contains(body, absent) {
+			t.Errorf("not-connected page shows %q", absent)
+		}
+	}
+
+	// race.mjs, already on the page when the room dissolves, polls status: a
+	// 410 sends it back to this page.
+	status := serveRacePage(t, viewer, user, roomID.String(), raceStatusEndpoint)
+	if status.Code != http.StatusGone {
+		t.Fatalf("status endpoint = %d, want 410", status.Code)
 	}
 }

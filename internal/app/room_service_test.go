@@ -104,7 +104,7 @@ var (
 )
 
 func roomStep(name, status string) roomDBStep {
-	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
+	return roomDBStep{name: name, values: []any{roomTestID, roomTestID, roomTestHost, status, "ABCDEF", pgtype.Timestamptz{}, pgtype.Timestamptz{}, "race", pgtype.Int4{}}}
 }
 func participantStep(userID uuid.UUID, ready bool) roomDBStep {
 	return roomDBStep{name: "GetRoomParticipant", args: []any{roomTestID, userID}, values: []any{roomTestID, roomTestID, userID, ready, pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
@@ -286,7 +286,7 @@ func TestRoomStartRaceGuards(t *testing.T) {
 		{"finished", "finished", roomTestHost, 2, false, ErrInvalidStatusTransition},
 		{"dissolved", "dissolved", roomTestHost, 2, false, ErrInvalidStatusTransition},
 		{"empty", "waiting", roomTestHost, 0, false, ErrNotEnoughParticipants},
-		{"one (time trial)", "waiting", roomTestHost, 1, false, nil},
+		{"one", "waiting", roomTestHost, 1, false, ErrNotEnoughParticipants},
 		{"nine", "waiting", roomTestHost, 9, false, ErrRoomFull},
 		{"unready", "waiting", roomTestHost, 2, true, ErrNotAllReady},
 	} {
@@ -294,7 +294,7 @@ func TestRoomStartRaceGuards(t *testing.T) {
 			steps := []roomDBStep{roomStep("GetRoomForUpdate", tc.status)}
 			if tc.caller == roomTestHost && tc.status == "waiting" {
 				steps = append(steps, countStep(tc.count))
-				if tc.count >= 1 && tc.count <= 8 {
+				if tc.count >= 2 && tc.count <= 8 {
 					steps = append(steps, roomDBStep{name: "RoomHasUnreadyGuests", args: []any{roomTestID, roomTestHost}, values: []any{tc.unready}})
 				}
 			}
@@ -337,25 +337,68 @@ func TestRoomBeginRaceGuard(t *testing.T) {
 }
 
 func TestRoomCreate(t *testing.T) {
+	sevenMinutes, zeroMinutes, tooLong := int32(7), int32(0), int32(21)
 	for _, tc := range []struct {
 		name                    string
 		raceErr, participantErr error
+		mode                    string
+		warmupMinutes           *int32
+		duration                pgtype.Int4
+		kind                    string
+		wantModeErr             bool
+		wantMinutesErr          bool
+		wantRaceErr             bool
 	}{
-		{"success", nil, nil}, {"invalid race", pgx.ErrNoRows, nil}, {"participant failure", nil, errors.New("participant insert failed")},
+		{name: "success", mode: ModeRace},
+		{name: "time trial", mode: ModeTimeTrial},
+		{name: "invalid mode", mode: "sprint", wantModeErr: true},
+		{name: "empty mode", mode: "", wantModeErr: true},
+		{name: "warmup", mode: ModeWarmup, warmupMinutes: &sevenMinutes, duration: pgtype.Int4{Int32: 420, Valid: true}},
+		{name: "warmup without minutes", mode: ModeWarmup, wantMinutesErr: true},
+		{name: "warmup below range", mode: ModeWarmup, warmupMinutes: &zeroMinutes, wantMinutesErr: true},
+		{name: "warmup above range", mode: ModeWarmup, warmupMinutes: &tooLong, wantMinutesErr: true},
+		{name: "race with minutes", mode: ModeRace, warmupMinutes: &sevenMinutes, wantModeErr: true},
+		{name: "invalid race", raceErr: pgx.ErrNoRows, mode: ModeRace, wantRaceErr: true},
+		{name: "non-distance race rejected", mode: ModeRace, kind: "time", wantRaceErr: true},
+		{name: "participant failure", participantErr: errors.New("participant insert failed"), mode: ModeRace},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			steps := []roomDBStep{{name: "GetRaceType", args: []any{roomTestID}, values: []any{roomTestID, "distance", int64(500000), "500m"}, err: tc.raceErr}}
-			if tc.raceErr == nil {
-				steps = append(steps,
-					roomDBStep{name: "InsertRoom", args: []any{nil, roomTestID, roomTestHost, "ABCDEF"}},
-					roomDBStep{name: "InsertRoomParticipant", args: []any{nil, nil, roomTestHost}, err: tc.participantErr})
+			kind := "distance"
+			if tc.kind != "" {
+				kind = tc.kind
+			}
+			// A warmup takes the warmup race type whatever the caller passed.
+			typeID, label := roomTestID, "500m"
+			if tc.mode == ModeWarmup {
+				typeID, kind, label = WarmupRaceTypeID, "time", "Warmup"
+			}
+			var steps []roomDBStep
+			if !tc.wantModeErr && !tc.wantMinutesErr {
+				steps = append(steps, roomDBStep{name: "GetRaceType", args: []any{typeID}, values: []any{typeID, kind, int64(500000), label}, err: tc.raceErr})
+				if tc.raceErr == nil && !tc.wantRaceErr {
+					steps = append(steps,
+						roomDBStep{name: "InsertRoom", args: []any{nil, typeID, roomTestHost, "ABCDEF", tc.mode, tc.duration}},
+						roomDBStep{name: "InsertRoomParticipant", args: []any{nil, nil, roomTestHost}, err: tc.participantErr})
+					// A solo session has no lobby: it is counting down as it is created.
+					if tc.mode != ModeRace {
+						steps = append(steps, roomDBStep{name: "StartRoomCountdown", args: []any{nil}})
+					}
+				}
 			}
 			s, d := newRoomTestService(t, steps...)
 			s.newJoinCode = func() (string, error) { return "ABCDEF", nil }
 			var insertedRoomID uuid.UUID
-			roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+			roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, tc.mode, tc.warmupMinutes)
 			switch {
-			case tc.raceErr != nil:
+			case tc.wantModeErr:
+				if !errors.Is(err, ErrInvalidSessionMode) || d.begins != 0 {
+					t.Fatalf("invalid session mode: %v, begins %d", err, d.begins)
+				}
+			case tc.wantMinutesErr:
+				if !errors.Is(err, ErrInvalidWarmupMinutes) || d.begins != 0 {
+					t.Fatalf("invalid warmup minutes: %v, begins %d", err, d.begins)
+				}
+			case tc.wantRaceErr:
 				if !errors.Is(err, ErrInvalidRaceType) || d.begins != 0 {
 					t.Fatalf("invalid race: %v, begins %d", err, d.begins)
 				}
@@ -383,7 +426,7 @@ func TestRoomCreateDoesNotRetryOtherFailures(t *testing.T) {
 			s, d := newRoomTestService(t,
 				roomDBStep{name: "GetRaceType", values: []any{roomTestID, "distance", int64(500000), "500m"}},
 				roomDBStep{name: "InsertRoom", err: cause})
-			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ModeRace, nil)
 			if !errors.Is(err, cause) || d.begins != 1 || d.rollbacks != 1 || d.commits != 0 {
 				t.Fatalf("unexpected retry: %v, tx %+v", err, d)
 			}
@@ -451,9 +494,22 @@ func TestRoomCreateRetryBound(t *testing.T) {
 	s, d := newRoomTestService(t, steps...)
 	calls := 0
 	s.newJoinCode = func() (string, error) { calls++; return "ABCDEF", nil }
-	roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+	roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ModeRace, nil)
 	var pgErr *pgconn.PgError
 	if code != "" || roomID != uuid.Nil || !errors.As(err, &pgErr) || calls != 10 || d.begins != 10 || d.rollbacks != 10 || d.commits != 0 {
 		t.Fatalf("retry bound: code %q err %v calls %d tx %+v", code, err, calls, d)
+	}
+}
+
+func TestParseWarmupMinutes(t *testing.T) {
+	for raw, want := range map[string]int32{"1": 1, "5": 5, "20": 20} {
+		if got, err := ParseWarmupMinutes(raw); err != nil || got != want {
+			t.Errorf("ParseWarmupMinutes(%q) = %d, %v; want %d", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"", "abc", "2.5", "0", "21", "-1", "99999999999", " 5", "5 ", "+", "1e1"} {
+		if _, err := ParseWarmupMinutes(raw); !errors.Is(err, ErrInvalidWarmupMinutes) {
+			t.Errorf("ParseWarmupMinutes(%q) err = %v, want ErrInvalidWarmupMinutes", raw, err)
+		}
 	}
 }

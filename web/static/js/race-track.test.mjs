@@ -57,3 +57,13 @@ test('the countdown shows whole seconds down to 1, then GO! instead of 0', funct
   assert.equal(countdownLabel(-GO_DISPLAY_MS), '', 'GO! clears once the race is underway');
   assert.equal(countdownLabel(NaN), '');
 });
+
+test('countdownLabel with duration and elapsed formats m:ss clamped at 0:00', function () {
+  assert.equal(countdownLabel(300000, 0), '5:00');
+  assert.equal(countdownLabel(300000, 61000), '3:59');
+  assert.equal(countdownLabel(300000, 300000), '0:00');
+  assert.equal(countdownLabel(300000, 305000), '0:00', 'past the duration clamps at 0:00');
+  assert.equal(countdownLabel(300000, -1000), '5:00', 'negative elapsed stays clamped to full duration');
+  assert.equal(countdownLabel(NaN, 0), '0:00');
+  assert.equal(countdownLabel(300000, NaN), '0:00');
+});

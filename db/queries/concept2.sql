@@ -76,8 +76,10 @@ RETURNING *;
 -- reconnects (ClaimDueConcept2Posts holds it), so no finish is lost.
 SELECT rp.user_id
 FROM race_participants rp
+JOIN races r ON r.id = rp.race_id
 JOIN concept2_connections c ON c.user_id = rp.user_id
 WHERE rp.race_id = sqlc.arg(race_id)
+  AND r.mode <> 'warmup'
   AND rp.status = 'finished'
   AND c.auto_post
 ORDER BY rp.user_id;

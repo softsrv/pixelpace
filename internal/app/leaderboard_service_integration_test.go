@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -339,5 +340,290 @@ func TestLeaderboardRouteIntegration(t *testing.T) {
 				t.Fatalf("ranking = %s (%v)", rr.Body, err)
 			}
 		}
+	}
+}
+
+func TestMigration000020BackfillSessionMode(t *testing.T) {
+	pool := testDB(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const schema = "migration_000020_test"
+	for _, sql := range []string{
+		"CREATE SCHEMA " + schema,
+		"SET LOCAL search_path = " + schema + ", public",
+	} {
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Apply migrations 000001 through 000019 in order.
+	entries, err := os.ReadDir("../../db/migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasSuffix(name, ".up.sql") && name < "000020" {
+			migration, err := os.ReadFile("../../db/migrations/" + name)
+			if err != nil {
+				t.Fatalf("read migration %s: %v", name, err)
+			}
+			if _, err := tx.Exec(ctx, string(migration)); err != nil {
+				t.Fatalf("apply migration %s: %v", name, err)
+			}
+		}
+	}
+
+	// Seed users, race_type, rooms, races at schema 000019.
+	userID1 := uuid.Must(uuid.NewV7())
+	userID2 := uuid.Must(uuid.NewV7())
+	for _, u := range []uuid.UUID{userID1, userID2} {
+		if _, err := tx.Exec(ctx, "INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, 'unused', $3)",
+			u, u.String()+"@example.com", "Racer "+u.String()[:4]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var raceTypeID uuid.UUID
+	if err := tx.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' LIMIT 1").Scan(&raceTypeID); err != nil {
+		t.Fatal(err)
+	}
+
+	roomRaceID := uuid.Must(uuid.NewV7())
+	roomTTID := uuid.Must(uuid.NewV7())
+	roomEmptyID := uuid.Must(uuid.NewV7())
+
+	for _, room := range []struct {
+		id   uuid.UUID
+		code string
+	}{
+		{roomRaceID, "RACE01"},
+		{roomTTID, "TT0001"},
+		{roomEmptyID, "EMPTY1"},
+	} {
+		if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'finished', $4)",
+			room.id, raceTypeID, userID1, room.code); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+	raceNormalID := uuid.Must(uuid.NewV7())
+	raceTTID := uuid.Must(uuid.NewV7())
+
+	// Seed Race (time_trial = false) and Time Trial (time_trial = true)
+	if _, err := tx.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial) VALUES ($1, $2, $3, $4, $5, false)",
+		raceNormalID, roomRaceID, raceTypeID, now.Add(-time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial) VALUES ($1, $2, $3, $4, $5, true)",
+		raceTTID, roomTTID, raceTypeID, now.Add(-time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed race participants
+	part1ID := uuid.Must(uuid.NewV7())
+	part2ID := uuid.Must(uuid.NewV7())
+	if _, err := tx.Exec(ctx, "INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, 'finished', $4, 2000)",
+		part1ID, raceNormalID, userID1, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, 'finished', $4, 1500)",
+		part2ID, raceTTID, userID2, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-migration leaderboard queries and row counts
+	type preRow struct {
+		RaceID              uuid.UUID
+		UserID              uuid.UUID
+		ElapsedMilliseconds int32
+	}
+	queryPre := func(isTT bool) []preRow {
+		rows, err := tx.Query(ctx, "SELECT r.id, rp.user_id, rp.elapsed_milliseconds FROM race_participants rp JOIN races r ON r.id = rp.race_id WHERE r.time_trial = $1 ORDER BY rp.elapsed_milliseconds", isTT)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var res []preRow
+		for rows.Next() {
+			var r preRow
+			if err := rows.Scan(&r.RaceID, &r.UserID, &r.ElapsedMilliseconds); err != nil {
+				t.Fatal(err)
+			}
+			res = append(res, r)
+		}
+		return res
+	}
+	preRaces := queryPre(false)
+	preTTs := queryPre(true)
+
+	countRows := func(table string) int {
+		var cnt int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&cnt); err != nil {
+			t.Fatal(err)
+		}
+		return cnt
+	}
+	preUserCount := countRows("users")
+	preRoomCount := countRows("rooms")
+	preRaceCount := countRows("races")
+	prePartCount := countRows("race_participants")
+
+	// Apply migration 000020_add_session_mode.up.sql
+	upMigration, err := os.ReadFile("../../db/migrations/000020_add_session_mode.up.sql")
+	if err != nil {
+		t.Fatalf("read migration 000020 up: %v", err)
+	}
+	if _, err := tx.Exec(ctx, string(upMigration)); err != nil {
+		t.Fatalf("apply migration 000020: %v", err)
+	}
+
+	// Assert CLM-13: races.mode and rooms.mode backfilled
+	var raceNormalMode, raceTTMode string
+	if err := tx.QueryRow(ctx, "SELECT mode FROM races WHERE id = $1", raceNormalID).Scan(&raceNormalMode); err != nil {
+		t.Fatal(err)
+	}
+	if raceNormalMode != "race" {
+		t.Fatalf("expected raceNormalMode to be 'race', got %q", raceNormalMode)
+	}
+
+	if err := tx.QueryRow(ctx, "SELECT mode FROM races WHERE id = $1", raceTTID).Scan(&raceTTMode); err != nil {
+		t.Fatal(err)
+	}
+	if raceTTMode != "time_trial" {
+		t.Fatalf("expected raceTTMode to be 'time_trial', got %q", raceTTMode)
+	}
+
+	// Verify time_trial boolean column is preserved
+	var ttColNormal, ttColTT bool
+	if err := tx.QueryRow(ctx, "SELECT time_trial FROM races WHERE id = $1", raceNormalID).Scan(&ttColNormal); err != nil {
+		t.Fatal(err)
+	}
+	if ttColNormal != false {
+		t.Fatalf("expected time_trial to stay false for raceNormalID, got %v", ttColNormal)
+	}
+	if err := tx.QueryRow(ctx, "SELECT time_trial FROM races WHERE id = $1", raceTTID).Scan(&ttColTT); err != nil {
+		t.Fatal(err)
+	}
+	if ttColTT != true {
+		t.Fatalf("expected time_trial to stay true for raceTTID, got %v", ttColTT)
+	}
+
+	// Verify rooms.mode
+	var roomRaceMode, roomTTMode, roomEmptyMode string
+	if err := tx.QueryRow(ctx, "SELECT mode FROM rooms WHERE id = $1", roomRaceID).Scan(&roomRaceMode); err != nil {
+		t.Fatal(err)
+	}
+	if roomRaceMode != "race" {
+		t.Fatalf("expected roomRaceMode to be 'race', got %q", roomRaceMode)
+	}
+
+	if err := tx.QueryRow(ctx, "SELECT mode FROM rooms WHERE id = $1", roomTTID).Scan(&roomTTMode); err != nil {
+		t.Fatal(err)
+	}
+	if roomTTMode != "time_trial" {
+		t.Fatalf("expected roomTTMode to be 'time_trial', got %q", roomTTMode)
+	}
+
+	if err := tx.QueryRow(ctx, "SELECT mode FROM rooms WHERE id = $1", roomEmptyID).Scan(&roomEmptyMode); err != nil {
+		t.Fatal(err)
+	}
+	if roomEmptyMode != "race" {
+		t.Fatalf("expected roomEmptyMode to be 'race', got %q", roomEmptyMode)
+	}
+
+	// Assert row counts unchanged
+	if postUserCount := countRows("users"); postUserCount != preUserCount {
+		t.Fatalf("users row count changed: pre=%d post=%d", preUserCount, postUserCount)
+	}
+	if postRoomCount := countRows("rooms"); postRoomCount != preRoomCount {
+		t.Fatalf("rooms row count changed: pre=%d post=%d", preRoomCount, postRoomCount)
+	}
+	if postRaceCount := countRows("races"); postRaceCount != preRaceCount {
+		t.Fatalf("races row count changed: pre=%d post=%d", preRaceCount, postRaceCount)
+	}
+	if postPartCount := countRows("race_participants"); postPartCount != prePartCount {
+		t.Fatalf("race_participants row count changed: pre=%d post=%d", prePartCount, postPartCount)
+	}
+
+	// Assert leaderboard queries return same rows
+	queryPost := func(mode string) []preRow {
+		rows, err := tx.Query(ctx, "SELECT r.id, rp.user_id, rp.elapsed_milliseconds FROM race_participants rp JOIN races r ON r.id = rp.race_id WHERE r.mode = $1 ORDER BY rp.elapsed_milliseconds", mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var res []preRow
+		for rows.Next() {
+			var r preRow
+			if err := rows.Scan(&r.RaceID, &r.UserID, &r.ElapsedMilliseconds); err != nil {
+				t.Fatal(err)
+			}
+			res = append(res, r)
+		}
+		return res
+	}
+	postRaces := queryPost("race")
+	postTTs := queryPost("time_trial")
+
+	if !reflect.DeepEqual(preRaces, postRaces) {
+		t.Fatalf("race leaderboard mismatch post-migration:\npre:  %+v\npost: %+v", preRaces, postRaces)
+	}
+	if !reflect.DeepEqual(preTTs, postTTs) {
+		t.Fatalf("time trial leaderboard mismatch post-migration:\npre:  %+v\npost: %+v", preTTs, postTTs)
+	}
+
+	// Assert sentinel race_types row exists
+	var sentinelKind, sentinelLabel string
+	var sentinelTarget int64
+	if err := tx.QueryRow(ctx, "SELECT kind, target_value, label FROM race_types WHERE id = '01950000-0000-7000-8000-000000000009'::UUID").Scan(&sentinelKind, &sentinelTarget, &sentinelLabel); err != nil {
+		t.Fatalf("sentinel race_types query failed: %v", err)
+	}
+	if sentinelKind != "time" || sentinelTarget != 0 || sentinelLabel != "Warmup" {
+		t.Fatalf("unexpected sentinel row: kind=%s, target=%d, label=%s", sentinelKind, sentinelTarget, sentinelLabel)
+	}
+
+	// Assert check constraints on rooms
+	// 1. Warmup requires non-null duration_seconds
+	warmupRoomID1 := uuid.Must(uuid.NewV7())
+	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'WARM01', 'warmup', NULL)",
+		warmupRoomID1, raceTypeID, userID1); err == nil {
+		t.Fatal("expected error inserting warmup room with NULL duration_seconds")
+	}
+
+	// 2. Non-warmup rejects non-null duration_seconds
+	raceRoomIDBad := uuid.Must(uuid.NewV7())
+	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'RACE99', 'race', 300)",
+		raceRoomIDBad, raceTypeID, userID1); err == nil {
+		t.Fatal("expected error inserting race room with non-NULL duration_seconds")
+	}
+
+	// 3. Warmup duration must be between 60 and 1200 and divisible by 60
+	warmupRoomIDBadDur := uuid.Must(uuid.NewV7())
+	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'WARM02', 'warmup', 45)",
+		warmupRoomIDBadDur, raceTypeID, userID1); err == nil {
+		t.Fatal("expected error inserting warmup room with duration 45")
+	}
+
+	// 4. Valid warmup succeeds
+	warmupRoomIDValid := uuid.Must(uuid.NewV7())
+	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'WARM03', 'warmup', 300)",
+		warmupRoomIDValid, raceTypeID, userID1); err != nil {
+		t.Fatalf("expected valid warmup insert to succeed: %v", err)
+	}
+
+	// 5. Invalid mode rejected
+	invalidModeRoomID := uuid.Must(uuid.NewV7())
+	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'INVAL1', 'invalid', NULL)",
+		invalidModeRoomID, raceTypeID, userID1); err == nil {
+		t.Fatal("expected error inserting room with invalid mode")
 	}
 }

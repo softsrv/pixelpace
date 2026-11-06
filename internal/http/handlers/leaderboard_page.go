@@ -59,7 +59,6 @@ type LeaderboardEntry struct {
 // LeaderboardBoard is everything the board region renders.
 type LeaderboardBoard struct {
 	ActivityType LeaderboardTabs
-	Mode         LeaderboardTabs
 	Distance     LeaderboardTabs
 	Scope        LeaderboardTabs
 	Period       LeaderboardTabs
@@ -162,7 +161,6 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		board.Distance.Filters = append(board.Distance.Filters, LeaderboardFilter{Label: o.Label, URL: next.url(), Active: o.ID == q.preset})
 	}
 	board.ActivityType = LeaderboardTabs{Label: "Activity type", Big: true, Filters: filters(leaderboardModes, q.activity, func(v string) string { next := q; next.activity = v; return next.url() })}
-	board.Mode = board.ActivityType
 	board.Scope = LeaderboardTabs{Label: "Racers", Filters: filters(leaderboardScopes, q.scope, func(v string) string { next := q; next.scope = v; return next.url() })}
 	board.Period = LeaderboardTabs{Label: "Period", Filters: filters(leaderboardWindows, q.window, func(v string) string { next := q; next.window = v; return next.url() })}
 

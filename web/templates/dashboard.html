@@ -139,15 +139,15 @@
   <form class="space-y-3" hx-post="/rooms" hx-swap="none"
         data-error-target="#create-room-error" data-error-message="Couldn't create the race. Please try again.">
     <label class="block space-y-2">
-      <span class="pp-label pp-arcade">Mode</span>
+      <span class="pp-label pp-arcade">Activity type</span>
       <select name="mode" class="pp-field" data-submit-label-target="#create-room-submit-label">
         <option value="race" data-submit-label="Create race" selected>Race</option>
         <option value="time_trial" data-submit-label="Start time trial">Time trial</option>
         <option value="warmup" data-submit-label="Start warmup">Warmup</option>
       </select>
     </label>
-    <label id="race-type-field" class="block space-y-2" data-mode-field="distance">
-      <span class="pp-label pp-arcade">Race type</span>
+    <label id="preset-field" class="block space-y-2" data-mode-field="distance">
+      <span class="pp-label pp-arcade">Preset</span>
       <select name="race_type_id" class="pp-field">
         {{range .RaceTypes}}<option value="{{.ID}}">{{.Label}}</option>{{end}}
       </select>

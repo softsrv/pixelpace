@@ -37,7 +37,9 @@ document.addEventListener('click', function (evt) {
 });
 
 // HTMX actions marked with data-error-target show data-error-message there when
-// the server refuses them, and clear it when they are tried again.
+// the server refuses them, and clear it when they are tried again. A refusal
+// that names its own reason in an X-Form-Error header (a warmup's minutes
+// outside 1-20) shows that instead, so the player sees what to fix.
 function htmxErrorTarget(evt) {
   var source = evt.target && evt.target.closest && evt.target.closest('[data-error-target]');
   if (!source) return null;
@@ -49,7 +51,10 @@ document.addEventListener('htmx:before:request', function (evt) {
 });
 document.addEventListener('htmx:response:error', function (evt) {
   var found = htmxErrorTarget(evt);
-  if (found && found.target) found.target.textContent = found.source.getAttribute('data-error-message') || 'Something went wrong.';
+  if (!found || !found.target) return;
+  var headers = evt.detail && evt.detail.ctx && evt.detail.ctx.response && evt.detail.ctx.response.headers;
+  var reason = headers && headers.get && headers.get('X-Form-Error');
+  found.target.textContent = reason || found.source.getAttribute('data-error-message') || 'Something went wrong.';
 });
 
 // <select data-submit-label-target="#label"> writes the chosen option's

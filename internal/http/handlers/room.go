@@ -112,13 +112,27 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	raceTypeID, err := uuid.Parse(r.PostForm.Get("race_type_id"))
-	if err != nil {
-		http.Error(w, "Invalid race type ID", http.StatusBadRequest)
-		return
-	}
 	mode := r.PostForm.Get("mode")
-	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, raceTypeID, mode, nil)
+	// A warmup has no distance: its length is the only choice, parsed here
+	// strictly and the race type left to the service.
+	var raceTypeID uuid.UUID
+	var warmupMinutes *int32
+	if mode == app.ModeWarmup {
+		minutes, err := app.ParseWarmupMinutes(r.PostForm.Get("minutes"))
+		if err != nil {
+			writeRoomError(w, r, err)
+			return
+		}
+		warmupMinutes = &minutes
+	} else {
+		var err error
+		raceTypeID, err = uuid.Parse(r.PostForm.Get("race_type_id"))
+		if err != nil {
+			http.Error(w, "Invalid race type ID", http.StatusBadRequest)
+			return
+		}
+	}
+	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, raceTypeID, mode, warmupMinutes)
 	if err != nil {
 		writeRoomError(w, r, err)
 		return
@@ -328,6 +342,12 @@ func writeRoomError(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusForbidden
 	case errors.Is(err, app.ErrInvalidSessionMode):
 		status = http.StatusBadRequest
+	case errors.Is(err, app.ErrInvalidWarmupMinutes):
+		// The message names the rule. The body carries it for any client; the
+		// header is what the dashboard form shows under its button.
+		w.Header().Set("X-Form-Error", err.Error())
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	case errors.Is(err, app.ErrRoomFull), errors.Is(err, app.ErrAlreadyParticipant),
 		errors.Is(err, app.ErrNotAllReady), errors.Is(err, app.ErrInvalidStatusTransition),
 		errors.Is(err, app.ErrRoomNotJoinable), errors.Is(err, app.ErrParticipantReady),

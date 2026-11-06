@@ -557,7 +557,7 @@ func TestRoomIntegrationCreateInvalidModeRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, mode := range []string{"", "sprint", "invalid", ModeWarmup} {
+	for _, mode := range []string{"", "sprint", "invalid"} {
 		_, _, err := s.CreateRoom(ctx, host, roomTestID, mode, nil)
 		if !errors.Is(err, ErrInvalidSessionMode) {
 			t.Fatalf("mode %q err = %v, want ErrInvalidSessionMode", mode, err)
@@ -674,5 +674,79 @@ func TestRoomIntegrationTimeTrialFailedBeginDissolves(t *testing.T) {
 	room, err := q.GetRoomForUpdate(ctx, roomID)
 	if err != nil || room.Status != "dissolved" {
 		t.Fatalf("time trial after failed begin = %+v, %v; want dissolved", room, err)
+	}
+}
+
+// A warmup is created solo and already counting down, on the warmup race type
+// with its length stored in seconds, whatever race type the caller names.
+func TestRoomIntegrationCreateWarmupIsSoloAndCountingDown(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host, outsider := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	minutes := int32(5)
+	s := NewRoomService(db.New(pool), pool)
+	roomID, code, err := s.CreateRoom(ctx, host, uuid.Nil, ModeWarmup, &minutes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+			t.Error(err)
+		}
+	})
+
+	var mode, status string
+	var raceType uuid.UUID
+	var duration int32
+	if err := pool.QueryRow(ctx, "SELECT mode, status, race_type_id, duration_seconds FROM rooms WHERE id = $1", roomID).Scan(&mode, &status, &raceType, &duration); err != nil {
+		t.Fatal(err)
+	}
+	if mode != ModeWarmup || status != "counting_down" || raceType != WarmupRaceTypeID || duration != 300 {
+		t.Fatalf("room = %q/%q/%s/%ds; want warmup/counting_down/%s/300s", mode, status, raceType, duration, WarmupRaceTypeID)
+	}
+	var participants []uuid.UUID
+	rows, err := pool.Query(ctx, "SELECT user_id FROM room_participants WHERE room_id = $1", roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		participants = append(participants, id)
+	}
+	if len(participants) != 1 || participants[0] != host {
+		t.Fatalf("participants = %v; want the host %s alone", participants, host)
+	}
+	if _, err := s.JoinRoom(ctx, outsider, code); !errors.Is(err, ErrRoomNotJoinable) {
+		t.Fatalf("join warmup = %v, want ErrRoomNotJoinable", err)
+	}
+}
+
+// A warmup whose minutes are outside 1-20 or missing is refused with the typed
+// error and leaves no room behind.
+func TestRoomIntegrationCreateWarmupInvalidMinutesRejected(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host := roomIntegrationUser(t, pool)
+	s := NewRoomService(db.New(pool), pool)
+	var before int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	zero, negative, over, huge := int32(0), int32(-1), int32(21), int32(1<<30)
+	for name, minutes := range map[string]*int32{"missing": nil, "zero": &zero, "negative": &negative, "over": &over, "huge": &huge} {
+		if _, _, err := s.CreateRoom(ctx, host, WarmupRaceTypeID, ModeWarmup, minutes); !errors.Is(err, ErrInvalidWarmupMinutes) {
+			t.Fatalf("%s minutes err = %v, want ErrInvalidWarmupMinutes", name, err)
+		}
+	}
+	var after int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("rooms before = %d, after = %d; want unchanged", before, after)
 	}
 }

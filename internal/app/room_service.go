@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -54,19 +55,52 @@ const (
 	ModeWarmup    = "warmup"
 )
 
+// Bounds of a warmup's length, in whole minutes. The rooms table enforces the
+// same range on duration_seconds.
+const (
+	MinWarmupMinutes = 1
+	MaxWarmupMinutes = 20
+)
+
+// WarmupRaceTypeID is the sentinel race type every warmup room and race
+// carries, seeded by migration 000020: rooms.race_type_id is NOT NULL, and a
+// warmup has no distance target. It is a kind 'time' row, so it is never
+// offered as a distance.
+var WarmupRaceTypeID = uuid.MustParse("01950000-0000-7000-8000-000000000009")
+
+// ParseWarmupMinutes reads a submitted warmup length: a whole number of
+// minutes from MinWarmupMinutes to MaxWarmupMinutes, nothing else. Empty,
+// non-numeric, fractional and out-of-range input, and values too large for an
+// int32, all give ErrInvalidWarmupMinutes.
+func ParseWarmupMinutes(raw string) (int32, error) {
+	minutes, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return 0, ErrInvalidWarmupMinutes
+	}
+	if minutes < MinWarmupMinutes || minutes > MaxWarmupMinutes {
+		return 0, ErrInvalidWarmupMinutes
+	}
+	return int32(minutes), nil
+}
+
 // CreateRoom atomically creates a room in the given mode and its host
-// participant. A race room is waiting in its lobby; a time trial room is
-// already counting down, ready for the caller to Begin with no lobby step.
-// warmupMinutes is the length of a warmup session and is nil for every other
-// mode. It returns the room id, which addresses the roster, alongside the join
-// code.
+// participant. A race room is waiting in its lobby; a time trial or warmup
+// room is already counting down, ready for the caller to Begin with no lobby
+// step. warmupMinutes is the length of a warmup session: required, from 1 to 20,
+// for ModeWarmup and nil for every other mode. A warmup ignores raceTypeID and
+// takes the warmup race type. It returns the room id, which addresses the
+// roster, alongside the join code.
 func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
 	switch mode {
 	case ModeRace, ModeTimeTrial:
-		// valid session modes for this task
+		if warmupMinutes != nil {
+			return uuid.Nil, "", ErrInvalidSessionMode
+		}
 	case ModeWarmup:
-		// warmup belongs to task #2; reject until task #2 wires it
-		return uuid.Nil, "", ErrInvalidSessionMode
+		if warmupMinutes == nil || *warmupMinutes < MinWarmupMinutes || *warmupMinutes > MaxWarmupMinutes {
+			return uuid.Nil, "", ErrInvalidWarmupMinutes
+		}
+		raceTypeID = WarmupRaceTypeID
 	default:
 		return uuid.Nil, "", ErrInvalidSessionMode
 	}
@@ -78,7 +112,8 @@ func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uui
 		}
 		return uuid.Nil, "", fmt.Errorf("get race type: %w", err)
 	}
-	if raceType.Kind != "distance" {
+	// Every mode but warmup races a distance; a warmup's sentinel is not one.
+	if mode != ModeWarmup && raceType.Kind != "distance" {
 		return uuid.Nil, "", ErrInvalidRaceType
 	}
 

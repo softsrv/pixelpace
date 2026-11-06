@@ -17,7 +17,7 @@ export
         daisyui-install pixi-install tailwind tailwind-watch \
         smtp4dev smtp4dev-stop valkey valkey-stop \
         migrate-up migrate-down migrate-create migrate-status \
-        sqlc-generate \
+        sqlc-generate sqlc-check \
         docker-build docker-run prod clean
 
 ## ── Development ─────────────────────────────────────────────────────────────
@@ -171,6 +171,13 @@ migrate-status:
 
 sqlc-generate:
 	sqlc generate -f db/sqlc.yaml
+
+sqlc-check: sqlc-generate
+	@if [ -n "$$(git status --porcelain internal/db)" ]; then \
+		git status --porcelain internal/db; \
+		git diff internal/db; \
+		exit 1; \
+	fi
 
 ## ── Docker ───────────────────────────────────────────────────────────────────
 

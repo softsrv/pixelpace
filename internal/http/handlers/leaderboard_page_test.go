@@ -85,10 +85,13 @@ func TestLeaderboardPageDefaultsAndRendersRanking(t *testing.T) {
 		t.Fatalf("defaults = %+v", call)
 	}
 	body := rr.Body.String()
-	for label, want := range map[string]string{"Mode": "Races", "Distance": "500m", "Racers": "Everyone", "Period": "All-time"} {
+	for label, want := range map[string]string{"Activity type": "Races", "Distance": "500m", "Racers": "Everyone", "Period": "All-time"} {
 		if got := activeTab(t, body, label); got != want {
 			t.Errorf("%s tab = %q, want %q", label, got, want)
 		}
+	}
+	if strings.Contains(body, `aria-label="Mode"`) || strings.Contains(body, `<span class="pp-label pp-arcade block">Mode</span>`) {
+		t.Errorf("obsolete 'Mode' tab label remains in body: %s", body)
 	}
 	for _, want := range []string{
 		`<title>Leaderboards</title>`,
@@ -143,33 +146,40 @@ func TestLeaderboardPageDefaultsAndRendersRanking(t *testing.T) {
 
 func TestLeaderboardPageFiltersAndLinks(t *testing.T) {
 	viewer := uuid.Must(uuid.NewV7())
-	target := "/leaderboards?race_type=" + lbType2000.String() + "&mode=time-trial&scope=friends&window=week"
-	rr, call := serveLeaderboardPage(t, nil, viewer, target, false)
-	if call != (leaderboardCall{"friends", "week", "time-trial", lbType2000, viewer}) {
-		t.Fatalf("filters = %+v", call)
-	}
-	body := html.UnescapeString(rr.Body.String())
-	for label, want := range map[string]string{"Mode": "Time trials", "Distance": "2000m", "Racers": "Friends", "Period": "Week"} {
-		if got := activeTab(t, body, label); got != want {
-			t.Errorf("%s tab = %q, want %q", label, got, want)
-		}
-	}
-	// Each tab changes one filter and keeps the rest, and swaps the board in place.
-	for _, want := range []string{
-		`href="/leaderboards?mode=race&race_type=` + lbType2000.String() + `&scope=friends&window=week" hx-get="/leaderboards?mode=race&race_type=` + lbType2000.String() + `&scope=friends&window=week" hx-target="#leaderboard-board" hx-swap="outerHTML" hx-push-url="true"`,
-		`href="/leaderboards?mode=time-trial&race_type=` + lbType500.String() + `&scope=friends&window=week"`,
-		`href="/leaderboards?mode=time-trial&race_type=` + lbType2000.String() + `&scope=global&window=week"`,
-		`href="/leaderboards?mode=time-trial&race_type=` + lbType2000.String() + `&scope=friends&window=month"`,
-		`Time trial leaderboard`,
-		`None of your friends have a finished 2000m time trial this week.`,
-		`start it on your own`,
+	for _, target := range []string{
+		"/leaderboards?race_type=" + lbType2000.String() + "&mode=time-trial&scope=friends&window=week",
+		"/leaderboards?race_type=" + lbType2000.String() + "&activity=time-trial&scope=friends&window=week",
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("page missing %q", want)
+		rr, call := serveLeaderboardPage(t, nil, viewer, target, false)
+		if call != (leaderboardCall{"friends", "week", "time-trial", lbType2000, viewer}) {
+			t.Fatalf("target=%s filters = %+v", target, call)
 		}
-	}
-	if strings.Contains(body, "<table") || strings.Contains(body, "Your best") {
-		t.Errorf("empty board renders a table or a personal best")
+		body := html.UnescapeString(rr.Body.String())
+		for label, want := range map[string]string{"Activity type": "Time trials", "Distance": "2000m", "Racers": "Friends", "Period": "Week"} {
+			if got := activeTab(t, body, label); got != want {
+				t.Errorf("%s tab = %q, want %q", label, got, want)
+			}
+		}
+		if strings.Contains(body, `aria-label="Mode"`) || strings.Contains(body, `<span class="pp-label pp-arcade block">Mode</span>`) {
+			t.Errorf("obsolete 'Mode' tab label remains in body: %s", body)
+		}
+		// Each tab changes one filter and keeps the rest, and swaps the board in place.
+		for _, want := range []string{
+			`href="/leaderboards?activity=race&race_type=` + lbType2000.String() + `&scope=friends&window=week" hx-get="/leaderboards?activity=race&race_type=` + lbType2000.String() + `&scope=friends&window=week" hx-target="#leaderboard-board" hx-swap="outerHTML" hx-push-url="true"`,
+			`href="/leaderboards?activity=time-trial&race_type=` + lbType500.String() + `&scope=friends&window=week"`,
+			`href="/leaderboards?activity=time-trial&race_type=` + lbType2000.String() + `&scope=global&window=week"`,
+			`href="/leaderboards?activity=time-trial&race_type=` + lbType2000.String() + `&scope=friends&window=month"`,
+			`Time trial leaderboard`,
+			`None of your friends have a finished 2000m time trial this week.`,
+			`start it on your own`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("page missing %q", want)
+			}
+		}
+		if strings.Contains(body, "<table") || strings.Contains(body, "Your best") {
+			t.Errorf("empty board renders a table or a personal best")
+		}
 	}
 }
 

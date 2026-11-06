@@ -58,15 +58,16 @@ type LeaderboardEntry struct {
 
 // LeaderboardBoard is everything the board region renders.
 type LeaderboardBoard struct {
-	Mode      LeaderboardTabs
-	Distance  LeaderboardTabs
-	Scope     LeaderboardTabs
-	Period    LeaderboardTabs
-	RaceLabel string
-	TimeTrial bool
-	Friends   bool
-	Window    string
-	Entries   []LeaderboardEntry
+	ActivityType LeaderboardTabs
+	Mode         LeaderboardTabs
+	Distance     LeaderboardTabs
+	Scope        LeaderboardTabs
+	Period       LeaderboardTabs
+	RaceLabel    string
+	TimeTrial    bool
+	Friends      bool
+	Window       string
+	Entries      []LeaderboardEntry
 	// You is the caller's entry, when they are ranked.
 	You *LeaderboardEntry
 }
@@ -81,14 +82,14 @@ var (
 
 // leaderboardQuery is the page's selected filters.
 type leaderboardQuery struct {
-	preset              uuid.UUID
-	mode, scope, window string
+	preset                  uuid.UUID
+	activity, scope, window string
 }
 
 func (q leaderboardQuery) url() string {
 	v := url.Values{}
 	v.Set("race_type", q.preset.String())
-	v.Set("mode", q.mode)
+	v.Set("activity", q.activity)
 	v.Set("scope", q.scope)
 	v.Set("window", q.window)
 	return "/leaderboards?" + v.Encode()
@@ -131,13 +132,17 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	q := leaderboardQuery{
-		preset: selected.ID,
-		mode:   choose(params.Get("mode"), leaderboardModes),
-		scope:  choose(params.Get("scope"), leaderboardScopes),
-		window: choose(params.Get("window"), leaderboardWindows),
+	activity := params.Get("activity")
+	if activity == "" {
+		activity = params.Get("mode")
 	}
-	rows, err := h.leaderboard.Leaderboard(r.Context(), q.scope, q.window, q.mode, q.preset, user.ID)
+	q := leaderboardQuery{
+		preset:   selected.ID,
+		activity: choose(activity, leaderboardModes),
+		scope:    choose(params.Get("scope"), leaderboardScopes),
+		window:   choose(params.Get("window"), leaderboardWindows),
+	}
+	rows, err := h.leaderboard.Leaderboard(r.Context(), q.scope, q.window, q.activity, q.preset, user.ID)
 	if err != nil {
 		leaderboardPageError(w, r, err)
 		return
@@ -145,7 +150,7 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 
 	board := LeaderboardBoard{
 		RaceLabel: selected.Label,
-		TimeTrial: q.mode == "time-trial",
+		TimeTrial: q.activity == "time-trial",
 		Friends:   q.scope == "friends",
 		Window:    q.window,
 		Entries:   make([]LeaderboardEntry, 0, len(rows)),
@@ -156,7 +161,8 @@ func (h *LeaderboardPageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		next.preset = o.ID
 		board.Distance.Filters = append(board.Distance.Filters, LeaderboardFilter{Label: o.Label, URL: next.url(), Active: o.ID == q.preset})
 	}
-	board.Mode = LeaderboardTabs{Label: "Mode", Big: true, Filters: filters(leaderboardModes, q.mode, func(v string) string { next := q; next.mode = v; return next.url() })}
+	board.ActivityType = LeaderboardTabs{Label: "Activity type", Big: true, Filters: filters(leaderboardModes, q.activity, func(v string) string { next := q; next.activity = v; return next.url() })}
+	board.Mode = board.ActivityType
 	board.Scope = LeaderboardTabs{Label: "Racers", Filters: filters(leaderboardScopes, q.scope, func(v string) string { next := q; next.scope = v; return next.url() })}
 	board.Period = LeaderboardTabs{Label: "Period", Filters: filters(leaderboardWindows, q.window, func(v string) string { next := q; next.window = v; return next.url() })}
 

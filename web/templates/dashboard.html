@@ -116,7 +116,7 @@
         <li class="space-y-2">
           <span class="pp-stage-num pp-arcade">2</span>
           <h3 class="pp-arcade text-sm text-[#8be9fd]">Line up</h3>
-          <p class="pp-muted text-sm">Create a race and share its join code, or join a friend's. Up to eight rowers &mdash; or start alone for a time trial.</p>
+          <p class="pp-muted text-sm">Create a race and share its join code, or join a friend's. Up to eight rowers.</p>
         </li>
         <li class="space-y-2">
           <span class="pp-stage-num pp-arcade">3</span>
@@ -138,6 +138,13 @@
   <div id="room-invites" hx-get="/invites" hx-trigger="load, every 10s, invites-updated from:body"></div>
   <form class="space-y-3" hx-post="/rooms" hx-swap="none"
         data-error-target="#create-room-error" data-error-message="Couldn't create the race. Please try again.">
+    <label class="block space-y-2">
+      <span class="pp-label pp-arcade">Mode</span>
+      <select name="mode" class="pp-field">
+        <option value="race" selected>Race</option>
+        <option value="time_trial">Time trial</option>
+      </select>
+    </label>
     <label class="block space-y-2">
       <span class="pp-label pp-arcade">Race type</span>
       <select name="race_type_id" class="pp-field">

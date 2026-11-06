@@ -912,7 +912,16 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{"RaceTypes": []app.RaceTypeOption{{ID: typeID, Label: "2000m"}}}); err != nil {
 		t.Fatalf("execute race-card: %v", err)
 	}
-	for _, want := range []string{`hx-post="/rooms"`, `<option value="` + typeID.String() + `">2000m</option>`, `hx-post="/rooms/join"`, `name="join_code"`, `hx-get="/invites"`} {
+	for _, want := range []string{
+		`hx-post="/rooms"`,
+		`name="mode"`,
+		`<option value="race" selected>Race</option>`,
+		`<option value="time_trial">Time trial</option>`,
+		`<option value="` + typeID.String() + `">2000m</option>`,
+		`hx-post="/rooms/join"`,
+		`name="join_code"`,
+		`hx-get="/invites"`,
+	} {
 		if !strings.Contains(card.String(), want) {
 			t.Errorf("race card missing %q", want)
 		}

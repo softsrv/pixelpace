@@ -165,7 +165,7 @@ func (q *Queries) FinishRaceRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRoomRace = `-- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.host_user_id
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.duration_seconds, r.host_user_id
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id
@@ -173,15 +173,16 @@ WHERE r.id = $1
 `
 
 type GetRoomRaceRow struct {
-	Status       string             `json:"status"`
-	RaceStartsAt pgtype.Timestamptz `json:"race_starts_at"`
-	RaceTypeID   uuid.UUID          `json:"race_type_id"`
-	Kind         string             `json:"kind"`
-	TargetValue  int64              `json:"target_value"`
-	Label        string             `json:"label"`
-	RaceID       pgtype.UUID        `json:"race_id"`
-	Mode         string             `json:"mode"`
-	HostUserID   uuid.UUID          `json:"host_user_id"`
+	Status          string             `json:"status"`
+	RaceStartsAt    pgtype.Timestamptz `json:"race_starts_at"`
+	RaceTypeID      uuid.UUID          `json:"race_type_id"`
+	Kind            string             `json:"kind"`
+	TargetValue     int64              `json:"target_value"`
+	Label           string             `json:"label"`
+	RaceID          pgtype.UUID        `json:"race_id"`
+	Mode            string             `json:"mode"`
+	DurationSeconds pgtype.Int4        `json:"duration_seconds"`
+	HostUserID      uuid.UUID          `json:"host_user_id"`
 }
 
 func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow, error) {
@@ -196,6 +197,7 @@ func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow
 		&i.Label,
 		&i.RaceID,
 		&i.Mode,
+		&i.DurationSeconds,
 		&i.HostUserID,
 	)
 	return i, err
@@ -495,21 +497,24 @@ func (q *Queries) ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error) 
 }
 
 const lockRace = `-- name: LockRace :one
-SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, r.time_trial, r.mode, rt.kind, rt.target_value
-FROM races r JOIN race_types rt ON rt.id = r.race_type_id
+SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, r.time_trial, r.mode, rt.kind, rt.target_value, ro.duration_seconds
+FROM races r
+JOIN race_types rt ON rt.id = r.race_type_id
+JOIN rooms ro ON ro.id = r.room_id
 WHERE r.id = $1 FOR UPDATE OF r
 `
 
 type LockRaceRow struct {
-	ID          uuid.UUID          `json:"id"`
-	RoomID      uuid.UUID          `json:"room_id"`
-	RaceTypeID  uuid.UUID          `json:"race_type_id"`
-	StartedAt   pgtype.Timestamptz `json:"started_at"`
-	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
-	TimeTrial   bool               `json:"time_trial"`
-	Mode        string             `json:"mode"`
-	Kind        string             `json:"kind"`
-	TargetValue int64              `json:"target_value"`
+	ID              uuid.UUID          `json:"id"`
+	RoomID          uuid.UUID          `json:"room_id"`
+	RaceTypeID      uuid.UUID          `json:"race_type_id"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+	TimeTrial       bool               `json:"time_trial"`
+	Mode            string             `json:"mode"`
+	Kind            string             `json:"kind"`
+	TargetValue     int64              `json:"target_value"`
+	DurationSeconds pgtype.Int4        `json:"duration_seconds"`
 }
 
 func (q *Queries) LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error) {
@@ -525,6 +530,7 @@ func (q *Queries) LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, erro
 		&i.Mode,
 		&i.Kind,
 		&i.TargetValue,
+		&i.DurationSeconds,
 	)
 	return i, err
 }

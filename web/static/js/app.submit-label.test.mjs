@@ -55,22 +55,73 @@ function load() {
   return { label: label, fire: function (target) { change.forEach(function (fn) { fn({ target: target }); }); } };
 }
 
-function modeSelect(options, value) {
+function modeSelect(options, value, form) {
   return {
+    name: 'mode',
+    value: value,
+    form: form,
+    closest: function (sel) { return sel === 'form' ? form : null; },
     options: options,
     selectedIndex: options.findIndex(function (o) { return o.value === value; }),
-    matches: function (sel) { return sel === 'select[data-submit-label-target]'; },
+    matches: function (sel) { return sel === 'select[data-submit-label-target]' || sel === 'select[name="mode"]'; },
     getAttribute: function (name) { return name === 'data-submit-label-target' ? '#create-room-submit-label' : null; }
   };
 }
 
-test('changing the mode swaps the race card button between Create race and Start time trial', function () {
+test('changing the mode swaps the race card button between Create race, Start time trial and Start warmup', function () {
   var options = modeOptions();
   var page = load();
   page.fire(modeSelect(options, 'time_trial'));
   assert.equal(page.label.textContent, 'Start time trial');
+  page.fire(modeSelect(options, 'warmup'));
+  assert.equal(page.label.textContent, 'Start warmup');
   page.fire(modeSelect(options, 'race'));
   assert.equal(page.label.textContent, 'Create race');
+});
+
+test('changing mode to warmup hides distance select and enables minutes input', function () {
+  function makeElem(initialClasses, disabled) {
+    var classes = new Set(initialClasses || []);
+    return {
+      disabled: !!disabled,
+      classList: {
+        add: function (c) { classes.add(c); },
+        remove: function (c) { classes.delete(c); },
+        contains: function (c) { return classes.has(c); }
+      }
+    };
+  }
+  var distanceField = makeElem([], false);
+  var warmupField = makeElem(['hidden'], false);
+  var distanceSelect = makeElem([], false);
+  var minutesInput = makeElem([], true);
+
+  var fakeForm = {
+    querySelector: function (sel) {
+      if (sel === '#race-type-field' || sel === '[data-mode-field="distance"]') return distanceField;
+      if (sel === '#warmup-minutes-field' || sel === '[data-mode-field="warmup"]') return warmupField;
+      if (sel === 'select[name="race_type_id"]') return distanceSelect;
+      if (sel === 'input[name="minutes"]') return minutesInput;
+      return null;
+    }
+  };
+
+  var options = modeOptions();
+  var page = load();
+
+  // Switch to warmup
+  page.fire(modeSelect(options, 'warmup', fakeForm));
+  assert.ok(distanceField.classList.contains('hidden'), 'distance field hidden');
+  assert.equal(distanceSelect.disabled, true, 'distance select disabled');
+  assert.ok(!warmupField.classList.contains('hidden'), 'warmup field visible');
+  assert.equal(minutesInput.disabled, false, 'minutes input enabled');
+
+  // Switch back to race
+  page.fire(modeSelect(options, 'race', fakeForm));
+  assert.ok(!distanceField.classList.contains('hidden'), 'distance field visible');
+  assert.equal(distanceSelect.disabled, false, 'distance select enabled');
+  assert.ok(warmupField.classList.contains('hidden'), 'warmup field hidden');
+  assert.equal(minutesInput.disabled, true, 'minutes input disabled');
 });
 
 test('a change on another select leaves the button label alone', function () {

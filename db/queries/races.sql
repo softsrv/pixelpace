@@ -32,8 +32,10 @@ FROM race_participants p JOIN users u ON u.id = p.user_id
 WHERE p.race_id = $1 ORDER BY p.id;
 
 -- name: LockRace :one
-SELECT r.*, rt.kind, rt.target_value
-FROM races r JOIN race_types rt ON rt.id = r.race_type_id
+SELECT r.*, rt.kind, rt.target_value, ro.duration_seconds
+FROM races r
+JOIN race_types rt ON rt.id = r.race_type_id
+JOIN rooms ro ON ro.id = r.room_id
 WHERE r.id = $1 FOR UPDATE OF r;
 
 -- name: IsRaceParticipant :one
@@ -102,7 +104,7 @@ LEFT JOIN LATERAL (
 WHERE p.race_id = $1 ORDER BY p.id;
 
 -- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.host_user_id
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.duration_seconds, r.host_user_id
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id

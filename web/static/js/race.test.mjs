@@ -147,8 +147,14 @@ function setupPage(options) {
     { dataset: { userId: 'u-self', self: 'true' }, textContent: 'Me' },
     { dataset: { userId: 'u-2', self: 'false' }, textContent: 'Rival' }
   ]).forEach(function (item) { laneList.appendChild(item); });
+  // A warmup page has a clock and three readings in place of the track.
+  var warmup = {};
+  if (options.mode === 'warmup') {
+    ['warmup-clock', 'warmup-distance', 'warmup-pace', 'warmup-stroke-rate'].forEach(function (id) { warmup[id] = fakeElement('div'); });
+    track.dataset.durationMs = options.durationMs || '300000';
+  }
   doc.getElementById = function (id) {
-    return { 'race-track': track, 'race-status': status, 'race-finish-modal': parts.modal, 'race-lanes': laneList, 'race-pacer-note': pacerNote }[id] || null;
+    return Object.assign({ 'race-track': track, 'race-status': status, 'race-finish-modal': parts.modal, 'race-lanes': laneList, 'race-pacer-note': pacerNote }, warmup)[id] || null;
   };
   doc.querySelectorAll = function () { return laneList.children.slice(); };
   doc.createElement = fakeElement;
@@ -172,7 +178,7 @@ function setupPage(options) {
     return respond();
   };
   return {
-    doc: doc, track: track, status: status, parts: parts, calls: calls, assigned: assigned, laneList: laneList, pacerNote: pacerNote,
+    doc: doc, track: track, status: status, parts: parts, calls: calls, assigned: assigned, laneList: laneList, pacerNote: pacerNote, warmup: warmup,
     streamStops: function () { return streamStops; }
   };
 }
@@ -1010,4 +1016,98 @@ test('note hidden in a multi-racer race', async function () {
   assert.equal(page.pacerNote.classList.contains('hidden'), true);
 
   page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+// ── Warmup ─────────────────────────────────────────────────────────────────
+
+test('a warmup draws no track, counts down a clock and shows live distance, pace and stroke rate, never a pacer note', async function () {
+  var starts = new Date(Date.now() - 61000);
+  var page = setupPage({
+    mode: 'warmup',
+    finished: false,
+    pm5: true,
+    lanes: [],
+    responses: {
+      '/rooms/r1/race/ready': function () { return jsonResponse(204, null); },
+      '/rooms/r1/race/status': function () {
+        return jsonResponse(200, { race_id: 'race-1', race_starts_at: starts.toISOString(), server_time: new Date().toISOString(), racers: [{ user_id: 'u-self', equipment_ready: true }], pacer: null });
+      }
+    }
+  });
+  var started = [];
+  var streamed = [];
+  page.doc.addEventListener('pixelpace:race-started', function () { started.push(true); });
+  globalThis.window.startRaceStream = function (id) { streamed.push(id); };
+  var pixi = makePixi();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return streamed.length === 1; });
+
+  assert.equal(pixi.graphics.length, 0, 'no track art is drawn');
+  assert.equal(pixi.ticks.length, 0, 'no track ticker runs');
+  assert.equal(pixi.texts.length, 0, 'no lane or course labels exist');
+  assert.equal(page.track.children.length, 0, 'no canvas is attached');
+  assert.equal(started.length, 1, 'the race-started event lets app.js zero its baseline');
+  assert.deepEqual(streamed, ['race-1']);
+  assert.equal(page.status.textContent, 'GO! Row until the clock reaches zero.');
+  assert.equal(page.warmup['warmup-clock'].textContent, '3:59', 'five minutes less the 61 seconds rowed');
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:local-telemetry', {
+    detail: { distance_millimeters: 250000, elapsed_milliseconds: 60000, stroke_rate: 24.4 }
+  }));
+  assert.equal(page.warmup['warmup-distance'].textContent, '250 m');
+  assert.equal(page.warmup['warmup-pace'].textContent, '2:00.0', 'time per 500m: 60 s over 250 m');
+  assert.equal(page.warmup['warmup-stroke-rate'].textContent, '24 spm');
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:local-telemetry', { detail: { distance_millimeters: 0, elapsed_milliseconds: 1000, stroke_rate: 0 } }));
+  assert.equal(page.warmup['warmup-pace'].textContent, '\u2014', 'no distance, no pace');
+  assert.equal(page.pacerNote, null, 'a warmup page carries no pacer note');
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('a warmup keeps its pacer note hidden on a pacer-null frame and ignores a pacer in a frame', async function () {
+  var page = setupPage({
+    mode: 'warmup',
+    finished: false,
+    pacerNote: true,
+    lanes: [],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        return jsonResponse(200, { server_time: new Date().toISOString(), racers: [{ user_id: 'u-self', equipment_ready: true }], pacer: null });
+      }
+    }
+  });
+  var pixi = makePixi();
+  await startRaceView(page.track, pixi.PIXI);
+  await until(function () { return page.pacerNote.hidden; });
+  assert.equal(page.pacerNote.hidden, true, 'a solo warmup is not a time trial: no first-time note');
+  assert.equal(pacerLanes(page).length, 0);
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('a warmup clock reads the full time before the start, 0:00 at the end, and the server finished frame opens the summary', async function () {
+  var startsAt = null;
+  var page = setupPage({
+    mode: 'warmup',
+    durationMs: '2000',
+    finished: false,
+    lanes: [],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        return jsonResponse(200, { race_starts_at: startsAt, server_time: new Date().toISOString(), racers: [] });
+      }
+    }
+  });
+  globalThis.window.startRaceStream = function () {};
+  var pixi = makePixi();
+  await startRaceView(page.track, pixi.PIXI);
+  assert.equal(page.warmup['warmup-clock'].textContent, '0:02', 'before the start the clock shows the whole duration');
+  startsAt = new Date(Date.now() - 5000).toISOString(); // already past the 2s duration
+  await until(function () { return page.warmup['warmup-clock'].textContent === '0:00'; });
+  assert.equal(page.warmup['warmup-clock'].textContent, '0:00', 'the clock stops at 0:00');
+  await until(function () { return /Time is up/.test(page.status.textContent); });
+  assert.match(page.status.textContent, /Time is up/);
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:local-telemetry', { detail: { distance_millimeters: 900000, elapsed_milliseconds: 9000, stroke_rate: 20 } }));
+  assert.equal(page.warmup['warmup-distance'].textContent, '', 'readings freeze once the time is up');
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+  assert.equal(page.parts.modal.open, true, "the server's finished frame opens the summary");
 });

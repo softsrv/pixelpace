@@ -75,13 +75,14 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 	}
 	user, _ := middleware.UserFromContext(r.Context())
 	data := map[string]any{
-		"User":      user,
-		"DevMode":   h.devMode,
-		"Race":      race,
-		"Lanes":     lanes,
-		"Pacer":     race.Pacer,
-		"Mode":      race.Mode,
-		"LaneCount": laneCount,
+		"User":                 user,
+		"DevMode":              h.devMode,
+		"Race":                 race,
+		"Lanes":                lanes,
+		"Pacer":                race.Pacer,
+		"Mode":                 race.Mode,
+		"DurationMilliseconds": race.DurationMilliseconds,
+		"LaneCount":            laneCount,
 	}
 	if race.Pacer != nil {
 		data["PacerLabel"] = formatPace(race.Pacer.ElapsedMilliseconds, race.TargetMillimeters)

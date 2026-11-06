@@ -19,4 +19,5 @@ FROM race_participants AS rp
 JOIN races AS r ON r.id = rp.race_id
 WHERE r.race_type_id = $1 AND rp.user_id = $2
   AND rp.status = 'finished'
+  AND r.mode <> 'warmup'
 ORDER BY rp.finished_at DESC NULLS LAST, rp.id DESC;

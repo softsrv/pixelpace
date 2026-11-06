@@ -1672,3 +1672,206 @@ func TestRaceServiceUnfinishedRaces(t *testing.T) {
 		t.Fatalf("unfinished=%v err=%v, want it without the finished race %s", ids, err, f.race.ID)
 	}
 }
+
+// seedWarmupRoom seeds a counting-down one-minute warmup room on the warmup
+// race type, as the dashboard's 'Start warmup' creates.
+func seedWarmupRoom(t *testing.T, threshold time.Duration) *raceFixture {
+	t.Helper()
+	f := seedModeRoom(t, "warmup", 1, 500000, threshold)
+	if _, err := f.pool.Exec(context.Background(), "UPDATE rooms SET race_type_id = '01950000-0000-7000-8000-000000000009' WHERE id = $1", f.room); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+// CLM-5: a started warmup ends exactly when the server clock reaches
+// started_at + duration, whatever distance was rowed: never earlier because a
+// distance (even far beyond any standard one) was reached, never later because
+// the rower sent nothing, and with no DNF and no Concept2 post.
+func TestRaceServiceWarmupEndsAtDuration(t *testing.T) {
+	const duration = time.Minute
+	for _, tc := range []struct {
+		name     string
+		distance int64 // millimetres rowed before the minute is up; < 0 sends nothing
+	}{
+		{"past 10000m", 12_000_000},
+		{"zero metres", 0},
+		{"no telemetry at all", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A staleness threshold far below the duration: it must not end a warmup.
+			f := seedWarmupRoom(t, 5*time.Millisecond)
+			lb := newFakeLogbook(t)
+			poster := newConcept2Poster(f.pool, lb)
+			f.withResultPoster(poster)
+			connectConcept2(t, f.pool, f.users[0], "warmup-user")
+			f.begin(t)
+			sub := f.subscribe(t)
+			start := f.race.StartedAt.Time
+			if tc.distance >= 0 {
+				f.ingest(t, 0, 30000, tc.distance, start.Add(30*time.Second))
+			}
+
+			stillRunning := func(label string) {
+				t.Helper()
+				if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"racing"}) {
+					t.Fatalf("%s: statuses=%v, want still racing", label, got)
+				}
+				if at := f.raceFinishedAt(t); at.Valid {
+					t.Fatalf("%s: race finished at %v, want running", label, at.Time)
+				}
+				if status := f.roomStatus(t); status != "in_progress" {
+					t.Fatalf("%s: room status=%s, want in_progress", label, status)
+				}
+			}
+			polls := 0
+			f.onSleep = func() {
+				polls++
+				switch polls {
+				case 1:
+					f.now = start.Add(30 * time.Second)
+					stillRunning("mid-warmup")
+				case 2:
+					f.now = start.Add(duration - time.Millisecond)
+				case 3:
+					stillRunning("one millisecond before the end")
+					f.now = start.Add(duration)
+				}
+			}
+			if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+				t.Fatal(err)
+			}
+			if polls != 3 {
+				t.Fatalf("Run polled %d times, want 3: it must end exactly at the duration", polls)
+			}
+			if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished"}) {
+				t.Fatalf("statuses=%v, want finished and no DNF", got)
+			}
+			var elapsed int32
+			if err := f.pool.QueryRow(context.Background(), "SELECT elapsed_milliseconds FROM race_participants WHERE race_id = $1", f.race.ID).Scan(&elapsed); err != nil || elapsed != int32(duration.Milliseconds()) {
+				t.Fatalf("participant elapsed=%d err=%v, want the full duration", elapsed, err)
+			}
+			if at := f.raceFinishedAt(t); !at.Valid || !at.Time.Equal(start.Add(duration)) {
+				t.Fatalf("races.finished_at=%+v, want %v", at, start.Add(duration))
+			}
+			if status := f.roomStatus(t); status != "finished" {
+				t.Fatalf("room status=%s, want finished", status)
+			}
+			if frames := finishedFrames(t, drain(sub)); len(frames) != 1 {
+				t.Fatalf("finished frames=%v, want one", frames)
+			}
+			if posts := resultPosts(t, f.pool, f.race.ID); len(posts) != 0 {
+				t.Fatalf("posts=%+v, want none for a warmup", posts)
+			}
+			// A finished warmup is final: a second Run returns at once.
+			f.onSleep = func() { t.Fatal("Run polled a finished warmup") }
+			if err := f.svc.Run(context.Background(), f.race.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// CLM-4: RoomRace for a warmup room never returns a time-trial pacer, even when
+// the host has a time-trial personal best.
+func TestRaceServiceRoomRaceWarmupNeverReturnsPacer(t *testing.T) {
+	f := seedWarmupRoom(t, time.Minute)
+	ctx := context.Background()
+	f.begin(t)
+	start := f.race.StartedAt.Time
+
+	// Seed an earlier finished Time Trial for the host at both a standard distance
+	// and at the Warmup sentinel race type (which matches f.room's race_type_id).
+	// Without the sentinel PB, timeTrialPacer finds nothing regardless of the mode
+	// guard; with it, only the mode guard prevents the warmup getting a pacer.
+	var distanceType uuid.UUID
+	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' ORDER BY target_value LIMIT 1").Scan(&distanceType); err != nil {
+		t.Fatal(err)
+	}
+	sentinelType := app.WarmupRaceTypeID
+	f.seedHistory(t, 0,
+		pastResult{distanceType, start.Add(-time.Hour), true, "finished", 110000},
+		pastResult{sentinelType, start.Add(-time.Hour), true, "finished", 100000},
+	)
+
+	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatalf("RoomRace for warmup room: %v", err)
+	}
+	if view.Mode != app.ModeWarmup {
+		t.Fatalf("view.Mode = %q, want %q", view.Mode, app.ModeWarmup)
+	}
+	if view.Pacer != nil {
+		t.Fatalf("view.Pacer = %+v, want nil for warmup", view.Pacer)
+	}
+	if view.DurationMilliseconds != 60000 {
+		t.Fatalf("view.DurationMilliseconds = %d, want 60000 (1 minute)", view.DurationMilliseconds)
+	}
+}
+
+// CLM-7: after a warmup finishes, Results read fresh from the DB returns
+// distance, elapsed time and average pace, with no rank and no target.
+func TestRaceServiceResultsWarmupSummary(t *testing.T) {
+	const duration = time.Minute
+	f := seedWarmupRoom(t, duration)
+	ctx := context.Background()
+	f.begin(t)
+
+	// Ingest telemetry samples during the warmup.
+	const distanceMillimeters int64 = 250000 // 250m
+	f.ingest(t, 0, 30000, distanceMillimeters, f.now.Add(30*time.Second))
+
+	// Fast-forward to the end of warmup and let Run finalize.
+	f.now = f.race.StartedAt.Time.Add(duration)
+	if err := f.svc.Run(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.participantStatuses(t); !reflect.DeepEqual(got, []string{"finished"}) {
+		t.Fatalf("statuses=%v, want finished", got)
+	}
+
+	// Read Results fresh from DB.
+	results, err := f.svc.Results(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatalf("Results failed: %v", err)
+	}
+	if !results.Finished {
+		t.Fatalf("results.Finished = false, want true")
+	}
+	if results.TargetMillimeters != 0 {
+		t.Fatalf("results.TargetMillimeters = %d, want 0 (no target)", results.TargetMillimeters)
+	}
+	if results.Mode != app.ModeWarmup {
+		t.Fatalf("results.Mode = %q, want %q", results.Mode, app.ModeWarmup)
+	}
+	if len(results.Results) != 1 {
+		t.Fatalf("len(results.Results) = %d, want 1", len(results.Results))
+	}
+	res := results.Results[0]
+	if res.UserID != f.users[0] {
+		t.Fatalf("res.UserID = %v, want %v", res.UserID, f.users[0])
+	}
+	if res.Rank != nil {
+		t.Fatalf("res.Rank = %+v, want nil (no rank)", res.Rank)
+	}
+	if res.DistanceMillimeters != distanceMillimeters {
+		t.Fatalf("res.DistanceMillimeters = %d, want %d", res.DistanceMillimeters, distanceMillimeters)
+	}
+	if res.ElapsedMilliseconds == nil || *res.ElapsedMilliseconds != duration.Milliseconds() {
+		t.Fatalf("res.ElapsedMilliseconds = %v, want %d", res.ElapsedMilliseconds, duration.Milliseconds())
+	}
+	// Pace: 60000ms * 500000 / 250000mm = 120000ms (2:00.0)
+	expectedPace := duration.Milliseconds() * 500000 / distanceMillimeters
+	if res.PaceMillisecondsPer500m == nil || *res.PaceMillisecondsPer500m != expectedPace {
+		t.Fatalf("res.PaceMillisecondsPer500m = %v, want %d", res.PaceMillisecondsPer500m, expectedPace)
+	}
+
+	// Reloading (a fresh call) returns the same persisted results.
+	reloaded, err := f.svc.Results(ctx, f.room, f.users[0])
+	if err != nil {
+		t.Fatalf("reloaded Results: %v", err)
+	}
+	if !reflect.DeepEqual(reloaded, results) {
+		t.Fatalf("reloaded results differ from initial:\ninitial:  %+v\nreloaded: %+v", results, reloaded)
+	}
+}

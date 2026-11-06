@@ -909,7 +909,11 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	typeID := uuid.MustParse("01950000-0000-7000-8000-000000000003")
 	inviteID := uuid.MustParse("01950000-0000-7000-8000-0000000000ff")
 	var card, invites strings.Builder
-	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{"RaceTypes": []app.RaceTypeOption{{ID: typeID, Label: "2000m"}}}); err != nil {
+	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{
+		"RaceTypes":        []app.RaceTypeOption{{ID: typeID, Label: "2000m"}},
+		"WarmupMinutesMin": app.MinWarmupMinutes,
+		"WarmupMinutesMax": app.MaxWarmupMinutes,
+	}); err != nil {
 		t.Fatalf("execute race-card: %v", err)
 	}
 	for _, want := range []string{
@@ -918,7 +922,14 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 		`data-submit-label-target="#create-room-submit-label"`,
 		`<option value="race" data-submit-label="Create race" selected>Race</option>`,
 		`<option value="time_trial" data-submit-label="Start time trial">Time trial</option>`,
+		`<option value="warmup" data-submit-label="Start warmup">Warmup</option>`,
 		`<span id="create-room-submit-label">Create race</span></button>`,
+		`name="minutes"`,
+		`min="1"`,
+		`max="20"`,
+		`step="1"`,
+		`Start warmup`,
+		`id="create-room-error"`,
 		`<option value="` + typeID.String() + `">2000m</option>`,
 		`hx-post="/rooms/join"`,
 		`name="join_code"`,

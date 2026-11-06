@@ -260,6 +260,53 @@ func TestRacePageSoloWithoutPacerShowsFirstTimeNoteAndNullStatusPacer(t *testing
 		t.Errorf("1-entrant mode=race unexpectedly has id=\"race-pacer-note\": %q", rrOne.Body.String())
 	}
 
+	// 1-entrant session in mode 'warmup': note is absent, pacer is null in status
+	warmupViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID:               roomID,
+			Label:                "Warmup",
+			Mode:                 app.ModeWarmup,
+			DurationMilliseconds: 300000,
+			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
+			Pacer:                nil,
+		}, nil
+	}}
+	rrWarmup := serveRaceWith(t, newProductionRenderer(t), warmupViewer, user, roomID.String(), racePageEndpoint)
+	if rrWarmup.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rrWarmup.Code, rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), "set your first time") {
+		t.Errorf("warmup unexpectedly has note: %q", rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), `id="race-pacer-note"`) {
+		t.Errorf("warmup unexpectedly has id=\"race-pacer-note\": %q", rrWarmup.Body.String())
+	}
+	if strings.Contains(rrWarmup.Body.String(), "data-pacer") {
+		t.Errorf("warmup unexpectedly has data-pacer: %q", rrWarmup.Body.String())
+	}
+	// CLM-6: the warmup page carries its mode and duration and no track.
+	for _, want := range []string{`data-mode="warmup"`, `data-duration-ms="300000"`, `id="warmup-clock"`, `id="warmup-distance"`, `id="warmup-pace"`, `id="warmup-stroke-rate"`} {
+		if !strings.Contains(rrWarmup.Body.String(), want) {
+			t.Errorf("warmup page missing %s; body=%q", want, rrWarmup.Body.String())
+		}
+	}
+	for _, unwanted := range []string{`id="race-track"`, `id="race-lanes"`, "pixi.min.js", "lanes</span>"} {
+		if strings.Contains(rrWarmup.Body.String(), unwanted) {
+			t.Errorf("warmup page unexpectedly contains %s; body=%q", unwanted, rrWarmup.Body.String())
+		}
+	}
+	warmupStatusRR := serveRacePage(t, warmupViewer, user, roomID.String(), raceStatusEndpoint)
+	if warmupStatusRR.Code != http.StatusOK {
+		t.Fatalf("warmup status code = %d, want 200", warmupStatusRR.Code)
+	}
+	var warmupStatusData map[string]any
+	if err := json.Unmarshal(warmupStatusRR.Body.Bytes(), &warmupStatusData); err != nil {
+		t.Fatalf("unmarshal warmup status JSON: %v", err)
+	}
+	if p, ok := warmupStatusData["pacer"]; !ok || p != nil {
+		t.Errorf("warmup status pacer = %v, want null (ok=%v)", p, ok)
+	}
+
 	// 2-entrant race: note is absent
 	rival := uuid.New()
 	twoRacerViewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
@@ -449,6 +496,41 @@ func TestRacePageRendersFinishModalAndFinishedState(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// CLM-7: Rendering a finished warmup carries the finished state and summary modal markup.
+func TestRacePageRendersFinishedWarmupSummary(t *testing.T) {
+	user := db.User{ID: uuid.New(), Email: "self@example.com", EmailVerified: true}
+	roomID, raceID := uuid.New(), uuid.New()
+	viewer := &stubRoomRaceViewer{roomRaceFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomRace, error) {
+		return app.RoomRace{
+			RoomID:               roomID,
+			RaceID:               &raceID,
+			Label:                "Warmup",
+			Mode:                 app.ModeWarmup,
+			DurationMilliseconds: 300000,
+			Racers:               []app.RaceRacer{racer(user.ID, "Me", true)},
+			Finished:             true,
+		}, nil
+	}}
+
+	rr := serveRaceWith(t, newProductionRenderer(t), viewer, user, roomID.String(), racePageEndpoint)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		`<dialog id="race-finish-modal" class="modal">`,
+		`FINISH!`,
+		`<th>Pace / 500m</th>`,
+		`data-mode="warmup"`,
+		`data-finished="true"`,
+		`data-results-url="/rooms/` + roomID.String() + `/race/results"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("race page missing %q", want)
+		}
 	}
 }
 

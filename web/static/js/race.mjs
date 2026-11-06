@@ -26,7 +26,7 @@
 // its time changes, or removes it (pacer null).
 
 import { countdownLabel, laneCenterX, pacerDistance, progressFraction, trackY } from './race-track.mjs';
-import { formatPace } from './race-results.mjs';
+import { formatDistance, formatPace } from './race-results.mjs';
 import {
   BOAT_POSES, BOAT_ROWS, BOAT_COLS, COLORS, GLYPH_ROWS, PACER_HULL,
   advanceStroke, boatCells, cellColor, hullColor, pixelScale, snap, strokePose, textCells
@@ -42,6 +42,7 @@ var RIPPLE_ROW_SPEED = 40; // px/s it rushes past once we are rowing
 var POLL_INTERVAL_MS = 500;
 var FINISH_POLL_MS = 5000; // while racing, how often to check whether the race has ended
 var READY_RETRY_MS = 2000;
+var WARMUP_TICK_MS = 200; // how often a warmup's clock is redrawn
 var UNREADY_ALPHA = 0.35; // rivals still connecting their equipment are dimmed
 var EASE_PER_FRAME = 0.15; // share of the remaining gap a rower closes each 60fps frame
 var PACER_STROKE_RATE = 24; // the pacer has no live stroke rate; its oars sweep at this one
@@ -52,8 +53,11 @@ var REMOVED_MESSAGE = 'You were removed from this race because your rowing machi
 var RESULTS_ERROR_MESSAGE = 'We couldn\u2019t load the results. You can still head back to the dashboard.';
 
 // Guarded so node tests can import this module without a DOM.
-var trackEl = typeof document !== 'undefined' ? document.getElementById('race-track') : null;
-if (trackEl && window.PIXI) startRaceView(trackEl, window.PIXI);
+var trackEl = typeof document !== 'undefined'
+  ? document.getElementById('race-track') || document.getElementById('race-warmup')
+  : null;
+// A warmup draws no track, so it does not wait for PIXI.
+if (trackEl && (window.PIXI || trackEl.dataset.mode === 'warmup')) startRaceView(trackEl, window.PIXI);
 
 // Once the race is over, the server sends a finished frame (app.js turns it
 // into `pixelpace:race-finished`) or, on a reload, renders data-finished="true".
@@ -63,6 +67,10 @@ export async function startRaceView(trackEl, PIXI) {
   var selfId = trackEl.dataset.selfId;
   var targetMillimeters = Number(trackEl.dataset.targetMm);
   var mode = trackEl.dataset.mode;
+  // A warmup is a timed solo session: no track, no pacer, a countdown clock
+  // beside the rower's live distance, pace and stroke rate.
+  var warmup = mode === 'warmup';
+  var durationMs = Number(trackEl.dataset.durationMs);
   var statusUrl = trackEl.dataset.statusUrl;
   var readyUrl = trackEl.dataset.readyUrl;
   var lobbyUrl = trackEl.dataset.lobbyUrl;
@@ -110,6 +118,11 @@ export async function startRaceView(trackEl, PIXI) {
   var modalOpened = false;
   var checkingRemoval = false; // a finished reload's status check is in flight
   var countdownText = null; // assigned once the canvas has initialised
+  var timeUp = false; // a warmup's clock has reached zero
+  var clockEl = warmup ? document.getElementById('warmup-clock') : null;
+  var distanceEl = warmup ? document.getElementById('warmup-distance') : null;
+  var paceEl = warmup ? document.getElementById('warmup-pace') : null;
+  var strokeRateEl = warmup ? document.getElementById('warmup-stroke-rate') : null;
 
   document.addEventListener('pixelpace:race-finished', openFinishModal);
   var doneBtn = modalEl ? modalEl.querySelector('button[data-finish-done]') : null;
@@ -122,86 +135,94 @@ export async function startRaceView(trackEl, PIXI) {
   // removal can be reported while it is still loading.
   if (finishedOnLoad) checkFinishedOnLoad();
 
-  var app = new PIXI.Application();
-  await app.init({
-    resizeTo: trackEl,
-    background: COLORS.water,
-    antialias: false,
-    roundPixels: true,
-    autoDensity: true,
-    resolution: window.devicePixelRatio || 1
-  });
-  trackEl.appendChild(app.canvas);
-
-  var water = new PIXI.Graphics();
-  var ripples = new PIXI.Container();
-  var rippleArt = new PIXI.Graphics();
-  ripples.addChild(rippleArt);
-  var course = new PIXI.Graphics();
-  var startText = courseLabel(PIXI, 'START');
-  var finishText = courseLabel(PIXI, 'FINISH');
-  countdownText = createPixelLabel(PIXI);
-  app.stage.addChild(water, ripples, course, startText, finishText);
-  var scale = pixelScale(app.screen.width / Math.max(1, lanes.length));
-  var rivalIndex = 0;
-  // The pacer takes no rival slot, so rivals keep the colours they have without it.
-  lanes.forEach(function (lane) {
-    lane.sprite = createRower(PIXI, lane, lane.isSelf || lane.isPacer ? 0 : rivalIndex++, scale);
-    app.stage.addChild(lane.sprite);
-  });
-  app.stage.addChild(countdownText.view);
-  var rippleOffset = 0;
-  var rippleSpeed = RIPPLE_IDLE_SPEED;
-
+  // A warmup has no track: no canvas, lanes, boats or pacer are ever created.
+  var app = null;
+  var scale = 1;
   var drawnWidth = 0;
   var drawnHeight = 0;
-  app.ticker.add(function (ticker) {
-    var geometry = courseGeometry(app.screen);
-    if (geometry.width !== drawnWidth || geometry.height !== drawnHeight) {
-      drawWater(water, rippleArt, geometry);
-      drawCourse(course, startText, finishText, geometry, lanes.length);
-      countdownText.view.position.set(geometry.width / 2, geometry.height / 2);
-      // "GO!" is the widest label (13 cells); keep it inside narrow (phone) tracks.
-      countdownText.setCellSize(Math.max(4, Math.min(16, Math.floor((geometry.width * 0.5) / 13))));
-      var nextScale = pixelScale(geometry.width / Math.max(1, lanes.length));
-      if (nextScale !== scale) {
-        scale = nextScale;
-        lanes.forEach(function (lane) { lane.sprite.setScale(scale); });
-      }
-      drawnWidth = geometry.width;
-      drawnHeight = geometry.height;
-    }
-    if (startsAt !== null) {
-      var remaining = startsAt - (Date.now() + clockOffset);
-      countdownText.text = countdownLabel(remaining);
-      if (remaining <= 0 && !racing) go();
-    }
-    var ease = 1 - Math.pow(1 - EASE_PER_FRAME, ticker.deltaTime);
-    var elapsedMs = ticker.deltaMS || ticker.deltaTime * (1000 / 60);
-    var serverNow = Date.now() + clockOffset;
-    lanes.forEach(function (lane, index) {
-      // The pacer rows its personal best from the start on the server clock:
-      // still before GO, and already partway down the course on a mid-race load.
-      if (lane.isPacer) lane.distanceMillimeters = startsAt === null ? 0 : pacerDistance(serverNow - startsAt, lane.pacerMs, targetMillimeters);
-      var fraction = progressFraction(lane.distanceMillimeters, targetMillimeters);
-      var targetY = trackY(fraction, geometry.startY, geometry.finishY);
-      // The pacer's position is exact at every frame, so it needs no easing.
-      lane.y = lane.y === null || lane.isPacer ? targetY : lane.y + (targetY - lane.y) * ease;
-      lane.sprite.position.set(snap(laneCenterX(index, lanes.length, geometry.width), scale), snap(lane.y, scale));
-      // Oars sweep at the racer's own stroke rate; across the line they rest.
-      var rate = lane.isPacer ? PACER_STROKE_RATE : lane.strokeRate;
-      var rowing = racing && fraction < 1 ? rate : 0;
-      lane.strokePhase = advanceStroke(lane.strokePhase, rowing, elapsedMs);
-      lane.sprite.setPose(strokePose(lane.strokePhase), rowing > 0);
+  if (!warmup) {
+    app = new PIXI.Application();
+    await app.init({
+      resizeTo: trackEl,
+      background: COLORS.water,
+      antialias: false,
+      roundPixels: true,
+      autoDensity: true,
+      resolution: window.devicePixelRatio || 1
     });
-    // The water rushes past while we row and drifts while we don't.
-    var wantSpeed = racing && !finished && self && self.strokeRate > 0 ? RIPPLE_ROW_SPEED : RIPPLE_IDLE_SPEED;
-    rippleSpeed += (wantSpeed - rippleSpeed) * ease * 0.1;
-    rippleOffset = (rippleOffset + (rippleSpeed * elapsedMs) / 1000) % Math.max(1, geometry.height);
-    ripples.y = snap(rippleOffset, scale) - geometry.height;
-  });
+    trackEl.appendChild(app.canvas);
+
+    var water = new PIXI.Graphics();
+    var ripples = new PIXI.Container();
+    var rippleArt = new PIXI.Graphics();
+    ripples.addChild(rippleArt);
+    var course = new PIXI.Graphics();
+    var startText = courseLabel(PIXI, 'START');
+    var finishText = courseLabel(PIXI, 'FINISH');
+    countdownText = createPixelLabel(PIXI);
+    app.stage.addChild(water, ripples, course, startText, finishText);
+    scale = pixelScale(app.screen.width / Math.max(1, lanes.length));
+    var rivalIndex = 0;
+    // The pacer takes no rival slot, so rivals keep the colours they have without it.
+    lanes.forEach(function (lane) {
+      lane.sprite = createRower(PIXI, lane, lane.isSelf || lane.isPacer ? 0 : rivalIndex++, scale);
+      app.stage.addChild(lane.sprite);
+    });
+    app.stage.addChild(countdownText.view);
+    var rippleOffset = 0;
+    var rippleSpeed = RIPPLE_IDLE_SPEED;
+
+  
+  
+    app.ticker.add(function (ticker) {
+      var geometry = courseGeometry(app.screen);
+      if (geometry.width !== drawnWidth || geometry.height !== drawnHeight) {
+        drawWater(water, rippleArt, geometry);
+        drawCourse(course, startText, finishText, geometry, lanes.length);
+        countdownText.view.position.set(geometry.width / 2, geometry.height / 2);
+        // "GO!" is the widest label (13 cells); keep it inside narrow (phone) tracks.
+        countdownText.setCellSize(Math.max(4, Math.min(16, Math.floor((geometry.width * 0.5) / 13))));
+        var nextScale = pixelScale(geometry.width / Math.max(1, lanes.length));
+        if (nextScale !== scale) {
+          scale = nextScale;
+          lanes.forEach(function (lane) { lane.sprite.setScale(scale); });
+        }
+        drawnWidth = geometry.width;
+        drawnHeight = geometry.height;
+      }
+      if (startsAt !== null) {
+        var remaining = startsAt - (Date.now() + clockOffset);
+        countdownText.text = countdownLabel(remaining);
+        if (remaining <= 0 && !racing) go();
+      }
+      var ease = 1 - Math.pow(1 - EASE_PER_FRAME, ticker.deltaTime);
+      var elapsedMs = ticker.deltaMS || ticker.deltaTime * (1000 / 60);
+      var serverNow = Date.now() + clockOffset;
+      lanes.forEach(function (lane, index) {
+        // The pacer rows its personal best from the start on the server clock:
+        // still before GO, and already partway down the course on a mid-race load.
+        if (lane.isPacer) lane.distanceMillimeters = startsAt === null ? 0 : pacerDistance(serverNow - startsAt, lane.pacerMs, targetMillimeters);
+        var fraction = progressFraction(lane.distanceMillimeters, targetMillimeters);
+        var targetY = trackY(fraction, geometry.startY, geometry.finishY);
+        // The pacer's position is exact at every frame, so it needs no easing.
+        lane.y = lane.y === null || lane.isPacer ? targetY : lane.y + (targetY - lane.y) * ease;
+        lane.sprite.position.set(snap(laneCenterX(index, lanes.length, geometry.width), scale), snap(lane.y, scale));
+        // Oars sweep at the racer's own stroke rate; across the line they rest.
+        var rate = lane.isPacer ? PACER_STROKE_RATE : lane.strokeRate;
+        var rowing = racing && fraction < 1 ? rate : 0;
+        lane.strokePhase = advanceStroke(lane.strokePhase, rowing, elapsedMs);
+        lane.sprite.setPose(strokePose(lane.strokePhase), rowing > 0);
+      });
+      // The water rushes past while we row and drifts while we don't.
+      var wantSpeed = racing && !finished && self && self.strokeRate > 0 ? RIPPLE_ROW_SPEED : RIPPLE_IDLE_SPEED;
+      rippleSpeed += (wantSpeed - rippleSpeed) * ease * 0.1;
+      rippleOffset = (rippleOffset + (rippleSpeed * elapsedMs) / 1000) % Math.max(1, geometry.height);
+      ripples.y = snap(rippleOffset, scale) - geometry.height;
+    });
+  }
 
   document.addEventListener('pixelpace:local-telemetry', function (evt) {
+    if (warmup) return showWarmupMetrics(evt.detail);
     if (!racing || !self) return;
     self.distanceMillimeters = evt.detail.distance_millimeters;
     if (typeof evt.detail.stroke_rate === 'number') self.strokeRate = evt.detail.stroke_rate;
@@ -227,7 +248,11 @@ export async function startRaceView(trackEl, PIXI) {
     else if (!racing && !stopped) setStatus('Your rowing machine disconnected. Reconnect it to make the start.');
   });
   // A finished race has nothing left to join or poll for.
-  if (finishedOnLoad) return;
+  if (finishedOnLoad) {
+    if (warmup) setText(clockEl, countdownLabel(durationMs, durationMs));
+    return;
+  }
+  if (warmup) tickWarmupClock();
   reportReady();
   if (!reported) setStatus('Connect your rowing machine to take your place at the start.');
   pollStatus();
@@ -270,7 +295,10 @@ export async function startRaceView(trackEl, PIXI) {
     if (Array.isArray(status.racers)) syncLanes(status.racers);
     pacerNoteEl = pacerNoteEl || document.getElementById('race-pacer-note');
     // An absent key leaves the pacer as it is; null means there is none.
-    if (status.pacer === null) {
+    if (warmup) {
+      // A warmup never has a pacer or its note, whatever the frame says.
+      setHidden(pacerNoteEl, true);
+    } else if (status.pacer === null) {
       removePacer();
       if (mode === 'time_trial' && (!Array.isArray(status.racers) || status.racers.length <= 1)) {
         setHidden(pacerNoteEl, false);
@@ -376,8 +404,45 @@ export async function startRaceView(trackEl, PIXI) {
     racing = true;
     lanes.forEach(function (lane) { lane.sprite.alpha = 1; });
     document.dispatchEvent(new CustomEvent('pixelpace:race-started', { detail: { raceId: raceId } }));
-    setStatus('GO! Row toward the finish line.');
+    setStatus(warmup ? 'GO! Row until the clock reaches zero.' : 'GO! Row toward the finish line.');
     if (raceId) startStreaming();
+  }
+
+  // Redraws the warmup clock from the server clock until the time is up or the
+  // view stops. Before the start it shows the 10-second countdown, then the
+  // time left in m:ss, clamped at 0:00. Zero ends our rowing; the server's
+  // finished frame (or the status check) then opens the summary.
+  function tickWarmupClock() {
+    if (stopped) return;
+    if (startsAt === null) {
+      setText(clockEl, countdownLabel(durationMs, 0));
+    } else {
+      var sinceStart = Date.now() + clockOffset - startsAt;
+      if (sinceStart < 0) {
+        setText(clockEl, countdownLabel(-sinceStart));
+      } else {
+        if (!racing) go();
+        setText(clockEl, countdownLabel(durationMs, sinceStart));
+        if (sinceStart >= durationMs && !timeUp) {
+          timeUp = true;
+          setStatus('Time is up! Finishing your warmup\u2026');
+        }
+        if (timeUp) return; // the clock rests at 0:00 until the finished frame
+      }
+    }
+    setTimeout(tickWarmupClock, WARMUP_TICK_MS);
+  }
+
+  // Our own sample, as app.js sends it: distance and elapsed time since the
+  // start, and the stroke rate. Pace is the time per 500m covered so far.
+  function showWarmupMetrics(sample) {
+    if (!racing || timeUp || !sample) return;
+    var distanceMm = Number(sample.distance_millimeters);
+    if (Number.isNaN(distanceMm)) return;
+    setText(distanceEl, formatDistance(distanceMm / 1000));
+    var elapsedMs = Number(sample.elapsed_milliseconds);
+    setText(paceEl, distanceMm > 0 && elapsedMs > 0 ? formatPace((elapsedMs * 500000) / distanceMm) : '\u2014');
+    if (typeof sample.stroke_rate === 'number') setText(strokeRateEl, Math.round(sample.stroke_rate) + ' spm');
   }
 
   function startStreaming() {
@@ -442,7 +507,7 @@ export async function startRaceView(trackEl, PIXI) {
     if (!body) return showResultsError();
     try {
       var helpers = await import('./race-results.mjs');
-      renderResults(helpers.resultRows(body, selfId));
+      renderResults(helpers.resultRows(body, selfId, mode));
     } catch (_) {
       showResultsError();
     }
@@ -454,10 +519,15 @@ export async function startRaceView(trackEl, PIXI) {
     var tbody = modalEl.querySelector('tbody');
     if (!tbody) return showResultsError();
     tbody.textContent = '';
+    var isWarmup = Boolean((result && (result.mode === 'warmup' || result.isWarmup || result.hasRank === false)) || mode === 'warmup');
+    var rankTh = modalEl.querySelector('th:first-child');
+    if (rankTh && rankTh.textContent.trim().toLowerCase() === 'rank') {
+      setHidden(rankTh, isWarmup);
+    }
     if (message) {
       var messageRow = document.createElement('tr');
       var messageCell = document.createElement('td');
-      messageCell.colSpan = 5;
+      messageCell.colSpan = isWarmup ? 4 : 5;
       messageCell.textContent = message;
       messageRow.appendChild(messageCell);
       tbody.appendChild(messageRow);
@@ -466,7 +536,10 @@ export async function startRaceView(trackEl, PIXI) {
       var tr = document.createElement('tr');
       if (row.isSelf) tr.classList.add('font-bold');
       var isDnf = String(row.status || '').toLowerCase() === 'dnf';
-      [row.rank || (isDnf ? 'DNF' : ''), row.name, row.time, row.distance, row.pace].forEach(function (text) {
+      var cols = isWarmup
+        ? [row.name, row.time, row.distance, row.pace]
+        : [row.rank || (isDnf ? 'DNF' : ''), row.name, row.time, row.distance, row.pace];
+      cols.forEach(function (text) {
         var td = document.createElement('td');
         td.textContent = text == null ? '' : String(text);
         tr.appendChild(td);
@@ -513,6 +586,10 @@ export async function startRaceView(trackEl, PIXI) {
   function setStatus(message) {
     if (statusEl) statusEl.textContent = message;
   }
+}
+
+function setText(el, text) {
+  if (el) el.textContent = text;
 }
 
 function pm5Connected() {

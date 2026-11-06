@@ -8,16 +8,27 @@ VALKEY_NAME      := $(APP_NAME)-valkey
 VALKEY_PORT      := 6379
 DEV_NAME         := $(APP_NAME)-dev
 DEV_IMAGE        := $(APP_NAME)-dev
+# The one owner of the sqlc version: CI installs it via `make sqlc-install`,
+# and sqlc-check refuses any other version (it is recorded in the headers of
+# the generated files under internal/db).
+SQLC_VERSION     := v1.31.1
+# Where `make sqlc-install` puts sqlc (go install: GOBIN, else the first GOPATH
+# entry's bin). The sqlc targets run that binary when it exists, so they work
+# without GOPATH/bin on PATH (as in CI); otherwise they use `sqlc` on PATH.
+SQLC_INSTALL_DIR  = $(or $(shell go env GOBIN),$(firstword $(subst :, ,$(shell go env GOPATH)))/bin)
+SQLC              = $(if $(wildcard $(SQLC_INSTALL_DIR)/sqlc),$(SQLC_INSTALL_DIR)/sqlc,sqlc)
 
 # Load .env if present (for local dev convenience)
 -include .env
 export
+# Make-only: keep the bare `export` above from running `go env` for every recipe.
+unexport SQLC_INSTALL_DIR SQLC
 
 .PHONY: dev dev-deps dev-container dev-logs dev-stop run build test fmt lint \
         daisyui-install pixi-install tailwind tailwind-watch \
         smtp4dev smtp4dev-stop valkey valkey-stop \
         migrate-up migrate-down migrate-create migrate-status \
-        sqlc-generate \
+        sqlc-install sqlc-generate sqlc-check \
         docker-build docker-run prod clean
 
 ## ── Development ─────────────────────────────────────────────────────────────
@@ -170,7 +181,31 @@ migrate-status:
 	migrate -path db/migrations -database "$(DATABASE_URL)" version
 
 sqlc-generate:
-	sqlc generate -f db/sqlc.yaml
+	$(SQLC) generate -f db/sqlc.yaml
+
+sqlc-install:
+	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+
+# Fails when sqlc is missing or not $(SQLC_VERSION), when git fails, or when
+# regenerating changes or adds any file under internal/db.
+sqlc-check:
+	@command -v $(SQLC) >/dev/null 2>&1 || { \
+		echo "sqlc not found in $(SQLC_INSTALL_DIR) or on PATH: run 'make sqlc-install' (installs sqlc $(SQLC_VERSION))" >&2; \
+		exit 1; \
+	}
+	@v=$$($(SQLC) version) || { echo "sqlc-check: 'sqlc version' failed" >&2; exit 1; }; \
+	if [ "$$v" != "$(SQLC_VERSION)" ]; then \
+		echo "sqlc $$v found, but internal/db is generated with $(SQLC_VERSION): run 'make sqlc-install'" >&2; \
+		exit 1; \
+	fi
+	@$(MAKE) --no-print-directory sqlc-generate
+	@out=$$(git status --porcelain -- internal/db) || { echo "sqlc-check: git status failed" >&2; exit 1; }; \
+	if [ -n "$$out" ]; then \
+		echo "internal/db is stale; run 'make sqlc-generate' and commit:" >&2; \
+		echo "$$out"; \
+		git diff -- internal/db; \
+		exit 1; \
+	fi
 
 ## ── Docker ───────────────────────────────────────────────────────────────────
 

@@ -22,6 +22,8 @@ make migrate-down                 # Roll back last migration
 make migrate-create NAME=<name>   # Create new migration pair
 make migrate-status               # Show current migration version
 make sqlc-generate                # Regenerate internal/db/ from db/queries/
+make sqlc-install                 # Install the pinned sqlc (SQLC_VERSION in Makefile)
+make sqlc-check                   # Verify internal/db/ matches what sqlc generates (CI fails when internal/db is stale); fails if sqlc is not the pinned version
 
 # CSS
 make daisyui-install  # Download DaisyUI .mjs bundles (re-run on DaisyUI upgrades)

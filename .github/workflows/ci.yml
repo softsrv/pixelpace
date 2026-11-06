@@ -62,6 +62,12 @@ jobs:
             exit 1
           fi
 
+      - name: Install sqlc
+        run: make sqlc-install
+
+      - name: Check sqlc freshness
+        run: make sqlc-check
+
       - name: Build
         run: make build
 

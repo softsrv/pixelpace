@@ -178,7 +178,7 @@ type roomOperation struct {
 func roomOperations() []roomOperation {
 	roomID, raceID, targetID := uuid.New(), uuid.New(), uuid.New()
 	return []roomOperation{
-		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}, "mode": {app.ActivityTypeRace}}, roomCall{operation: "create", raceID: raceID, mode: app.ActivityTypeRace}, http.StatusCreated},
+		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}, "activity_type": {app.ActivityTypeRace}}, roomCall{operation: "create", raceID: raceID, mode: app.ActivityTypeRace}, http.StatusCreated},
 		{"join", (*handlers.RoomHandler).Join, "/rooms/join", url.Values{"join_code": {" ABC234 "}}, roomCall{operation: "join", code: "ABC234"}, http.StatusOK},
 		{"leave", (*handlers.RoomHandler).Leave, "/rooms/" + roomID.String() + "/leave", url.Values{}, roomCall{operation: "leave", roomID: roomID}, http.StatusNoContent},
 		{"kick", (*handlers.RoomHandler).Kick, "/rooms/" + roomID.String() + "/kick", url.Values{"target_user_id": {targetID.String()}}, roomCall{operation: "kick", roomID: roomID, targetID: targetID}, http.StatusNoContent},
@@ -346,16 +346,16 @@ func TestRoomCreateInvalidOrMissingModeRejected(t *testing.T) {
 		{"missing mode", url.Values{"race_type_id": {raceTypeID.String()}}},
 		{"empty mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {""}}},
 		{"sprint mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {"sprint"}}},
+		{"empty activity_type", url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {""}}},
+		{"sprint activity_type", url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {"sprint"}}},
+		{"unknown activity_type", url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {"marathon"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
 			svc := &stubRoomService{
 				createFn: func(ctx context.Context, userID, rID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
-					switch mode {
-					case app.ActivityTypeRace, app.ActivityTypeTimeTrial:
-						return stubRoomID, "ABC234", nil
-					default:
-						return uuid.Nil, "", app.ErrInvalidActivityType
-					}
+					calls++
+					return stubRoomID, "ABC234", nil
 				},
 			}
 			op := roomOperation{
@@ -370,10 +370,45 @@ func TestRoomCreateInvalidOrMissingModeRejected(t *testing.T) {
 			if rr.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%q", rr.Code, rr.Body.String())
 			}
+			if calls != 0 {
+				t.Fatalf("service calls = %d, want 0 (no room created on invalid activity_type)", calls)
+			}
 			if redirect := rr.Header().Get("HX-Redirect"); redirect != "" {
 				t.Fatalf("HX-Redirect = %q, want none", redirect)
 			}
 		})
+	}
+}
+
+// TestRoomCreateActivityTypeRace asserts that posting the dashboard create form
+// with activity_type=race passes "race" to CreateRoom and redirects to the lobby.
+// Dashboard submit label: "Create race".
+func TestRoomCreateActivityTypeRace(t *testing.T) {
+	raceTypeID := uuid.New()
+	var gotActivityType string
+	svc := recordingRoomService(func(c roomCall) error { return nil })
+	svc.createFn = func(_ context.Context, _, raceID uuid.UUID, activityType string, _ *int32) (uuid.UUID, string, error) {
+		gotActivityType = activityType
+		return stubRoomID, "ABC234", nil
+	}
+	form := url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {"race"}}
+	op := roomOperation{
+		name:    "create",
+		handler: (*handlers.RoomHandler).Create,
+		path:    "/rooms",
+		form:    form,
+		want:    roomCall{operation: "create", raceID: raceTypeID, mode: app.ActivityTypeRace},
+		status:  http.StatusCreated,
+	}
+	rr := serveRoomRequest(t, op, svc, uuid.New(), form.Encode(), "", true)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%q", rr.Code, rr.Body.String())
+	}
+	if gotActivityType != app.ActivityTypeRace {
+		t.Fatalf("CreateRoom activityType = %q, want %q", gotActivityType, app.ActivityTypeRace)
+	}
+	if got, want := rr.Header().Get("HX-Redirect"), "/rooms/"+stubRoomID.String()+"/lobby"; got != want {
+		t.Fatalf("HX-Redirect = %q, want %q", got, want)
 	}
 }
 

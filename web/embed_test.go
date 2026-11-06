@@ -929,18 +929,20 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	for _, want := range []string{
 		`hx-post="/rooms"`,
 		`<span class="pp-label pp-arcade">Activity type</span>`,
-		`name="mode"`,
+		`name="activity_type"`,
 		`data-submit-label-target="#create-room-submit-label"`,
 		`<option value="race" data-submit-label="Create race" selected>Race</option>`,
 		`<option value="time_trial" data-submit-label="Start time trial">Time trial</option>`,
 		`<option value="warmup" data-submit-label="Start warmup">Warmup</option>`,
 		`id="preset-field"`,
+		`data-activity-type-field="distance"`,
 		`<span class="pp-label pp-arcade">Preset</span>`,
 		`<span id="create-room-submit-label">Create race</span></button>`,
 		`name="minutes"`,
 		`min="1"`,
 		`max="20"`,
 		`step="1"`,
+		`data-activity-type-field="warmup"`,
 		`Start warmup`,
 		`id="create-room-error"`,
 		`<option value="` + typeID.String() + `">2000m</option>`,
@@ -956,6 +958,8 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 		`id="race-type-field"`,
 		`<span class="pp-label pp-arcade">Race type</span>`,
 		`<span class="pp-label pp-arcade">Mode</span>`,
+		`name="mode"`,
+		`data-mode-field`,
 	} {
 		if strings.Contains(card.String(), banned) {
 			t.Errorf("race card contains banned string %q", banned)

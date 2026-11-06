@@ -557,6 +557,78 @@ func roomIntegrationHostRooms(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) 
 	return n
 }
 
+// TestRoomIntegrationCreateRaceHasLobbyAndJoinCode pins that creating a race
+// activity (dashboard submit label "Create race") creates a room in waiting
+// status (with a joinable lobby) and a non-empty join code, and that a second
+// verified user who joins with that code becomes a participant.
+func TestRoomIntegrationCreateRaceHasLobbyAndJoinCode(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	q := db.New(pool)
+	s := NewRoomService(q, pool)
+
+	roomID, code, err := s.CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil)
+	if err != nil {
+		t.Fatalf("CreateRoom(race) failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+			t.Error(err)
+		}
+	})
+
+	if code == "" {
+		t.Fatal("join code is empty")
+	}
+
+	room, err := q.GetRoomForUpdate(ctx, roomID)
+	if err != nil {
+		t.Fatalf("get room: %v", err)
+	}
+	if room.Status != "waiting" {
+		t.Fatalf("room status = %q, want waiting (lobby)", room.Status)
+	}
+	if room.Mode != ActivityTypeRace {
+		t.Fatalf("room mode = %q, want %q", room.Mode, ActivityTypeRace)
+	}
+
+	// Host is initially the sole participant.
+	countBefore, err := q.CountRoomParticipants(ctx, roomID)
+	if err != nil || countBefore != 1 {
+		t.Fatalf("participants before join = %d, %v; want 1", countBefore, err)
+	}
+
+	// A second verified user joins with the join code and becomes a participant.
+	joinedRoomID, err := s.JoinRoom(ctx, guest, code)
+	if err != nil {
+		t.Fatalf("JoinRoom with code %q failed: %v", code, err)
+	}
+	if joinedRoomID != roomID {
+		t.Fatalf("joinedRoomID = %s, want %s", joinedRoomID, roomID)
+	}
+
+	countAfter, err := q.CountRoomParticipants(ctx, roomID)
+	if err != nil || countAfter != 2 {
+		t.Fatalf("participants after join = %d, %v; want 2", countAfter, err)
+	}
+
+	roster, err := s.Roster(ctx, guest, roomID)
+	if err != nil {
+		t.Fatalf("Roster failed: %v", err)
+	}
+	foundGuest := false
+	for _, p := range roster.Participants {
+		if p.UserID == guest {
+			foundGuest = true
+			break
+		}
+	}
+	if !foundGuest {
+		t.Fatalf("guest %s not found in roster: %+v", guest, roster.Participants)
+	}
+}
+
 // A time trial or warm-up starts counting down immediately: it has no waiting
 // room (no joinable lobby), and a second user's join attempt is refused without
 // adding a participant.

@@ -140,19 +140,19 @@
         data-error-target="#create-room-error" data-error-message="Couldn't create the race. Please try again.">
     <label class="block space-y-2">
       <span class="pp-label pp-arcade">Activity type</span>
-      <select name="mode" class="pp-field" data-submit-label-target="#create-room-submit-label">
+      <select name="activity_type" class="pp-field" data-submit-label-target="#create-room-submit-label">
         <option value="race" data-submit-label="Create race" selected>Race</option>
         <option value="time_trial" data-submit-label="Start time trial">Time trial</option>
         <option value="warmup" data-submit-label="Start warmup">Warmup</option>
       </select>
     </label>
-    <label id="preset-field" class="block space-y-2" data-mode-field="distance">
+    <label id="preset-field" class="block space-y-2" data-activity-type-field="distance">
       <span class="pp-label pp-arcade">Preset</span>
       <select name="race_type_id" class="pp-field">
         {{range .RaceTypes}}<option value="{{.ID}}">{{.Label}}</option>{{end}}
       </select>
     </label>
-    <label id="warmup-minutes-field" class="block space-y-2 hidden" data-mode-field="warmup">
+    <label id="warmup-minutes-field" class="block space-y-2 hidden" data-activity-type-field="warmup">
       <span class="pp-label pp-arcade">Minutes</span>
       <input type="number" name="minutes" class="pp-field" min="{{.WarmupMinutesMin}}" max="{{.WarmupMinutesMax}}" step="1" value="10" placeholder="10" disabled />
     </label>

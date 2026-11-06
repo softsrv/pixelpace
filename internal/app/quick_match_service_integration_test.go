@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -179,6 +180,22 @@ func TestQuickMatchIntegrationMigrationDown(t *testing.T) {
 	for _, sql := range []string{"CREATE SCHEMA quick_match_migration_test", "SET LOCAL search_path = quick_match_migration_test, public"} {
 		if _, err := tx.Exec(ctx, sql); err != nil {
 			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir("../../db/migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasSuffix(name, ".up.sql") && name < "000012" {
+			migration, err := os.ReadFile("../../db/migrations/" + name)
+			if err != nil {
+				t.Fatalf("read migration %s: %v", name, err)
+			}
+			if _, err := tx.Exec(ctx, string(migration)); err != nil {
+				t.Fatalf("apply migration %s: %v", name, err)
+			}
 		}
 	}
 	for _, direction := range []string{"up", "down"} {

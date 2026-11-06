@@ -545,3 +545,31 @@ func TestRoomIntegrationFailedBeginResetsRoom(t *testing.T) {
 		})
 	}
 }
+
+func TestRoomIntegrationCreateInvalidModeRejected(t *testing.T) {
+	pool := roomIntegrationDB(t)
+	ctx := context.Background()
+	host := roomIntegrationUser(t, pool)
+	s := NewRoomService(db.New(pool), pool)
+
+	var countBefore int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&countBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, mode := range []string{"", "sprint", "invalid", ModeWarmup} {
+		_, _, err := s.CreateRoom(ctx, host, roomTestID, mode, nil)
+		if !errors.Is(err, ErrInvalidSessionMode) {
+			t.Fatalf("mode %q err = %v, want ErrInvalidSessionMode", mode, err)
+		}
+	}
+
+	var countAfter int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms").Scan(&countAfter); err != nil {
+		t.Fatal(err)
+	}
+	if countAfter != countBefore {
+		t.Fatalf("rooms count changed: before = %d, after = %d", countBefore, countAfter)
+	}
+}
+

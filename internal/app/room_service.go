@@ -59,11 +59,25 @@ const (
 // every other mode. It returns the room id, which addresses the roster,
 // alongside the join code.
 func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
-	if _, err := s.q.GetRaceType(ctx, raceTypeID); err != nil {
+	switch mode {
+	case ModeRace, ModeTimeTrial:
+		// valid session modes for this task
+	case ModeWarmup:
+		// warmup belongs to task #2; reject until task #2 wires it
+		return uuid.Nil, "", ErrInvalidSessionMode
+	default:
+		return uuid.Nil, "", ErrInvalidSessionMode
+	}
+
+	raceType, err := s.q.GetRaceType(ctx, raceTypeID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, "", ErrInvalidRaceType
 		}
 		return uuid.Nil, "", fmt.Errorf("get race type: %w", err)
+	}
+	if raceType.Kind != "distance" {
+		return uuid.Nil, "", ErrInvalidRaceType
 	}
 
 	var lastErr error

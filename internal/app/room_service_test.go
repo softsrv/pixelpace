@@ -344,26 +344,43 @@ func TestRoomCreate(t *testing.T) {
 		mode                    string
 		warmupMinutes           *int32
 		duration                pgtype.Int4
+		kind                    string
+		wantModeErr             bool
+		wantRaceErr             bool
 	}{
 		{name: "success", mode: ModeRace},
 		{name: "time trial", mode: ModeTimeTrial},
-		{name: "warmup minutes stored as seconds", mode: ModeWarmup, warmupMinutes: &sevenMinutes, duration: pgtype.Int4{Int32: 420, Valid: true}},
-		{name: "invalid race", raceErr: pgx.ErrNoRows, mode: ModeRace},
+		{name: "invalid mode", mode: "sprint", wantModeErr: true},
+		{name: "empty mode", mode: "", wantModeErr: true},
+		{name: "warmup mode rejected until task 2", mode: ModeWarmup, warmupMinutes: &sevenMinutes, wantModeErr: true},
+		{name: "invalid race", raceErr: pgx.ErrNoRows, mode: ModeRace, wantRaceErr: true},
+		{name: "non-distance race rejected", mode: ModeRace, kind: "time", wantRaceErr: true},
 		{name: "participant failure", participantErr: errors.New("participant insert failed"), mode: ModeRace},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			steps := []roomDBStep{{name: "GetRaceType", args: []any{roomTestID}, values: []any{roomTestID, "distance", int64(500000), "500m"}, err: tc.raceErr}}
-			if tc.raceErr == nil {
-				steps = append(steps,
-					roomDBStep{name: "InsertRoom", args: []any{nil, roomTestID, roomTestHost, "ABCDEF", tc.mode, tc.duration}},
-					roomDBStep{name: "InsertRoomParticipant", args: []any{nil, nil, roomTestHost}, err: tc.participantErr})
+			kind := "distance"
+			if tc.kind != "" {
+				kind = tc.kind
+			}
+			var steps []roomDBStep
+			if !tc.wantModeErr {
+				steps = append(steps, roomDBStep{name: "GetRaceType", args: []any{roomTestID}, values: []any{roomTestID, kind, int64(500000), "500m"}, err: tc.raceErr})
+				if tc.raceErr == nil && !tc.wantRaceErr {
+					steps = append(steps,
+						roomDBStep{name: "InsertRoom", args: []any{nil, roomTestID, roomTestHost, "ABCDEF", tc.mode, tc.duration}},
+						roomDBStep{name: "InsertRoomParticipant", args: []any{nil, nil, roomTestHost}, err: tc.participantErr})
+				}
 			}
 			s, d := newRoomTestService(t, steps...)
 			s.newJoinCode = func() (string, error) { return "ABCDEF", nil }
 			var insertedRoomID uuid.UUID
 			roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, tc.mode, tc.warmupMinutes)
 			switch {
-			case tc.raceErr != nil:
+			case tc.wantModeErr:
+				if !errors.Is(err, ErrInvalidSessionMode) || d.begins != 0 {
+					t.Fatalf("invalid session mode: %v, begins %d", err, d.begins)
+				}
+			case tc.wantRaceErr:
 				if !errors.Is(err, ErrInvalidRaceType) || d.begins != 0 {
 					t.Fatalf("invalid race: %v, begins %d", err, d.begins)
 				}

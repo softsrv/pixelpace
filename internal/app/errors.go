@@ -27,6 +27,7 @@ var (
 	ErrNotEnoughParticipants   = errors.New("not enough participants")
 	ErrNotAllReady             = errors.New("not all participants are ready")
 	ErrInvalidRaceType         = errors.New("invalid race type")
+	ErrInvalidSessionMode      = errors.New("invalid session mode")
 	ErrAlreadyQueued           = errors.New("user is already queued")
 	ErrNotQueued               = errors.New("user is not queued")
 	ErrInvalidStatusTransition = errors.New("invalid room status transition")

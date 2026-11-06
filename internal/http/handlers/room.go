@@ -313,6 +313,8 @@ func writeRoomError(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, app.ErrNotHost):
 		status = http.StatusForbidden
+	case errors.Is(err, app.ErrInvalidSessionMode):
+		status = http.StatusBadRequest
 	case errors.Is(err, app.ErrRoomFull), errors.Is(err, app.ErrAlreadyParticipant),
 		errors.Is(err, app.ErrNotAllReady), errors.Is(err, app.ErrInvalidStatusTransition),
 		errors.Is(err, app.ErrRoomNotJoinable), errors.Is(err, app.ErrParticipantReady),

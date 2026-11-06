@@ -276,6 +276,7 @@ func TestRoomHandlersServiceErrors(t *testing.T) {
 		{app.ErrParticipantReady, http.StatusConflict},
 		{app.ErrNotEnoughParticipants, http.StatusConflict},
 		{app.ErrInvalidRaceType, http.StatusConflict},
+		{app.ErrInvalidSessionMode, http.StatusBadRequest},
 		{errors.New("private database failure"), http.StatusInternalServerError},
 	}
 	for _, op := range roomOperations() {
@@ -334,6 +335,48 @@ func TestRoomHandlersRejectInvalidRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestRoomCreateInvalidOrMissingModeRejected(t *testing.T) {
+	raceTypeID := uuid.New()
+	for _, tc := range []struct {
+		name string
+		form url.Values
+	}{
+		{"missing mode", url.Values{"race_type_id": {raceTypeID.String()}}},
+		{"empty mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {""}}},
+		{"sprint mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {"sprint"}}},
+		{"warmup mode rejected for now", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {"warmup"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &stubRoomService{
+				createFn: func(ctx context.Context, userID, rID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
+					switch mode {
+					case app.ModeRace, app.ModeTimeTrial:
+						return stubRoomID, "ABC234", nil
+					default:
+						return uuid.Nil, "", app.ErrInvalidSessionMode
+					}
+				},
+			}
+			op := roomOperation{
+				name:    "create",
+				handler: (*handlers.RoomHandler).Create,
+				path:    "/rooms",
+				form:    tc.form,
+				want:    roomCall{operation: "create"},
+				status:  http.StatusBadRequest,
+			}
+			rr := serveRoomRequest(t, op, svc, uuid.New(), tc.form.Encode(), "", true)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%q", rr.Code, rr.Body.String())
+			}
+			if redirect := rr.Header().Get("HX-Redirect"); redirect != "" {
+				t.Fatalf("HX-Redirect = %q, want none", redirect)
+			}
+		})
+	}
+}
+
 
 func serveRosterRequest(t *testing.T, svc *stubRoomService, userID uuid.UUID, pathID string) *httptest.ResponseRecorder {
 	t.Helper()

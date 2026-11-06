@@ -32,7 +32,7 @@ func roomIntegrationFriends(t *testing.T, pool *pgxpool.Pool, a, b uuid.UUID) {
 	})
 }
 
-// A host alone in a race-mode lobby cannot start: CanStart is false,
+// A host alone in a race activity lobby cannot start: CanStart is false,
 // StartRace returns ErrNotEnoughParticipants, and no race is created.
 // Adding a second ready participant allows the start to succeed.
 func TestRoomIntegrationSoloHostCannotStartRace(t *testing.T) {
@@ -87,7 +87,7 @@ func TestRoomIntegrationSoloHostCannotStartRace(t *testing.T) {
 
 // The host starts once every guest is ready, without readying up themselves.
 // Changing the race clears every ready flag; guests can withdraw readiness.
-func TestRoomIntegrationLobbyReadinessAndRaceType(t *testing.T) {
+func TestRoomIntegrationLobbyReadinessAndPreset(t *testing.T) {
 	pool := roomIntegrationDB(t)
 	ctx := context.Background()
 	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
@@ -114,13 +114,13 @@ func TestRoomIntegrationLobbyReadinessAndRaceType(t *testing.T) {
 		t.Fatalf("guest lobby = %+v", lobby)
 	}
 
-	if err := s.ChangeRaceType(ctx, guest, roomID, roomTest2000mID); !errors.Is(err, ErrNotHost) {
-		t.Fatalf("guest race type change = %v", err)
+	if err := s.ChangePreset(ctx, guest, roomID, roomTest2000mID); !errors.Is(err, ErrNotHost) {
+		t.Fatalf("guest preset change = %v", err)
 	}
-	if err := s.ChangeRaceType(ctx, host, roomID, uuid.MustParse("01950000-0000-7000-8000-000000000006")); !errors.Is(err, ErrInvalidRaceType) {
-		t.Fatalf("timed race type = %v, want ErrInvalidRaceType", err)
+	if err := s.ChangePreset(ctx, host, roomID, uuid.MustParse("01950000-0000-7000-8000-000000000006")); !errors.Is(err, ErrInvalidPreset) {
+		t.Fatalf("time-kind preset = %v, want ErrInvalidPreset", err)
 	}
-	if err := s.ChangeRaceType(ctx, host, roomID, roomTest2000mID); err != nil {
+	if err := s.ChangePreset(ctx, host, roomID, roomTest2000mID); err != nil {
 		t.Fatal(err)
 	}
 	if lobby, _ = s.Lobby(ctx, host, roomID); lobby.RaceLabel != "2000m" || lobby.CanStart {
@@ -145,15 +145,21 @@ func TestRoomIntegrationLobbyReadinessAndRaceType(t *testing.T) {
 	if err := s.StartRace(ctx, host, roomID); err != nil {
 		t.Fatalf("start with host not ready = %v", err)
 	}
-	if err := s.ChangeRaceType(ctx, host, roomID, roomTestID); !errors.Is(err, ErrRoomNotJoinable) {
-		t.Fatalf("race type change after start = %v", err)
+	if err := s.ChangePreset(ctx, host, roomID, roomTestID); !errors.Is(err, ErrRoomNotJoinable) {
+		t.Fatalf("preset change after start = %v", err)
 	}
 	if _, err := s.Lobby(ctx, roomIntegrationUser(t, pool), roomID); !errors.Is(err, ErrParticipantNotFound) {
 		t.Fatalf("outsider lobby = %v", err)
 	}
-	options, err := s.RaceTypeOptions(ctx)
+	options, err := s.PresetOptions(ctx)
 	if err != nil || len(options) != 5 || options[0].Label != "500m" || options[4].Label != "10000m" {
-		t.Fatalf("race type options = %+v, %v; want the five distance races by length", options, err)
+		t.Fatalf("preset options = %+v, %v; want the five distance presets by length", options, err)
+	}
+	// The hidden warm-up preset is kind time and is never offered.
+	for _, o := range options {
+		if o.ID == WarmupPresetID {
+			t.Fatalf("preset options = %+v; the warm-up preset %s must not be offered", options, WarmupPresetID)
+		}
 	}
 }
 

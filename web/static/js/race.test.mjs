@@ -130,9 +130,10 @@ function makePixi() {
 function setupPage(options) {
   var doc = new EventTarget();
   var track = fakeElement('div');
+  var activityType = options.activityType || options.mode || 'race';
   Object.assign(track.dataset, {
     selfId: 'u-self', targetMm: options.targetMm || '500000',
-    mode: options.mode || 'race',
+    activityType: activityType,
     statusUrl: '/rooms/r1/race/status', pageUrl: '/rooms/r1/race', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
     resultsUrl: '/rooms/r1/race/results', dashboardUrl: '/dashboard',
     finished: options.finished ? 'true' : 'false', raceId: options.finished ? 'race-1' : '',
@@ -149,7 +150,7 @@ function setupPage(options) {
   ]).forEach(function (item) { laneList.appendChild(item); });
   // A warmup page has a clock and three readings in place of the track.
   var warmup = {};
-  if (options.mode === 'warmup') {
+  if (activityType === 'warmup') {
     ['warmup-clock', 'warmup-distance', 'warmup-pace', 'warmup-stroke-rate'].forEach(function (id) { warmup[id] = fakeElement('div'); });
     track.dataset.durationMs = options.durationMs || '300000';
   }

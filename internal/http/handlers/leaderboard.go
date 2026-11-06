@@ -37,7 +37,7 @@ func (h *LeaderboardHandler) Leaderboard(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	query := r.URL.Query()
-	raceTypeID, err := uuid.Parse(query.Get("race_type"))
+	presetID, err := uuid.Parse(query.Get("race_type"))
 	if err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
@@ -52,7 +52,7 @@ func (h *LeaderboardHandler) Leaderboard(w http.ResponseWriter, r *http.Request)
 	if mode == "" {
 		mode = "race"
 	}
-	rows, err := h.leaderboard.Leaderboard(r.Context(), scope, window, mode, raceTypeID, user.ID)
+	rows, err := h.leaderboard.Leaderboard(r.Context(), scope, window, mode, presetID, user.ID)
 	if err != nil {
 		if errors.Is(err, app.ErrInvalidLeaderboardFilter) {
 			http.Error(w, "Bad Request", http.StatusBadRequest)

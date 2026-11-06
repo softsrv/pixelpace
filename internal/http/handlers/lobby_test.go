@@ -19,8 +19,8 @@ import (
 
 type stubLobbyService struct {
 	lobbyFn       func(ctx context.Context, caller, roomID uuid.UUID) (app.RoomLobby, error)
-	raceTypesFn   func(ctx context.Context) ([]app.RaceTypeOption, error)
-	changeTypeFn  func(ctx context.Context, caller, roomID, raceTypeID uuid.UUID) error
+	presetsFn     func(ctx context.Context) ([]app.PresetOption, error)
+	changeTypeFn  func(ctx context.Context, caller, roomID, presetID uuid.UUID) error
 	unreadyFn     func(ctx context.Context, userID, roomID uuid.UUID) error
 	joinFn        func(ctx context.Context, userID uuid.UUID, code string) (uuid.UUID, error)
 	inviteFn      func(ctx context.Context, inviter, roomID, invitee uuid.UUID) error
@@ -33,11 +33,11 @@ type stubLobbyService struct {
 func (s *stubLobbyService) Lobby(ctx context.Context, caller, roomID uuid.UUID) (app.RoomLobby, error) {
 	return s.lobbyFn(ctx, caller, roomID)
 }
-func (s *stubLobbyService) RaceTypeOptions(ctx context.Context) ([]app.RaceTypeOption, error) {
-	return s.raceTypesFn(ctx)
+func (s *stubLobbyService) PresetOptions(ctx context.Context) ([]app.PresetOption, error) {
+	return s.presetsFn(ctx)
 }
-func (s *stubLobbyService) ChangeRaceType(ctx context.Context, caller, roomID, raceTypeID uuid.UUID) error {
-	return s.changeTypeFn(ctx, caller, roomID, raceTypeID)
+func (s *stubLobbyService) ChangePreset(ctx context.Context, caller, roomID, presetID uuid.UUID) error {
+	return s.changeTypeFn(ctx, caller, roomID, presetID)
 }
 func (s *stubLobbyService) MarkUnready(ctx context.Context, userID, roomID uuid.UUID) error {
 	return s.unreadyFn(ctx, userID, roomID)
@@ -96,8 +96,8 @@ func TestLobbyPageShowsJoinLinkRaceTypesFriendsAndRoster(t *testing.T) {
 			}
 			return waitingLobby(roomID), nil
 		},
-		raceTypesFn: func(context.Context) ([]app.RaceTypeOption, error) {
-			return []app.RaceTypeOption{{ID: uuid.New(), Label: "500m"}, {ID: uuid.New(), Label: "2000m"}}, nil
+		presetsFn: func(context.Context) ([]app.PresetOption, error) {
+			return []app.PresetOption{{ID: uuid.New(), Label: "500m"}, {ID: uuid.New(), Label: "2000m"}}, nil
 		},
 		listFriendsFn: func(_ context.Context, userID uuid.UUID) ([]app.PublicPlayer, error) {
 			return []app.PublicPlayer{
@@ -195,7 +195,7 @@ func TestLobbyPanelRefreshesOrRedirects(t *testing.T) {
 	}
 }
 
-func TestLobbyChangeRaceTypeAndUnreadyRefreshLobby(t *testing.T) {
+func TestLobbyChangePresetAndUnreadyRefreshLobby(t *testing.T) {
 	roomID, raceTypeID := uuid.New(), uuid.New()
 	var calls []string
 	svc := &stubLobbyService{
@@ -210,7 +210,7 @@ func TestLobbyChangeRaceTypeAndUnreadyRefreshLobby(t *testing.T) {
 	}
 	ids := map[string]string{"id": roomID.String()}
 	for _, rr := range []*httptest.ResponseRecorder{
-		serveLobby(t, svc, http.MethodPost, "/", ids, url.Values{"race_type_id": {raceTypeID.String()}}, (*handlers.LobbyHandler).ChangeRaceType),
+		serveLobby(t, svc, http.MethodPost, "/", ids, url.Values{"race_type_id": {raceTypeID.String()}}, (*handlers.LobbyHandler).ChangePreset),
 		serveLobby(t, svc, http.MethodPost, "/", ids, nil, (*handlers.LobbyHandler).MarkUnready),
 	} {
 		if rr.Code != http.StatusNoContent || rr.Header().Get("HX-Trigger") != "room-updated" {
@@ -222,11 +222,11 @@ func TestLobbyChangeRaceTypeAndUnreadyRefreshLobby(t *testing.T) {
 	}
 
 	svc.changeTypeFn = func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error { return app.ErrNotHost }
-	if rr := serveLobby(t, svc, http.MethodPost, "/", ids, url.Values{"race_type_id": {raceTypeID.String()}}, (*handlers.LobbyHandler).ChangeRaceType); rr.Code != http.StatusForbidden {
+	if rr := serveLobby(t, svc, http.MethodPost, "/", ids, url.Values{"race_type_id": {raceTypeID.String()}}, (*handlers.LobbyHandler).ChangePreset); rr.Code != http.StatusForbidden {
 		t.Errorf("guest change status = %d, want 403", rr.Code)
 	}
-	if rr := serveLobby(t, svc, http.MethodPost, "/", ids, url.Values{"race_type_id": {"nope"}}, (*handlers.LobbyHandler).ChangeRaceType); rr.Code != http.StatusBadRequest {
-		t.Errorf("invalid race type status = %d, want 400", rr.Code)
+	if rr := serveLobby(t, svc, http.MethodPost, "/", ids, url.Values{"race_type_id": {"nope"}}, (*handlers.LobbyHandler).ChangePreset); rr.Code != http.StatusBadRequest {
+		t.Errorf("invalid preset status = %d, want 400", rr.Code)
 	}
 }
 
@@ -292,8 +292,8 @@ func TestLobbyJoinLink(t *testing.T) {
 func TestLobbyDashboardRaceCardAndInvites(t *testing.T) {
 	inviteID := uuid.New()
 	svc := &stubLobbyService{
-		raceTypesFn: func(context.Context) ([]app.RaceTypeOption, error) {
-			return []app.RaceTypeOption{{ID: uuid.New(), Label: "1000m"}}, nil
+		presetsFn: func(context.Context) ([]app.PresetOption, error) {
+			return []app.PresetOption{{ID: uuid.New(), Label: "1000m"}}, nil
 		},
 		pendingFn: func(_ context.Context, userID uuid.UUID) ([]app.RoomInvite, error) {
 			if userID != lobbyUser.ID {

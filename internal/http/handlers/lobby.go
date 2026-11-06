@@ -16,8 +16,8 @@ import (
 // lobbyServicer defines the subset of app.RoomService that LobbyHandler requires.
 type lobbyServicer interface {
 	Lobby(ctx context.Context, callerUserID, roomID uuid.UUID) (app.RoomLobby, error)
-	RaceTypeOptions(ctx context.Context) ([]app.RaceTypeOption, error)
-	ChangeRaceType(ctx context.Context, callerUserID, roomID, raceTypeID uuid.UUID) error
+	PresetOptions(ctx context.Context) ([]app.PresetOption, error)
+	ChangePreset(ctx context.Context, callerUserID, roomID, presetID uuid.UUID) error
 	MarkUnready(ctx context.Context, userID, roomID uuid.UUID) error
 	JoinRoom(ctx context.Context, userID uuid.UUID, joinCode string) (uuid.UUID, error)
 	InviteFriend(ctx context.Context, inviterUserID, roomID, inviteeUserID uuid.UUID) error
@@ -76,7 +76,7 @@ func (h *LobbyHandler) Page(w http.ResponseWriter, r *http.Request) {
 		h.unavailable(w, r, app.ErrRoomNotJoinable)
 		return
 	}
-	raceTypes, err := h.rooms.RaceTypeOptions(r.Context())
+	presets, err := h.rooms.PresetOptions(r.Context())
 	if err != nil {
 		writeRoomError(w, r, err)
 		return
@@ -98,7 +98,7 @@ func (h *LobbyHandler) Page(w http.ResponseWriter, r *http.Request) {
 	h.renderer.Page(w, http.StatusOK, "lobby.html", map[string]any{
 		"User":      authUser,
 		"Lobby":     lobby,
-		"RaceTypes": raceTypes,
+		"RaceTypes": presets,
 		"Friends":   friends,
 		"JoinURL":   h.baseURL + "/join/" + url.PathEscape(lobby.JoinCode),
 	})
@@ -133,8 +133,8 @@ func (h *LobbyHandler) Panel(w http.ResponseWriter, r *http.Request) {
 	h.renderer.Fragment(w, http.StatusOK, "lobby.html", "lobby-panel", map[string]any{"Lobby": lobby})
 }
 
-// ChangeRaceType lets the host pick the race; every guest must ready up again.
-func (h *LobbyHandler) ChangeRaceType(w http.ResponseWriter, r *http.Request) {
+// ChangePreset lets the host pick the race; every guest must ready up again.
+func (h *LobbyHandler) ChangePreset(w http.ResponseWriter, r *http.Request) {
 	user, roomID, ok := lobbyRequest(w, r)
 	if !ok {
 		return
@@ -143,12 +143,12 @@ func (h *LobbyHandler) ChangeRaceType(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid form data", http.StatusBadRequest)
 		return
 	}
-	raceTypeID, err := uuid.Parse(r.PostForm.Get("race_type_id"))
+	presetID, err := uuid.Parse(r.PostForm.Get("race_type_id"))
 	if err != nil {
-		http.Error(w, "Invalid race type ID", http.StatusBadRequest)
+		http.Error(w, "Invalid preset ID", http.StatusBadRequest)
 		return
 	}
-	if err := h.rooms.ChangeRaceType(r.Context(), user, roomID, raceTypeID); err != nil {
+	if err := h.rooms.ChangePreset(r.Context(), user, roomID, presetID); err != nil {
 		writeRoomError(w, r, err)
 		return
 	}
@@ -216,13 +216,13 @@ func (h *LobbyHandler) JoinLink(w http.ResponseWriter, r *http.Request) {
 
 // RaceCard serves the dashboard's card for creating or joining a room.
 func (h *LobbyHandler) RaceCard(w http.ResponseWriter, r *http.Request) {
-	raceTypes, err := h.rooms.RaceTypeOptions(r.Context())
+	presets, err := h.rooms.PresetOptions(r.Context())
 	if err != nil {
 		writeRoomError(w, r, err)
 		return
 	}
 	h.renderer.Fragment(w, http.StatusOK, "dashboard.html", "race-card", map[string]any{
-		"RaceTypes":        raceTypes,
+		"RaceTypes":        presets,
 		"WarmupMinutesMin": app.MinWarmupMinutes,
 		"WarmupMinutesMax": app.MaxWarmupMinutes,
 	})

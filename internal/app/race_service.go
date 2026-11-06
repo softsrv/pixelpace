@@ -157,7 +157,7 @@ func (s *RaceService) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, err
 	if err != nil {
 		return db.Race{}, fmt.Errorf("list room participants: %w", err)
 	}
-	// The race takes the mode the room was created with, fixed at this
+	// The race takes the activity type the room was created with, fixed at this
 	// instant: a race stays a race even if only one entrant is left.
 	race, err := q.CreateRace(ctx, db.CreateRaceParams{
 		ID: uuid.Must(uuid.NewV7()), RoomID: room.ID, RaceTypeID: room.RaceTypeID,
@@ -316,7 +316,7 @@ type RaceResults struct {
 	RaceID            uuid.UUID    `json:"race_id"`
 	Finished          bool         `json:"finished"`
 	TargetMillimeters int64        `json:"target_millimeters"`
-	Mode              string       `json:"mode,omitempty"`
+	ActivityType      string       `json:"activityType,omitempty"`
 	Results           []RaceResult `json:"results"`
 }
 
@@ -351,10 +351,10 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 		RaceID:            raceID,
 		Finished:          room.Status == "finished",
 		TargetMillimeters: room.TargetValue,
-		Mode:              room.Mode,
+		ActivityType:      room.Mode,
 		Results:           make([]RaceResult, 0, len(rows)),
 	}
-	if room.Mode == ModeWarmup {
+	if room.Mode == ActivityTypeWarmup {
 		out.TargetMillimeters = 0
 	}
 	for _, row := range rows {
@@ -364,7 +364,7 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 		case row.Status == "finished" && row.FinishElapsedMilliseconds.Valid:
 			elapsed = int64(row.FinishElapsedMilliseconds.Int32)
 			result.ElapsedMilliseconds = &elapsed
-			if room.Mode == ModeWarmup {
+			if room.Mode == ActivityTypeWarmup {
 				if row.DistanceMillimeters.Valid {
 					result.DistanceMillimeters = row.DistanceMillimeters.Int64
 				}
@@ -382,7 +382,7 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 		out.Results = append(out.Results, result)
 	}
 	sort.SliceStable(out.Results, func(i, j int) bool {
-		if room.Mode == ModeWarmup {
+		if room.Mode == ActivityTypeWarmup {
 			return out.Results[i].DistanceMillimeters > out.Results[j].DistanceMillimeters
 		}
 		a, b := out.Results[i], out.Results[j]
@@ -394,7 +394,7 @@ func (s *RaceService) Results(ctx context.Context, roomID, userID uuid.UUID) (Ra
 		}
 		return a.DistanceMillimeters > b.DistanceMillimeters
 	})
-	if room.Mode != ModeWarmup {
+	if room.Mode != ActivityTypeWarmup {
 		for i := range out.Results {
 			if out.Results[i].ElapsedMilliseconds == nil {
 				break
@@ -417,9 +417,9 @@ type RaceRacer struct {
 // equipment; RaceID is nil until the countdown has ended and Begin has created
 // the race. Racers are in the order Begin seeds race participants, so lanes
 // stay stable throughout. Finished is true once the race has ended and the
-// room is marked finished. Mode is the room's session mode (race, time_trial
-// or warmup), chosen when the room was created. Pacer is set only for a
-// time_trial whose racer has a Time Trial at the race type finished before
+// room is marked finished. ActivityType is the room's activity type (race,
+// time_trial or warmup), chosen when the room was created. Pacer is set only
+// for a time_trial whose racer has a Time Trial at the preset finished before
 // this one began; it is a lane, never an entrant.
 type RoomRace struct {
 	RoomID               uuid.UUID
@@ -427,7 +427,7 @@ type RoomRace struct {
 	RaceStartsAt         *time.Time
 	Label                string
 	TargetMillimeters    int64
-	Mode                 string
+	ActivityType         string
 	DurationMilliseconds int64
 	Racers               []RaceRacer
 	Finished             bool
@@ -458,7 +458,7 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 	if err != nil {
 		return RoomRace{}, fmt.Errorf("check room participant: %w", err)
 	}
-	if !isParticipant && row.Status == "dissolved" && row.Mode != ModeRace && row.HostUserID == userID {
+	if !isParticipant && row.Status == "dissolved" && row.Mode != ActivityTypeRace && row.HostUserID == userID {
 		return RoomRace{}, ErrSessionNotConnected
 	}
 	if !isParticipant {
@@ -469,14 +469,14 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 	default:
 		return RoomRace{}, ErrRaceNotStarted
 	}
-	if row.Kind != "distance" && row.Mode != ModeWarmup {
-		return RoomRace{}, ErrInvalidRaceType
+	if row.Kind != "distance" && row.Mode != ActivityTypeWarmup {
+		return RoomRace{}, ErrInvalidPreset
 	}
 	lineup, err := s.q.ListRoomLineup(ctx, roomID)
 	if err != nil {
 		return RoomRace{}, fmt.Errorf("list room lineup: %w", err)
 	}
-	view := RoomRace{RoomID: roomID, Label: row.Label, TargetMillimeters: row.TargetValue, Mode: row.Mode, Racers: make([]RaceRacer, 0, len(lineup)), Finished: row.Status == "finished"}
+	view := RoomRace{RoomID: roomID, Label: row.Label, TargetMillimeters: row.TargetValue, ActivityType: row.Mode, Racers: make([]RaceRacer, 0, len(lineup)), Finished: row.Status == "finished"}
 	for _, racer := range lineup {
 		view.Racers = append(view.Racers, RaceRacer{
 			PublicPlayer: NewPublicPlayer(racer.ID, racer.DisplayName), EquipmentReady: racer.EquipmentReady,
@@ -493,7 +493,7 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 		raceID := uuid.UUID(row.RaceID.Bytes)
 		view.RaceID = &raceID
 	}
-	if row.Mode == ModeTimeTrial && len(lineup) == 1 && row.RaceStartsAt.Valid {
+	if row.Mode == ActivityTypeTimeTrial && len(lineup) == 1 && row.RaceStartsAt.Valid {
 		view.Pacer = s.timeTrialPacer(ctx, roomID, row.RaceTypeID, lineup[0].ID, row.RaceStartsAt)
 	}
 	return view, nil
@@ -502,9 +502,9 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 // timeTrialPacer returns the solo racer's pacer at their personal best from
 // Time Trials started before this race, or nil when there is none. A lookup
 // failure is logged and costs only the pacer, never the race view.
-func (s *RaceService) timeTrialPacer(ctx context.Context, roomID, raceTypeID, userID uuid.UUID, before pgtype.Timestamptz) *RacePacer {
+func (s *RaceService) timeTrialPacer(ctx context.Context, roomID, presetID, userID uuid.UUID, before pgtype.Timestamptz) *RacePacer {
 	best, err := s.cfg.PersonalBests.TimeTrialPersonalBest(ctx, db.TimeTrialPersonalBestParams{
-		RaceTypeID: raceTypeID, UserID: userID, Before: before,
+		RaceTypeID: presetID, UserID: userID, Before: before,
 	})
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -685,12 +685,12 @@ func lockStandings(ctx context.Context, q *db.Queries, raceID uuid.UUID) (db.Loc
 	if err != nil {
 		return db.LockRaceRow{}, nil, fmt.Errorf("lock standings race: %w", err)
 	}
-	// A warmup rows on the warmup sentinel race type (kind "time"); every
-	// other mode needs a distance race.
-	if race.Kind != "distance" && race.Mode != ModeWarmup {
+	// A warmup rows on the warmup sentinel preset (kind "time"); every
+	// other activity type needs a distance-kind preset.
+	if race.Kind != "distance" && race.Mode != ActivityTypeWarmup {
 		return db.LockRaceRow{}, nil, fmt.Errorf("standings require a distance race, got %q", race.Kind)
 	}
-	if race.Mode == ModeWarmup && !race.DurationSeconds.Valid {
+	if race.Mode == ActivityTypeWarmup && !race.DurationSeconds.Valid {
 		return db.LockRaceRow{}, nil, errors.New("warmup race has no duration")
 	}
 	rows, err := q.ListRaceStandings(ctx, db.ListRaceStandingsParams{
@@ -722,7 +722,7 @@ func warmupDuration(race db.LockRaceRow) time.Duration {
 // is over once the clock reaches its start plus its duration, whatever
 // distance anyone has rowed.
 func (s *RaceService) raceOver(race db.LockRaceRow, rows []db.ListRaceStandingsRow, now time.Time) bool {
-	if race.Mode == ModeWarmup {
+	if race.Mode == ActivityTypeWarmup {
 		return !now.Before(race.StartedAt.Time.Add(warmupDuration(race)))
 	}
 	for _, row := range rows {
@@ -741,7 +741,7 @@ func (s *RaceService) raceOver(race db.LockRaceRow, rows []db.ListRaceStandingsR
 // happens to their telemetry afterwards. Finalizing records each finish, marks
 // the rest DNF, and moves the race and its room to finished.
 func (s *RaceService) settle(ctx context.Context, q *db.Queries, race db.LockRaceRow, rows []db.ListRaceStandingsRow, final, finalize bool) ([]RaceStanding, error) {
-	if race.Mode == ModeWarmup {
+	if race.Mode == ActivityTypeWarmup {
 		return s.settleWarmup(ctx, q, race, rows, finalize)
 	}
 	now := s.cfg.Now()

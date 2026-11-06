@@ -31,7 +31,7 @@ func quickMatchIntegrationDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// Give each test its own race type so queue selection cannot consume another
+// Give each test its own preset so queue selection cannot consume another
 // test's racers. Copy the seeded 500m preset rather than inventing a format.
 func quickMatchIntegrationType(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
@@ -64,7 +64,7 @@ func quickMatchIntegrationWait(t *testing.T, pool *pgxpool.Pool, user, raceType 
 
 func quickMatchIntegrationFinish(t *testing.T, pool *pgxpool.Pool, user, raceType uuid.UUID, milliseconds int32, finished time.Time, status string) {
 	t.Helper()
-	quickMatchIntegrationFinishMode(t, pool, user, raceType, milliseconds, finished, status, ModeRace)
+	quickMatchIntegrationFinishMode(t, pool, user, raceType, milliseconds, finished, status, ActivityTypeRace)
 }
 
 func quickMatchIntegrationFinishMode(t *testing.T, pool *pgxpool.Pool, user, raceType uuid.UUID, milliseconds int32, finished time.Time, status, mode string) {
@@ -73,7 +73,7 @@ func quickMatchIntegrationFinishMode(t *testing.T, pool *pgxpool.Pool, user, rac
 	// The room is seeded directly so every mode can be placed without going
 	// through CreateRoom; a warmup room carries its duration, others none.
 	var duration *int32
-	if mode == ModeWarmup {
+	if mode == ActivityTypeWarmup {
 		seconds := int32(300)
 		duration = &seconds
 	}
@@ -84,7 +84,7 @@ func quickMatchIntegrationFinishMode(t *testing.T, pool *pgxpool.Pool, user, rac
 		t.Fatal(err)
 	}
 	raceID := uuid.Must(uuid.NewV7())
-	_, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, mode, time_trial) VALUES ($1, $2, $3, $4, $5, $6, $7)", raceID, roomID, raceType, finished.Add(-time.Duration(milliseconds)*time.Millisecond), finished, mode, mode == ModeTimeTrial)
+	_, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, mode, time_trial) VALUES ($1, $2, $3, $4, $5, $6, $7)", raceID, roomID, raceType, finished.Add(-time.Duration(milliseconds)*time.Millisecond), finished, mode, mode == ActivityTypeTimeTrial)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestQuickMatchIntegrationQueue(t *testing.T) {
 	if err := s.Leave(ctx, a, raceType); err != nil {
 		t.Fatalf("repeat leave = %v", err)
 	}
-	if err := s.Enqueue(ctx, a, uuid.Nil); !errors.Is(err, ErrInvalidRaceType) {
+	if err := s.Enqueue(ctx, a, uuid.Nil); !errors.Is(err, ErrInvalidPreset) {
 		t.Fatalf("invalid type = %v", err)
 	}
 }
@@ -210,7 +210,7 @@ func TestQuickMatchIntegrationRecentFinishes(t *testing.T) {
 	quickMatchIntegrationFinish(t, pool, user, otherType, 1, now, "finished")
 	quickMatchIntegrationFinish(t, pool, other, raceType, 2, now, "finished")
 	quickMatchIntegrationFinish(t, pool, user, raceType, 3, now, "dnf")
-	quickMatchIntegrationFinishMode(t, pool, user, raceType, 4, now, "finished", ModeWarmup)
+	quickMatchIntegrationFinishMode(t, pool, user, raceType, 4, now, "finished", ActivityTypeWarmup)
 	rows, err := db.New(pool).RecentFinishesByRaceType(context.Background(), db.RecentFinishesByRaceTypeParams{RaceTypeID: raceType, UserID: user})
 	if err != nil || len(rows) != 7 {
 		t.Fatalf("finishes = %+v, %v", rows, err)
@@ -279,6 +279,114 @@ func TestQuickMatchIntegrationHostAndWindows(t *testing.T) {
 	rows, err := s.q.ListWaitingByRaceType(ctx, raceType)
 	if err != nil || len(rows) != 1 || rows[0].UserID != unrated {
 		t.Fatalf("remaining queue = %+v, %v", rows, err)
+	}
+}
+
+// Quick Match pairs only racers queued for the same preset, and the room it
+// creates is a race activity.
+func TestQuickMatchIntegrationPairsByPresetIntoARace(t *testing.T) {
+	pool := quickMatchIntegrationDB(t)
+	ctx := context.Background()
+	preset, otherPreset := quickMatchIntegrationType(t, pool), quickMatchIntegrationType(t, pool)
+	a, b, c := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	now := time.Now().UTC()
+	s := quickMatchIntegrationService(pool, func() time.Time { return now })
+	for user, p := range map[uuid.UUID]uuid.UUID{a: preset, b: preset, c: otherPreset} {
+		if err := s.Enqueue(ctx, user, p); err != nil {
+			t.Fatal(err)
+		}
+		quickMatchIntegrationWait(t, pool, user, p, now.Add(-time.Minute))
+	}
+	// c waits alone on the other preset: nobody shares it.
+	if _, code, err := s.Match(ctx, c, otherPreset); err != nil || code != "" {
+		t.Fatalf("lone racer matched: %q, %v", code, err)
+	}
+	roomID, code, err := s.Match(ctx, a, preset)
+	if err != nil || code == "" {
+		t.Fatalf("match: %q, %v", code, err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+			t.Error(err)
+		}
+	})
+	var activityType string
+	var roomPreset uuid.UUID
+	if err := pool.QueryRow(ctx, "SELECT mode, race_type_id FROM rooms WHERE id = $1", roomID).Scan(&activityType, &roomPreset); err != nil {
+		t.Fatal(err)
+	}
+	if activityType != ActivityTypeRace || roomPreset != preset {
+		t.Fatalf("room = %q on %s; want a race on %s", activityType, roomPreset, preset)
+	}
+	members := map[uuid.UUID]bool{}
+	rows, err := pool.Query(ctx, "SELECT user_id FROM room_participants WHERE room_id = $1", roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		members[id] = true
+	}
+	rows.Close()
+	if len(members) != 2 || !members[a] || !members[b] {
+		t.Fatalf("room members = %v; want only %s and %s, who share the preset", members, a, b)
+	}
+	waiting, err := s.q.ListWaitingByRaceType(ctx, otherPreset)
+	if err != nil || len(waiting) != 1 || waiting[0].UserID != c {
+		t.Fatalf("other preset's queue = %+v, %v; want %s still waiting", waiting, err, c)
+	}
+}
+
+// Pairing rates a racer by their race and time-trial finishes at the preset;
+// warm-up finishes never count. A racer rated only by time trials pairs with
+// one rated by races at the same pace, while a racer whose only finishes are
+// warm-ups at that same pace stays unrated and is left out of their group.
+func TestQuickMatchIntegrationRatingIgnoresWarmups(t *testing.T) {
+	pool := quickMatchIntegrationDB(t)
+	ctx := context.Background()
+	preset := quickMatchIntegrationType(t, pool)
+	byRace, byTimeTrial, byWarmup := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
+	now := time.Now().UTC()
+	for i := 0; i < 3; i++ {
+		at := now.Add(-time.Duration(i+1) * time.Hour)
+		quickMatchIntegrationFinishMode(t, pool, byRace, preset, 60000, at, "finished", ActivityTypeRace)
+		quickMatchIntegrationFinishMode(t, pool, byTimeTrial, preset, 60000, at, "finished", ActivityTypeTimeTrial)
+		quickMatchIntegrationFinishMode(t, pool, byWarmup, preset, 60000, at, "finished", ActivityTypeWarmup)
+	}
+	s := quickMatchIntegrationService(pool, func() time.Time { return now })
+	for _, user := range []uuid.UUID{byWarmup, byRace, byTimeTrial} {
+		if err := s.Enqueue(ctx, user, preset); err != nil {
+			t.Fatal(err)
+		}
+		quickMatchIntegrationWait(t, pool, user, preset, now.Add(-time.Minute))
+	}
+	// Unrated, the warm-up-only racer has nobody compatible to pair with.
+	if _, code, err := s.Match(ctx, byWarmup, preset); err != nil || code != "" {
+		t.Fatalf("warm-up-only racer matched rated racers: %q, %v", code, err)
+	}
+	roomID, code, err := s.Match(ctx, byRace, preset)
+	if err != nil || code == "" {
+		t.Fatalf("race and time-trial racers did not pair: %q, %v", code, err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID); err != nil {
+			t.Error(err)
+		}
+	})
+	if count, err := s.q.CountRoomParticipants(ctx, roomID); err != nil || count != 2 {
+		t.Fatalf("room size = %d, %v; want the race and time-trial racers only", count, err)
+	}
+	for _, user := range []uuid.UUID{byRace, byTimeTrial} {
+		if _, err := s.q.GetRoomParticipant(ctx, db.GetRoomParticipantParams{RoomID: roomID, UserID: user}); err != nil {
+			t.Fatalf("%s not in the room: %v", user, err)
+		}
+	}
+	waiting, err := s.q.ListWaitingByRaceType(ctx, preset)
+	if err != nil || len(waiting) != 1 || waiting[0].UserID != byWarmup {
+		t.Fatalf("queue = %+v, %v; want the warm-up-only racer still waiting", waiting, err)
 	}
 }
 

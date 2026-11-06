@@ -349,28 +349,28 @@ func TestRoomCreate(t *testing.T) {
 		wantMinutesErr          bool
 		wantRaceErr             bool
 	}{
-		{name: "success", mode: ModeRace},
-		{name: "time trial", mode: ModeTimeTrial},
+		{name: "success", mode: ActivityTypeRace},
+		{name: "time trial", mode: ActivityTypeTimeTrial},
 		{name: "invalid mode", mode: "sprint", wantModeErr: true},
 		{name: "empty mode", mode: "", wantModeErr: true},
-		{name: "warmup", mode: ModeWarmup, warmupMinutes: &sevenMinutes, duration: pgtype.Int4{Int32: 420, Valid: true}},
-		{name: "warmup without minutes", mode: ModeWarmup, wantMinutesErr: true},
-		{name: "warmup below range", mode: ModeWarmup, warmupMinutes: &zeroMinutes, wantMinutesErr: true},
-		{name: "warmup above range", mode: ModeWarmup, warmupMinutes: &tooLong, wantMinutesErr: true},
-		{name: "race with minutes", mode: ModeRace, warmupMinutes: &sevenMinutes, wantModeErr: true},
-		{name: "invalid race", raceErr: pgx.ErrNoRows, mode: ModeRace, wantRaceErr: true},
-		{name: "non-distance race rejected", mode: ModeRace, kind: "time", wantRaceErr: true},
-		{name: "participant failure", participantErr: errors.New("participant insert failed"), mode: ModeRace},
+		{name: "warmup", mode: ActivityTypeWarmup, warmupMinutes: &sevenMinutes, duration: pgtype.Int4{Int32: 420, Valid: true}},
+		{name: "warmup without minutes", mode: ActivityTypeWarmup, wantMinutesErr: true},
+		{name: "warmup below range", mode: ActivityTypeWarmup, warmupMinutes: &zeroMinutes, wantMinutesErr: true},
+		{name: "warmup above range", mode: ActivityTypeWarmup, warmupMinutes: &tooLong, wantMinutesErr: true},
+		{name: "race with minutes", mode: ActivityTypeRace, warmupMinutes: &sevenMinutes, wantModeErr: true},
+		{name: "invalid race", raceErr: pgx.ErrNoRows, mode: ActivityTypeRace, wantRaceErr: true},
+		{name: "non-distance race rejected", mode: ActivityTypeRace, kind: "time", wantRaceErr: true},
+		{name: "participant failure", participantErr: errors.New("participant insert failed"), mode: ActivityTypeRace},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			kind := "distance"
 			if tc.kind != "" {
 				kind = tc.kind
 			}
-			// A warmup takes the warmup race type whatever the caller passed.
+			// A warmup takes the warmup preset whatever the caller passed.
 			typeID, label := roomTestID, "500m"
-			if tc.mode == ModeWarmup {
-				typeID, kind, label = WarmupRaceTypeID, "time", "Warmup"
+			if tc.mode == ActivityTypeWarmup {
+				typeID, kind, label = WarmupPresetID, "time", "Warmup"
 			}
 			var steps []roomDBStep
 			if !tc.wantModeErr && !tc.wantMinutesErr {
@@ -380,7 +380,7 @@ func TestRoomCreate(t *testing.T) {
 						roomDBStep{name: "InsertRoom", args: []any{nil, typeID, roomTestHost, "ABCDEF", tc.mode, tc.duration}},
 						roomDBStep{name: "InsertRoomParticipant", args: []any{nil, nil, roomTestHost}, err: tc.participantErr})
 					// A solo session has no lobby: it is counting down as it is created.
-					if tc.mode != ModeRace {
+					if tc.mode != ActivityTypeRace {
 						steps = append(steps, roomDBStep{name: "StartRoomCountdown", args: []any{nil}})
 					}
 				}
@@ -391,15 +391,15 @@ func TestRoomCreate(t *testing.T) {
 			roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, tc.mode, tc.warmupMinutes)
 			switch {
 			case tc.wantModeErr:
-				if !errors.Is(err, ErrInvalidSessionMode) || d.begins != 0 {
-					t.Fatalf("invalid session mode: %v, begins %d", err, d.begins)
+				if !errors.Is(err, ErrInvalidActivityType) || d.begins != 0 {
+					t.Fatalf("invalid activity type: %v, begins %d", err, d.begins)
 				}
 			case tc.wantMinutesErr:
 				if !errors.Is(err, ErrInvalidWarmupMinutes) || d.begins != 0 {
 					t.Fatalf("invalid warmup minutes: %v, begins %d", err, d.begins)
 				}
 			case tc.wantRaceErr:
-				if !errors.Is(err, ErrInvalidRaceType) || d.begins != 0 {
+				if !errors.Is(err, ErrInvalidPreset) || d.begins != 0 {
 					t.Fatalf("invalid race: %v, begins %d", err, d.begins)
 				}
 			case tc.participantErr != nil:
@@ -426,7 +426,7 @@ func TestRoomCreateDoesNotRetryOtherFailures(t *testing.T) {
 			s, d := newRoomTestService(t,
 				roomDBStep{name: "GetRaceType", values: []any{roomTestID, "distance", int64(500000), "500m"}},
 				roomDBStep{name: "InsertRoom", err: cause})
-			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ModeRace, nil)
+			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ActivityTypeRace, nil)
 			if !errors.Is(err, cause) || d.begins != 1 || d.rollbacks != 1 || d.commits != 0 {
 				t.Fatalf("unexpected retry: %v, tx %+v", err, d)
 			}
@@ -494,7 +494,7 @@ func TestRoomCreateRetryBound(t *testing.T) {
 	s, d := newRoomTestService(t, steps...)
 	calls := 0
 	s.newJoinCode = func() (string, error) { calls++; return "ABCDEF", nil }
-	roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ModeRace, nil)
+	roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ActivityTypeRace, nil)
 	var pgErr *pgconn.PgError
 	if code != "" || roomID != uuid.Nil || !errors.As(err, &pgErr) || calls != 10 || d.begins != 10 || d.rollbacks != 10 || d.commits != 0 {
 		t.Fatalf("retry bound: code %q err %v calls %d tx %+v", code, err, calls, d)

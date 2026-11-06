@@ -47,12 +47,13 @@ func generateJoinCode() (string, error) {
 	return string(code), nil
 }
 
-// Session modes a room is created in. The mode is chosen when the room is
-// created and never inferred from how many participants it has.
+// Activity types a room is created in. The activity type is chosen when the
+// room is created and never inferred from how many participants it has. The
+// values are the ones stored in rooms.mode and races.mode.
 const (
-	ModeRace      = "race"
-	ModeTimeTrial = "time_trial"
-	ModeWarmup    = "warmup"
+	ActivityTypeRace      = "race"
+	ActivityTypeTimeTrial = "time_trial"
+	ActivityTypeWarmup    = "warmup"
 )
 
 // Bounds of a warmup's length, in whole minutes. The rooms table enforces the
@@ -62,11 +63,11 @@ const (
 	MaxWarmupMinutes = 20
 )
 
-// WarmupRaceTypeID is the sentinel race type every warmup room and race
-// carries, seeded by migration 000020: rooms.race_type_id is NOT NULL, and a
-// warmup has no distance target. It is a kind 'time' row, so it is never
-// offered as a distance.
-var WarmupRaceTypeID = uuid.MustParse("01950000-0000-7000-8000-000000000009")
+// WarmupPresetID is the sentinel preset every warm-up room and race carries,
+// seeded by migration 000020: rooms.race_type_id is NOT NULL, and a warm-up
+// has no distance target. It is a kind 'time' preset, so it is never offered
+// as a distance.
+var WarmupPresetID = uuid.MustParse("01950000-0000-7000-8000-000000000009")
 
 // ParseWarmupMinutes reads a submitted warmup length: a whole number of
 // minutes from MinWarmupMinutes to MaxWarmupMinutes, nothing else. Empty,
@@ -83,38 +84,40 @@ func ParseWarmupMinutes(raw string) (int32, error) {
 	return int32(minutes), nil
 }
 
-// CreateRoom atomically creates a room in the given mode and its host
-// participant. A race room is waiting in its lobby; a time trial or warmup
-// room is already counting down, ready for the caller to Begin with no lobby
-// step. warmupMinutes is the length of a warmup session: required, from 1 to 20,
-// for ModeWarmup and nil for every other mode. A warmup ignores raceTypeID and
-// takes the warmup race type. It returns the room id, which addresses the
+// CreateRoom atomically creates a room of the given activity type and its host
+// participant. A race is waiting in its lobby; a time trial or warm-up is
+// already counting down, ready for the caller to Begin with no lobby step.
+// warmupMinutes is the length of a warm-up: required, from 1 to 20, for
+// ActivityTypeWarmup and nil for every other activity type. A warm-up ignores
+// presetID and takes WarmupPresetID. A race or time trial needs a
+// distance-kind preset. It returns the room id, which addresses the
 // roster, alongside the join code.
-func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
-	switch mode {
-	case ModeRace, ModeTimeTrial:
+func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, presetID uuid.UUID, activityType string, warmupMinutes *int32) (uuid.UUID, string, error) {
+	switch activityType {
+	case ActivityTypeRace, ActivityTypeTimeTrial:
 		if warmupMinutes != nil {
-			return uuid.Nil, "", ErrInvalidSessionMode
+			return uuid.Nil, "", ErrInvalidActivityType
 		}
-	case ModeWarmup:
+	case ActivityTypeWarmup:
 		if warmupMinutes == nil || *warmupMinutes < MinWarmupMinutes || *warmupMinutes > MaxWarmupMinutes {
 			return uuid.Nil, "", ErrInvalidWarmupMinutes
 		}
-		raceTypeID = WarmupRaceTypeID
+		presetID = WarmupPresetID
 	default:
-		return uuid.Nil, "", ErrInvalidSessionMode
+		return uuid.Nil, "", ErrInvalidActivityType
 	}
 
-	raceType, err := s.q.GetRaceType(ctx, raceTypeID)
+	preset, err := s.q.GetRaceType(ctx, presetID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return uuid.Nil, "", ErrInvalidRaceType
+			return uuid.Nil, "", ErrInvalidPreset
 		}
-		return uuid.Nil, "", fmt.Errorf("get race type: %w", err)
+		return uuid.Nil, "", fmt.Errorf("get preset: %w", err)
 	}
-	// Every mode but warmup races a distance; a warmup's sentinel is not one.
-	if mode != ModeWarmup && raceType.Kind != "distance" {
-		return uuid.Nil, "", ErrInvalidRaceType
+	// Every activity type but warm-up needs a distance-kind preset; the
+	// warm-up sentinel is kind time.
+	if activityType != ActivityTypeWarmup && preset.Kind != "distance" {
+		return uuid.Nil, "", ErrInvalidPreset
 	}
 
 	var lastErr error
@@ -125,7 +128,7 @@ func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uui
 		}
 		// A unique violation aborts a PostgreSQL transaction. Each attempt
 		// therefore owns a fresh transaction, rolled back before retrying.
-		roomID, retry, err := s.createRoomAttempt(ctx, hostUserID, raceTypeID, mode, warmupMinutes, code)
+		roomID, retry, err := s.createRoomAttempt(ctx, hostUserID, presetID, activityType, warmupMinutes, code)
 		if err == nil {
 			return roomID, code, nil
 		}
@@ -137,7 +140,7 @@ func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uui
 	return uuid.Nil, "", fmt.Errorf("create room after %d attempts: %w", maxJoinCodeAttempts, lastErr)
 }
 
-func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32, code string) (uuid.UUID, bool, error) {
+func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, presetID uuid.UUID, activityType string, warmupMinutes *int32, code string) (uuid.UUID, bool, error) {
 	var durationSeconds pgtype.Int4
 	if warmupMinutes != nil {
 		durationSeconds = pgtype.Int4{Int32: *warmupMinutes * 60, Valid: true}
@@ -157,8 +160,8 @@ func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTyp
 	defer func() { _ = tx.Rollback(ctx) }()
 	qtx := s.q.WithTx(tx)
 	if err := qtx.InsertRoom(ctx, db.InsertRoomParams{
-		ID: roomID, RaceTypeID: raceTypeID, HostUserID: hostUserID, JoinCode: code,
-		Mode: mode, DurationSeconds: durationSeconds,
+		ID: roomID, RaceTypeID: presetID, HostUserID: hostUserID, JoinCode: code,
+		Mode: activityType, DurationSeconds: durationSeconds,
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		retry := errors.As(err, &pgErr) && pgErr.Code == "23505"
@@ -169,10 +172,10 @@ func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTyp
 	}); err != nil {
 		return uuid.Nil, false, fmt.Errorf("insert host participant: %w", err)
 	}
-	// A solo session (every mode but race) has no lobby: the host is its only
-	// participant and it is counting down from the start, so the caller can
-	// begin it at once and nobody can join it.
-	if mode != ModeRace {
+	// A solo activity (every activity type but race) has no lobby: the host is
+	// its only participant and it is counting down from the start, so the
+	// caller can begin it at once and nobody can join it.
+	if activityType != ActivityTypeRace {
 		if err := qtx.StartRoomCountdown(ctx, roomID); err != nil {
 			return uuid.Nil, false, fmt.Errorf("start solo countdown: %w", err)
 		}
@@ -281,7 +284,7 @@ func (s *RoomService) MarkReady(ctx context.Context, userID, roomID uuid.UUID) e
 }
 
 // StartRace transitions a lobby whose guests are all ready to counting_down.
-// The host need not mark themselves ready. Starting is only for race-mode rooms,
+// The host need not mark themselves ready. Starting is only for race activities,
 // and a race needs at least 2 participants to start. The caller owns the countdown.
 func (s *RoomService) StartRace(ctx context.Context, callerUserID, roomID uuid.UUID) error {
 	return s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
@@ -328,9 +331,10 @@ func (s *RoomService) BeginRace(ctx context.Context, roomID uuid.UUID) error {
 	})
 }
 
-// ResetCountdown returns a counting-down race room to waiting after its race
-// could not begin, so it is joinable and can be started again. A solo room
-// (time trial) has no lobby to return to, so it is dissolved instead. A room
+// ResetCountdown returns a counting-down race activity to waiting after its
+// race could not begin, so it is joinable and can be started again. A solo
+// activity (time trial or warm-up) has no lobby to return to, so it is
+// dissolved instead. A room
 // in any other status is left unchanged and reported as
 // ErrInvalidStatusTransition.
 func (s *RoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) error {
@@ -338,7 +342,7 @@ func (s *RoomService) ResetCountdown(ctx context.Context, roomID uuid.UUID) erro
 		if room.Status != "counting_down" {
 			return ErrInvalidStatusTransition
 		}
-		if room.Mode != ModeRace {
+		if room.Mode != ActivityTypeRace {
 			if err := qtx.DissolveRoom(ctx, roomID); err != nil {
 				return fmt.Errorf("dissolve solo room: %w", err)
 			}

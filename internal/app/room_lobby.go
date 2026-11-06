@@ -11,8 +11,8 @@ import (
 	"github.com/softsrv/starter/internal/db"
 )
 
-// RaceTypeOption is a race type the lobby offers.
-type RaceTypeOption struct {
+// PresetOption is a preset the lobby offers.
+type PresetOption struct {
 	ID    uuid.UUID
 	Label string
 	// TargetMillimeters is the race distance, used to show pace.
@@ -24,18 +24,18 @@ type RoomLobby struct {
 	RoomID       uuid.UUID
 	Status       string
 	JoinCode     string
-	RaceTypeID   uuid.UUID
+	PresetID     uuid.UUID
 	RaceLabel    string
 	Participants []RoomRosterEntry
-	// DistanceRace reports whether the race type is a fixed distance.
+	// DistanceRace reports whether the preset is of kind distance.
 	DistanceRace bool
 	// InvitedIDs are the users already holding an invite to this room.
 	InvitedIDs map[uuid.UUID]bool
 	IsHost     bool
 	SelfReady  bool
 	// CanStart reports whether StartRace would accept the host's request now.
-	CanStart bool
-	Mode     string
+	CanStart     bool
+	ActivityType string
 }
 
 // RoomInvite is a pending invitation as its invitee sees it.
@@ -46,16 +46,16 @@ type RoomInvite struct {
 	Inviter   PublicPlayer
 }
 
-// RaceTypeOptions lists the race types a lobby can pick. Only fixed-distance
-// races can be raced on the track today.
-func (s *RoomService) RaceTypeOptions(ctx context.Context) ([]RaceTypeOption, error) {
+// PresetOptions lists the presets a lobby can pick. Only distance-kind
+// presets can be raced on the track today.
+func (s *RoomService) PresetOptions(ctx context.Context) ([]PresetOption, error) {
 	rows, err := s.q.ListDistanceRaceTypes(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list race types: %w", err)
+		return nil, fmt.Errorf("list presets: %w", err)
 	}
-	options := make([]RaceTypeOption, 0, len(rows))
+	options := make([]PresetOption, 0, len(rows))
 	for _, row := range rows {
-		options = append(options, RaceTypeOption{ID: row.ID, Label: row.Label, TargetMillimeters: row.TargetValue})
+		options = append(options, PresetOption{ID: row.ID, Label: row.Label, TargetMillimeters: row.TargetValue})
 	}
 	return options, nil
 }
@@ -76,9 +76,9 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 	}
 	lobby := RoomLobby{
 		RoomID: room.ID, Status: room.Status, JoinCode: room.JoinCode,
-		RaceTypeID: room.RaceTypeID, RaceLabel: room.RaceLabel, DistanceRace: room.RaceKind == "distance",
+		PresetID: room.RaceTypeID, RaceLabel: room.RaceLabel, DistanceRace: room.RaceKind == "distance",
 		IsHost: callerUserID == room.HostUserID, InvitedIDs: map[uuid.UUID]bool{},
-		Mode: room.Mode,
+		ActivityType: room.Mode,
 	}
 	member := false
 	guestsReady := true
@@ -110,18 +110,18 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 	return lobby, nil
 }
 
-// ChangeRaceType lets the host pick another fixed-distance race while the room
-// waits. Everyone agreed to the old race, so every ready flag is cleared.
-func (s *RoomService) ChangeRaceType(ctx context.Context, callerUserID, roomID, raceTypeID uuid.UUID) error {
-	raceType, err := s.q.GetRaceType(ctx, raceTypeID)
+// ChangePreset lets the host pick another distance-kind preset while the room
+// waits. Everyone agreed to the old preset, so every ready flag is cleared.
+func (s *RoomService) ChangePreset(ctx context.Context, callerUserID, roomID, presetID uuid.UUID) error {
+	preset, err := s.q.GetRaceType(ctx, presetID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalidRaceType
+			return ErrInvalidPreset
 		}
-		return fmt.Errorf("get race type: %w", err)
+		return fmt.Errorf("get preset: %w", err)
 	}
-	if raceType.Kind != "distance" {
-		return ErrInvalidRaceType
+	if preset.Kind != "distance" {
+		return ErrInvalidPreset
 	}
 	return s.withLockedRoom(ctx, roomID, func(qtx *db.Queries, room db.Room) error {
 		if callerUserID != room.HostUserID {
@@ -130,11 +130,11 @@ func (s *RoomService) ChangeRaceType(ctx context.Context, callerUserID, roomID, 
 		if room.Status != "waiting" {
 			return ErrRoomNotJoinable
 		}
-		if room.RaceTypeID == raceTypeID {
+		if room.RaceTypeID == presetID {
 			return nil
 		}
-		if err := qtx.UpdateRoomRaceType(ctx, db.UpdateRoomRaceTypeParams{ID: roomID, RaceTypeID: raceTypeID}); err != nil {
-			return fmt.Errorf("update race type: %w", err)
+		if err := qtx.UpdateRoomRaceType(ctx, db.UpdateRoomRaceTypeParams{ID: roomID, RaceTypeID: presetID}); err != nil {
+			return fmt.Errorf("update preset: %w", err)
 		}
 		if err := qtx.ResetRoomReadiness(ctx, roomID); err != nil {
 			return fmt.Errorf("reset readiness: %w", err)

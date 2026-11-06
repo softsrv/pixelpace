@@ -12,10 +12,17 @@ DEV_IMAGE        := $(APP_NAME)-dev
 # and sqlc-check refuses any other version (it is recorded in the headers of
 # the generated files under internal/db).
 SQLC_VERSION     := v1.31.1
+# Where `make sqlc-install` puts sqlc (go install: GOBIN, else the first GOPATH
+# entry's bin). The sqlc targets run that binary when it exists, so they work
+# without GOPATH/bin on PATH (as in CI); otherwise they use `sqlc` on PATH.
+SQLC_INSTALL_DIR  = $(or $(shell go env GOBIN),$(firstword $(subst :, ,$(shell go env GOPATH)))/bin)
+SQLC              = $(if $(wildcard $(SQLC_INSTALL_DIR)/sqlc),$(SQLC_INSTALL_DIR)/sqlc,sqlc)
 
 # Load .env if present (for local dev convenience)
 -include .env
 export
+# Make-only: keep the bare `export` above from running `go env` for every recipe.
+unexport SQLC_INSTALL_DIR SQLC
 
 .PHONY: dev dev-deps dev-container dev-logs dev-stop run build test fmt lint \
         daisyui-install pixi-install tailwind tailwind-watch \
@@ -174,7 +181,7 @@ migrate-status:
 	migrate -path db/migrations -database "$(DATABASE_URL)" version
 
 sqlc-generate:
-	sqlc generate -f db/sqlc.yaml
+	$(SQLC) generate -f db/sqlc.yaml
 
 sqlc-install:
 	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
@@ -182,11 +189,11 @@ sqlc-install:
 # Fails when sqlc is missing or not $(SQLC_VERSION), when git fails, or when
 # regenerating changes or adds any file under internal/db.
 sqlc-check:
-	@command -v sqlc >/dev/null 2>&1 || { \
-		echo "sqlc not found: run 'make sqlc-install' (installs sqlc $(SQLC_VERSION))" >&2; \
+	@command -v $(SQLC) >/dev/null 2>&1 || { \
+		echo "sqlc not found in $(SQLC_INSTALL_DIR) or on PATH: run 'make sqlc-install' (installs sqlc $(SQLC_VERSION))" >&2; \
 		exit 1; \
 	}
-	@v=$$(sqlc version) || { echo "sqlc-check: 'sqlc version' failed" >&2; exit 1; }; \
+	@v=$$($(SQLC) version) || { echo "sqlc-check: 'sqlc version' failed" >&2; exit 1; }; \
 	if [ "$$v" != "$(SQLC_VERSION)" ]; then \
 		echo "sqlc $$v found, but internal/db is generated with $(SQLC_VERSION): run 'make sqlc-install'" >&2; \
 		exit 1; \

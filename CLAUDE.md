@@ -22,6 +22,7 @@ make migrate-down                 # Roll back last migration
 make migrate-create NAME=<name>   # Create new migration pair
 make migrate-status               # Show current migration version
 make sqlc-generate                # Regenerate internal/db/ from db/queries/
+make sqlc-check                   # Verify internal/db/ matches what sqlc generates (CI fails when internal/db is stale)
 
 # CSS
 make daisyui-install  # Download DaisyUI .mjs bundles (re-run on DaisyUI upgrades)

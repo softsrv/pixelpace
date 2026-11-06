@@ -149,6 +149,7 @@ func TestLeaderboardPageFiltersAndLinks(t *testing.T) {
 	for _, target := range []string{
 		"/leaderboards?race_type=" + lbType2000.String() + "&mode=time-trial&scope=friends&window=week",
 		"/leaderboards?race_type=" + lbType2000.String() + "&activity=time-trial&scope=friends&window=week",
+		"/leaderboards?race_type=" + lbType2000.String() + "&activity=time-trial&mode=race&scope=friends&window=week",
 	} {
 		rr, call := serveLeaderboardPage(t, nil, viewer, target, false)
 		if call != (leaderboardCall{"friends", "week", "time-trial", lbType2000, viewer}) {
@@ -180,6 +181,26 @@ func TestLeaderboardPageFiltersAndLinks(t *testing.T) {
 		if strings.Contains(body, "<table") || strings.Contains(body, "Your best") {
 			t.Errorf("empty board renders a table or a personal best")
 		}
+	}
+}
+
+func TestLeaderboardPageActivityAndModePrecedence(t *testing.T) {
+	viewer := uuid.Must(uuid.NewV7())
+	for _, tc := range []struct {
+		name         string
+		query        string
+		wantActivity string
+	}{
+		{"mode=time-trial only", "?race_type=" + lbType500.String() + "&mode=time-trial", "time-trial"},
+		{"activity=race and mode=time-trial", "?race_type=" + lbType500.String() + "&activity=race&mode=time-trial", "race"},
+		{"neither activity nor mode", "?race_type=" + lbType500.String(), "race"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, call := serveLeaderboardPage(t, nil, viewer, "/leaderboards"+tc.query, false)
+			if call.mode != tc.wantActivity {
+				t.Errorf("got activity/mode = %q, want %q", call.mode, tc.wantActivity)
+			}
+		})
 	}
 }
 

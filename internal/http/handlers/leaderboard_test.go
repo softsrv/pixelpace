@@ -30,14 +30,19 @@ func (s *stubLeaderboardService) Leaderboard(ctx context.Context, scope, window,
 func TestLeaderboardAuthenticatedActor(t *testing.T) {
 	actor, raceType, racer := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	want := []app.LeaderboardRow{{UserID: racer, Name: "Speedy Racer", ElapsedMilliseconds: 1200}}
-	for _, tc := range []struct{ query, scope, window, mode string }{
-		{"", "global", "all-time", "race"},
-		{"&scope=global&window=month", "global", "month", "race"},
-		{"&scope=friends&window=week", "friends", "week", "race"},
-		{"&mode=time-trial", "global", "all-time", "time-trial"},
-		{"&scope=friends&window=week&mode=race", "friends", "week", "race"},
+	for _, tc := range []struct {
+		name, query, scope, window, mode string
+	}{
+		{"defaults", "", "global", "all-time", "race"},
+		{"scope and window", "&scope=global&window=month", "global", "month", "race"},
+		{"friends and week", "&scope=friends&window=week", "friends", "week", "race"},
+		{"legacy mode time-trial", "&mode=time-trial", "global", "all-time", "time-trial"},
+		{"activity time-trial", "&activity=time-trial", "global", "all-time", "time-trial"},
+		{"activity race wins over mode time-trial", "&activity=race&mode=time-trial", "global", "all-time", "race"},
+		{"activity time-trial wins over mode race", "&activity=time-trial&mode=race", "global", "all-time", "time-trial"},
+		{"scope friends week mode race", "&scope=friends&window=week&mode=race", "friends", "week", "race"},
 	} {
-		t.Run(tc.mode+"/"+tc.scope+"/"+tc.window, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			called := false
 			h := handlers.NewLeaderboardHandler(&stubLeaderboardService{listFn: func(_ context.Context, scope, window, mode string, gotType, caller uuid.UUID) ([]app.LeaderboardRow, error) {
 				called = true

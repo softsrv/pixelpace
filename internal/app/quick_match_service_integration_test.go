@@ -37,12 +37,12 @@ func quickMatchIntegrationDB(t *testing.T) *pgxpool.Pool {
 func quickMatchIntegrationType(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.Must(uuid.NewV7())
-	_, err := pool.Exec(context.Background(), "INSERT INTO race_types (id, kind, target_value, label) SELECT $1, kind, target_value, label FROM race_types WHERE id = $2", id, roomTestID)
+	_, err := pool.Exec(context.Background(), "INSERT INTO presets (id, kind, target_value, label) SELECT $1, kind, target_value, label FROM presets WHERE id = $2", id, roomTestID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, err := pool.Exec(context.Background(), "DELETE FROM race_types WHERE id = $1", id)
+		_, err := pool.Exec(context.Background(), "DELETE FROM presets WHERE id = $1", id)
 		if err != nil {
 			t.Error(err)
 		}
@@ -57,7 +57,7 @@ func quickMatchIntegrationService(pool *pgxpool.Pool, now func() time.Time) *Qui
 
 func quickMatchIntegrationWait(t *testing.T, pool *pgxpool.Pool, user, raceType uuid.UUID, joined time.Time) {
 	t.Helper()
-	_, err := pool.Exec(context.Background(), "UPDATE quick_match_queue SET joined_at = $3 WHERE user_id = $1 AND race_type_id = $2", user, raceType, joined)
+	_, err := pool.Exec(context.Background(), "UPDATE quick_match_queue SET joined_at = $3 WHERE user_id = $1 AND preset_id = $2", user, raceType, joined)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,16 +81,16 @@ func quickMatchIntegrationFinishMode(t *testing.T, pool *pgxpool.Pool, user, rac
 	roomID := uuid.Must(uuid.NewV7())
 	// A finished room is outside the active join-code index, so a fixed code is safe.
 	const code = "QMTEST"
-	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'finished', $4, $5, $6)", roomID, raceType, user, code, mode, duration); err != nil {
+	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, preset_id, host_user_id, status, join_code, activity_type, duration_seconds) VALUES ($1, $2, $3, 'finished', $4, $5, $6)", roomID, raceType, user, code, mode, duration); err != nil {
 		t.Fatal(err)
 	}
 	raceID := uuid.Must(uuid.NewV7())
-	_, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, mode, time_trial) VALUES ($1, $2, $3, $4, $5, $6, $7)", raceID, roomID, raceType, finished.Add(-time.Duration(milliseconds)*time.Millisecond), finished, mode, mode == ActivityTypeTimeTrial)
+	_, err := pool.Exec(ctx, "INSERT INTO activities (id, room_id, preset_id, started_at, finished_at, activity_type, time_trial) VALUES ($1, $2, $3, $4, $5, $6, $7)", raceID, roomID, raceType, finished.Add(-time.Duration(milliseconds)*time.Millisecond), finished, mode, mode == ActivityTypeTimeTrial)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		for _, statement := range []string{"DELETE FROM race_participants WHERE race_id = $1", "DELETE FROM races WHERE id = $1"} {
+		for _, statement := range []string{"DELETE FROM race_participants WHERE race_id = $1", "DELETE FROM activities WHERE id = $1"} {
 			if _, err := pool.Exec(ctx, statement, raceID); err != nil {
 				t.Error(err)
 			}
@@ -116,14 +116,14 @@ func TestQuickMatchIntegrationQueue(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := s.q.ListWaitingByRaceType(ctx, raceType)
+	rows, err := s.q.ListWaitingByPreset(ctx, raceType)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("queue = %+v, %v", rows, err)
 	}
 	var joined time.Time
 	var version int
 	var id uuid.UUID
-	if err := pool.QueryRow(ctx, "SELECT id, joined_at FROM quick_match_queue WHERE user_id = $1 AND race_type_id = $2", a, raceType).Scan(&id, &joined); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT id, joined_at FROM quick_match_queue WHERE user_id = $1 AND preset_id = $2", a, raceType).Scan(&id, &joined); err != nil {
 		t.Fatal(err)
 	}
 	version = int(id.Version())
@@ -134,13 +134,13 @@ func TestQuickMatchIntegrationQueue(t *testing.T) {
 		t.Fatalf("duplicate = %v", err)
 	}
 	var retained time.Time
-	if err := pool.QueryRow(ctx, "SELECT joined_at FROM quick_match_queue WHERE user_id = $1 AND race_type_id = $2", a, raceType).Scan(&retained); err != nil || !retained.Equal(joined) {
+	if err := pool.QueryRow(ctx, "SELECT joined_at FROM quick_match_queue WHERE user_id = $1 AND preset_id = $2", a, raceType).Scan(&retained); err != nil || !retained.Equal(joined) {
 		t.Fatalf("duplicate reset wait: %v, %v", retained, err)
 	}
 	now := time.Now().UTC()
 	quickMatchIntegrationWait(t, pool, a, raceType, now.Add(-30*time.Second))
 	quickMatchIntegrationWait(t, pool, b, raceType, now.Add(-10*time.Second))
-	rows, err = s.q.ListWaitingByRaceType(ctx, raceType)
+	rows, err = s.q.ListWaitingByPreset(ctx, raceType)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("queue = %+v, %v", rows, err)
 	}
@@ -155,7 +155,7 @@ func TestQuickMatchIntegrationQueue(t *testing.T) {
 	if err := s.Leave(ctx, a, raceType); err != nil {
 		t.Fatal(err)
 	}
-	rows, err = s.q.ListWaitingByRaceType(ctx, raceType)
+	rows, err = s.q.ListWaitingByPreset(ctx, raceType)
 	if err != nil || len(rows) != 1 || rows[0].UserID != b {
 		t.Fatalf("after leave = %+v, %v", rows, err)
 	}
@@ -228,7 +228,7 @@ func TestQuickMatchIntegrationRecentFinishes(t *testing.T) {
 	quickMatchIntegrationFinish(t, pool, other, raceType, 2, now, "finished")
 	quickMatchIntegrationFinish(t, pool, user, raceType, 3, now, "dnf")
 	quickMatchIntegrationFinishMode(t, pool, user, raceType, 4, now, "finished", ActivityTypeWarmup)
-	rows, err := db.New(pool).RecentFinishesByRaceType(context.Background(), db.RecentFinishesByRaceTypeParams{RaceTypeID: raceType, UserID: user})
+	rows, err := db.New(pool).RecentFinishesByPreset(context.Background(), db.RecentFinishesByPresetParams{PresetID: raceType, UserID: user})
 	if err != nil || len(rows) != 7 {
 		t.Fatalf("finishes = %+v, %v", rows, err)
 	}
@@ -293,7 +293,7 @@ func TestQuickMatchIntegrationHostAndWindows(t *testing.T) {
 	if err != nil || count != 2 {
 		t.Fatalf("count = %d, %v", count, err)
 	}
-	rows, err := s.q.ListWaitingByRaceType(ctx, raceType)
+	rows, err := s.q.ListWaitingByPreset(ctx, raceType)
 	if err != nil || len(rows) != 1 || rows[0].UserID != unrated {
 		t.Fatalf("remaining queue = %+v, %v", rows, err)
 	}
@@ -329,7 +329,7 @@ func TestQuickMatchIntegrationPairsByPresetIntoARace(t *testing.T) {
 	})
 	var activityType string
 	var roomPreset uuid.UUID
-	if err := pool.QueryRow(ctx, "SELECT mode, race_type_id FROM rooms WHERE id = $1", roomID).Scan(&activityType, &roomPreset); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT activity_type, preset_id FROM rooms WHERE id = $1", roomID).Scan(&activityType, &roomPreset); err != nil {
 		t.Fatal(err)
 	}
 	if activityType != ActivityTypeRace || roomPreset != preset {
@@ -351,7 +351,7 @@ func TestQuickMatchIntegrationPairsByPresetIntoARace(t *testing.T) {
 	if len(members) != 2 || !members[a] || !members[b] {
 		t.Fatalf("room members = %v; want only %s and %s, who share the preset", members, a, b)
 	}
-	waiting, err := s.q.ListWaitingByRaceType(ctx, otherPreset)
+	waiting, err := s.q.ListWaitingByPreset(ctx, otherPreset)
 	if err != nil || len(waiting) != 1 || waiting[0].UserID != c {
 		t.Fatalf("other preset's queue = %+v, %v; want %s still waiting", waiting, err, c)
 	}
@@ -401,7 +401,7 @@ func TestQuickMatchIntegrationRatingIgnoresWarmups(t *testing.T) {
 			t.Fatalf("%s not in the room: %v", user, err)
 		}
 	}
-	waiting, err := s.q.ListWaitingByRaceType(ctx, preset)
+	waiting, err := s.q.ListWaitingByPreset(ctx, preset)
 	if err != nil || len(waiting) != 1 || waiting[0].UserID != byWarmup {
 		t.Fatalf("queue = %+v, %v; want the warm-up-only racer still waiting", waiting, err)
 	}
@@ -437,7 +437,7 @@ func TestQuickMatchIntegrationUnratedGroup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := s.q.ListWaitingByRaceType(ctx, raceType)
+	rows, err := s.q.ListWaitingByPreset(ctx, raceType)
 	if err != nil || len(rows) != 1 || rows[0].UserID != rated {
 		t.Fatalf("rated did not remain: %+v, %v", rows, err)
 	}
@@ -464,10 +464,10 @@ func TestQuickMatchIntegrationAtomicFailure(t *testing.T) {
 		t.Fatal("expected delete failure")
 	}
 	var count int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms WHERE race_type_id = $1", raceType).Scan(&count); err != nil || count != 0 {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM rooms WHERE preset_id = $1", raceType).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("partial room: %d, %v", count, err)
 	}
-	rows, err := s.q.ListWaitingByRaceType(ctx, raceType)
+	rows, err := s.q.ListWaitingByPreset(ctx, raceType)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("lost queue: %+v, %v", rows, err)
 	}

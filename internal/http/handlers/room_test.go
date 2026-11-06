@@ -56,7 +56,7 @@ type fakeBeginner struct {
 	runStarted chan struct{}
 }
 
-func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, error) {
+func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Activity, error) {
 	b.mu.Lock()
 	b.rooms = append(b.rooms, roomID)
 	b.ctxs = append(b.ctxs, ctx)
@@ -70,15 +70,15 @@ func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, er
 	}
 	if block {
 		<-ctx.Done()
-		return db.Race{}, ctx.Err()
+		return db.Activity{}, ctx.Err()
 	}
 	if err != nil {
-		return db.Race{}, err
+		return db.Activity{}, err
 	}
 	if raceID != uuid.Nil {
-		return db.Race{ID: raceID, RoomID: roomID}, nil
+		return db.Activity{ID: raceID, RoomID: roomID}, nil
 	}
-	return db.Race{ID: uuid.New(), RoomID: roomID}, nil
+	return db.Activity{ID: uuid.New(), RoomID: roomID}, nil
 }
 
 func (b *fakeBeginner) Run(ctx context.Context, raceID uuid.UUID) error {

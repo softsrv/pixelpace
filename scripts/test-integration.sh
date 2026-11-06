@@ -52,7 +52,9 @@ READY_INTERVAL="${READY_INTERVAL:-1}"
 
 pg_ready=0
 for ((i = 1; i <= READY_ATTEMPTS; i++)); do
-  if docker exec "$PG_CONTAINER" pg_isready -U postgres -d pixelpace_test >/dev/null 2>&1; then
+  # Probe over TCP: the image's init-phase temp server listens only on the unix
+  # socket, so a socket probe can pass just before that server shuts down.
+  if docker exec "$PG_CONTAINER" pg_isready -h 127.0.0.1 -p 5432 -U postgres -d pixelpace_test >/dev/null 2>&1; then
     pg_ready=1
     break
   fi

@@ -38,8 +38,8 @@ Merges into `main` require a pull request with `ci` green. Run `make fmt lint te
 To run a single test:
 ```bash
 go test ./internal/auth/... -run TestJWTRoundTrip
-./scripts/test-integration.sh -run TestAuthServiceIntegration  # same throwaway containers as make test-integration; extra args go to go test, and a filter matching no test fails the run
-TEST_DATABASE_URL=... VALKEY_ADDR=... go test -tags integration ./internal/app/... -run TestAuthServiceIntegration  # against services you run yourself; without TEST_DATABASE_URL (and VALKEY_ADDR where used) the test skips
+./scripts/test-integration.sh -run TestMigration000020ReversibleIntegration  # same throwaway containers as make test-integration; extra args go to go test, and a filter matching no test fails the run
+TEST_DATABASE_URL=... VALKEY_ADDR=... go test -tags integration ./internal/app/... -run TestMigration000020ReversibleIntegration  # against services you run yourself; without TEST_DATABASE_URL (and VALKEY_ADDR where used) the test skips
 ```
 
 ## Architecture

@@ -11,6 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Activity struct {
+	ID           uuid.UUID          `json:"id"`
+	RoomID       uuid.UUID          `json:"room_id"`
+	PresetID     uuid.UUID          `json:"preset_id"`
+	StartedAt    pgtype.Timestamptz `json:"started_at"`
+	FinishedAt   pgtype.Timestamptz `json:"finished_at"`
+	TimeTrial    bool               `json:"time_trial"`
+	ActivityType string             `json:"activity_type"`
+}
+
 type Concept2Connection struct {
 	UserID          uuid.UUID          `json:"user_id"`
 	C2UserID        int64              `json:"c2_user_id"`
@@ -74,21 +84,26 @@ type PasswordResetToken struct {
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 }
 
+type Preset struct {
+	ID          uuid.UUID `json:"id"`
+	Kind        string    `json:"kind"`
+	TargetValue int64     `json:"target_value"`
+	Label       string    `json:"label"`
+}
+
+type PresetSegment struct {
+	ID          uuid.UUID `json:"id"`
+	PresetID    uuid.UUID `json:"preset_id"`
+	Position    int32     `json:"position"`
+	TargetValue int64     `json:"target_value"`
+}
+
 type QuickMatchQueue struct {
 	ID         uuid.UUID          `json:"id"`
 	UserID     uuid.UUID          `json:"user_id"`
 	RaceTypeID uuid.UUID          `json:"race_type_id"`
 	JoinedAt   pgtype.Timestamptz `json:"joined_at"`
-}
-
-type Race struct {
-	ID         uuid.UUID          `json:"id"`
-	RoomID     uuid.UUID          `json:"room_id"`
-	RaceTypeID uuid.UUID          `json:"race_type_id"`
-	StartedAt  pgtype.Timestamptz `json:"started_at"`
-	FinishedAt pgtype.Timestamptz `json:"finished_at"`
-	TimeTrial  bool               `json:"time_trial"`
-	Mode       string             `json:"mode"`
+	PresetID   uuid.UUID          `json:"preset_id"`
 }
 
 type RaceParticipant struct {
@@ -101,20 +116,6 @@ type RaceParticipant struct {
 	Pm5SerialNumber     pgtype.Text        `json:"pm5_serial_number"`
 	Pm5FirmwareVersion  pgtype.Text        `json:"pm5_firmware_version"`
 	Pm5HardwareRevision pgtype.Text        `json:"pm5_hardware_revision"`
-}
-
-type RaceType struct {
-	ID          uuid.UUID `json:"id"`
-	Kind        string    `json:"kind"`
-	TargetValue int64     `json:"target_value"`
-	Label       string    `json:"label"`
-}
-
-type RaceTypeSegment struct {
-	ID          uuid.UUID `json:"id"`
-	RaceTypeID  uuid.UUID `json:"race_type_id"`
-	Position    int32     `json:"position"`
-	TargetValue int64     `json:"target_value"`
 }
 
 type RefreshToken struct {
@@ -140,6 +141,8 @@ type Room struct {
 	RaceStartsAt    pgtype.Timestamptz `json:"race_starts_at"`
 	Mode            string             `json:"mode"`
 	DurationSeconds pgtype.Int4        `json:"duration_seconds"`
+	ActivityType    string             `json:"activity_type"`
+	PresetID        uuid.UUID          `json:"preset_id"`
 }
 
 type RoomInvite struct {

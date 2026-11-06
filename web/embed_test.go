@@ -817,7 +817,7 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 			}
 		}
 		lobby := app.RoomLobby{
-			RoomID: roomID, Status: "waiting", JoinCode: "ABC234", RaceTypeID: typeB, RaceLabel: "2000m",
+			RoomID: roomID, Status: "waiting", JoinCode: "ABC234", PresetID: typeB, RaceLabel: "2000m",
 			IsHost: isHost, CanStart: canStart, SelfReady: selfReady,
 			Participants: roster,
 		}
@@ -825,7 +825,7 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 		err = tmpl.ExecuteTemplate(&buf, "base.html", map[string]any{
 			"User":      map[string]any{"Email": "host@example.com"},
 			"Lobby":     lobby,
-			"RaceTypes": []app.RaceTypeOption{{ID: typeA, Label: "500m"}, {ID: typeB, Label: "2000m"}},
+			"RaceTypes": []app.PresetOption{{ID: typeA, Label: "500m"}, {ID: typeB, Label: "2000m"}},
 			"Friends":   []map[string]any{{"UserID": friendID, "Name": "Friendly", "Invited": false, "Joined": false}},
 			"JoinURL":   "https://pixelpace.test/join/ABC234",
 		})
@@ -839,6 +839,13 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 	for _, want := range []string{
 		`hx-post="/rooms/` + roomID.String() + `/race-type"`,
 		`<option value="` + typeB.String() + `" selected>2000m</option>`,
+		`for="preset-select"`,
+		`<span class="pp-label pp-arcade">Preset</span>`,
+		`id="preset-select"`,
+		`name="race_type_id"`,
+		`data-error-target="#preset-error"`,
+		`data-error-message="Couldn't change the preset."`,
+		`id="preset-error"`,
 		`value="https://pixelpace.test/join/ABC234"`,
 		`data-copy-target="#join-url"`,
 		`>ABC234</span>`,
@@ -858,6 +865,9 @@ func TestLobbyPageRendersHostControlsAndLivePanel(t *testing.T) {
 	for _, banned := range []string{
 		"Start time trial",
 		"Rowing solo counts as a time trial",
+		"race-type-select",
+		"race-type-error",
+		"Couldn't change the race type.",
 	} {
 		if strings.Contains(host, banned) {
 			t.Errorf("host lobby contains banned string %q", banned)
@@ -910,7 +920,7 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	inviteID := uuid.MustParse("01950000-0000-7000-8000-0000000000ff")
 	var card, invites strings.Builder
 	if err := tmpl.ExecuteTemplate(&card, "race-card", map[string]any{
-		"RaceTypes":        []app.RaceTypeOption{{ID: typeID, Label: "2000m"}},
+		"RaceTypes":        []app.PresetOption{{ID: typeID, Label: "2000m"}},
 		"WarmupMinutesMin": app.MinWarmupMinutes,
 		"WarmupMinutesMax": app.MaxWarmupMinutes,
 	}); err != nil {
@@ -918,16 +928,21 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	}
 	for _, want := range []string{
 		`hx-post="/rooms"`,
-		`name="mode"`,
+		`<span class="pp-label pp-arcade">Activity type</span>`,
+		`name="activity_type"`,
 		`data-submit-label-target="#create-room-submit-label"`,
 		`<option value="race" data-submit-label="Create race" selected>Race</option>`,
 		`<option value="time_trial" data-submit-label="Start time trial">Time trial</option>`,
 		`<option value="warmup" data-submit-label="Start warmup">Warmup</option>`,
+		`id="preset-field"`,
+		`data-activity-type-field="distance"`,
+		`<span class="pp-label pp-arcade">Preset</span>`,
 		`<span id="create-room-submit-label">Create race</span></button>`,
 		`name="minutes"`,
 		`min="1"`,
 		`max="20"`,
 		`step="1"`,
+		`data-activity-type-field="warmup"`,
 		`Start warmup`,
 		`id="create-room-error"`,
 		`<option value="` + typeID.String() + `">2000m</option>`,
@@ -939,6 +954,17 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 			t.Errorf("race card missing %q", want)
 		}
 	}
+	for _, banned := range []string{
+		`id="race-type-field"`,
+		`<span class="pp-label pp-arcade">Race type</span>`,
+		`<span class="pp-label pp-arcade">Mode</span>`,
+		`name="mode"`,
+		`data-mode-field`,
+	} {
+		if strings.Contains(card.String(), banned) {
+			t.Errorf("race card contains banned string %q", banned)
+		}
+	}
 	if err := tmpl.ExecuteTemplate(&invites, "room-invites", map[string]any{"Invites": []app.RoomInvite{
 		{ID: inviteID, RaceLabel: "500m", Inviter: app.PublicPlayer{Name: "Ada"}},
 	}}); err != nil {
@@ -947,6 +973,35 @@ func TestDashboardRaceFragmentsRender(t *testing.T) {
 	for _, want := range []string{"<strong>Ada</strong> invited you to a 500m race.", `hx-post="/invites/` + inviteID.String() + `/accept"`, `hx-post="/invites/` + inviteID.String() + `/decline"`} {
 		if !strings.Contains(invites.String(), want) {
 			t.Errorf("invites missing %q in %q", want, invites.String())
+		}
+	}
+}
+
+// TestNoEmbeddedTemplatesOrStaticJSContainsRaceTypePhrase verifies CLM-3:
+// walks embedded templates and static JS, asserting that no file contains
+// the case-insensitive phrase 'race type' (with a space). Wire names like
+// race_type or race-type are permitted.
+func TestNoEmbeddedTemplatesOrStaticJSContainsRaceTypePhrase(t *testing.T) {
+	roots := []string{"templates", "static/js"}
+	for _, root := range roots {
+		err := fs.WalkDir(FS, root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			data, err := fs.ReadFile(FS, path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			if strings.Contains(strings.ToLower(string(data)), "race type") {
+				t.Errorf("%s contains forbidden phrase 'race type'", path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
 		}
 	}
 }

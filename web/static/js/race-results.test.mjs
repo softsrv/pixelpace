@@ -346,9 +346,9 @@ test('resultRows: every row pace has tenths or em-dash across multi-racer and so
   assert.match(solo.rows[0].pace, /^\d+:\d{2}\.\d$/);
 });
 
-test('resultRows: warmup rows show distance, time and pace, with no rank column and never the "No one finished" text (CLM-7)', function () {
+test('resultRows: warmup rows show distance, time and pace, with no rank column and never the "No one finished" text (CLM-1, CLM-7, CLM-9)', function () {
   var data = {
-    mode: 'warmup',
+    activityType: 'warmup',
     results: [
       { user_id: 'u-warmup', name: 'Warmup Rower', status: 'finished', elapsed_milliseconds: 300000, distance_millimeters: 1250000, pace_milliseconds_per_500m: 120000 }
     ]
@@ -357,6 +357,8 @@ test('resultRows: warmup rows show distance, time and pace, with no rank column 
   assert.equal(res.rows.length, 1);
   assert.equal(res.hasRank, false, 'hasRank must be false for warmup');
   assert.equal(res.isWarmup, true, 'isWarmup must be true for warmup');
+  assert.equal(res.activityType, 'warmup');
+  assert.equal('mode' in res, false, 'result must not have a mode property');
   assert.equal(res.rows[0].rank, null, 'rank must be null for warmup row');
   assert.equal(res.rows[0].name, 'Warmup Rower');
   assert.equal(res.rows[0].time, '5:00.0');
@@ -365,18 +367,45 @@ test('resultRows: warmup rows show distance, time and pace, with no rank column 
   assert.equal(res.rows[0].isSelf, true);
   assert.equal(res.message, null, 'warmup must not have message');
 
-  // Also when mode is passed as 3rd parameter
+  // Also when activityType is passed as 3rd parameter
   var resExplicitMode = resultRows({
     results: [
       { user_id: 'u-1', name: 'Rower', status: 'finished', elapsed_ms: 60000, distance_m: 250, pace_ms_per_500m: 120000 }
     ]
   }, 'u-other', 'warmup');
   assert.equal(resExplicitMode.hasRank, false);
+  assert.equal(resExplicitMode.activityType, 'warmup');
   assert.equal(resExplicitMode.rows[0].rank, null);
   assert.equal(resExplicitMode.message, null);
 
   // Warmup with no finishers never shows "No one finished"
-  var emptyWarmup = resultRows({ mode: 'warmup', results: [] });
+  var emptyWarmup = resultRows({ activityType: 'warmup', results: [] });
   assert.equal(emptyWarmup.message, null, 'empty warmup never shows "No one finished"');
   assert.notEqual(emptyWarmup.message, 'No one finished');
+  assert.equal(emptyWarmup.activityType, 'warmup');
+
+  // Race and time_trial resultRows have ranks 1..n and hasRank true
+  var raceResults = resultRows({
+    activityType: 'race',
+    results: [
+      { user_id: 'u-1', name: 'Racer 1', status: 'finished', elapsed_ms: 60000, distance_m: 500, pace_ms_per_500m: 60000 },
+      { user_id: 'u-2', name: 'Racer 2', status: 'finished', elapsed_ms: 62000, distance_m: 500, pace_ms_per_500m: 62000 }
+    ]
+  });
+  assert.equal(raceResults.hasRank, true, 'hasRank must be true for race');
+  assert.equal(raceResults.isWarmup, false);
+  assert.equal(raceResults.activityType, 'race');
+  assert.equal(raceResults.rows[0].rank, 1);
+  assert.equal(raceResults.rows[1].rank, 2);
+
+  var ttResults = resultRows({
+    activityType: 'time_trial',
+    results: [
+      { user_id: 'u-1', name: 'Solo TT', status: 'finished', elapsed_ms: 95400, distance_m: 500, pace_ms_per_500m: 95400 }
+    ]
+  });
+  assert.equal(ttResults.hasRank, true, 'hasRank must be true for time_trial');
+  assert.equal(ttResults.isWarmup, false);
+  assert.equal(ttResults.activityType, 'time_trial');
+  assert.equal(ttResults.rows[0].rank, 1);
 });

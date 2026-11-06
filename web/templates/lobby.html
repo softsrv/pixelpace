@@ -30,17 +30,17 @@
 
       {{if .Lobby.IsHost}}
       <form class="space-y-2" hx-post="/rooms/{{.Lobby.RoomID}}/race-type" hx-trigger="change" hx-swap="none"
-            data-error-target="#race-type-error" data-error-message="Couldn't change the race type.">
-        <label class="block space-y-2" for="race-type-select">
-          <span class="pp-label pp-arcade">Race type</span>
-          <select id="race-type-select" name="race_type_id" class="pp-field">
+            data-error-target="#preset-error" data-error-message="Couldn't change the preset.">
+        <label class="block space-y-2" for="preset-select">
+          <span class="pp-label pp-arcade">Preset</span>
+          <select id="preset-select" name="race_type_id" class="pp-field">
             {{range .RaceTypes}}
-            <option value="{{.ID}}"{{if eq .ID $.Lobby.RaceTypeID}} selected{{end}}>{{.Label}}</option>
+            <option value="{{.ID}}"{{if eq .ID $.Lobby.PresetID}} selected{{end}}>{{.Label}}</option>
             {{end}}
           </select>
         </label>
         <p class="pp-hint">Changing the race asks everyone to ready up again.</p>
-        <p id="race-type-error" class="text-error text-sm" role="alert"></p>
+        <p id="preset-error" class="text-error text-sm" role="alert"></p>
       </form>
       {{end}}
     </div>

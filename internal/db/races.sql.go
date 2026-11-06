@@ -15,7 +15,7 @@ import (
 const beginRaceRoom = `-- name: BeginRaceRoom :one
 UPDATE rooms SET status = 'in_progress'
 WHERE id = $1 AND status = 'counting_down'
-RETURNING id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds
+RETURNING id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds, activity_type, preset_id
 `
 
 func (q *Queries) BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error) {
@@ -31,6 +31,8 @@ func (q *Queries) BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error)
 		&i.RaceStartsAt,
 		&i.Mode,
 		&i.DurationSeconds,
+		&i.ActivityType,
+		&i.PresetID,
 	)
 	return i, err
 }
@@ -46,39 +48,39 @@ func (q *Queries) CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUI
 	return count, err
 }
 
-const createRace = `-- name: CreateRace :one
-INSERT INTO races (id, room_id, race_type_id, started_at, mode, time_trial)
+const createActivity = `-- name: CreateActivity :one
+INSERT INTO activities (id, room_id, preset_id, started_at, activity_type, time_trial)
 VALUES ($1, $2, $3, $4, $5::text, $5::text = 'time_trial')
-RETURNING id, room_id, race_type_id, started_at, finished_at, time_trial, mode
+RETURNING id, room_id, preset_id, started_at, finished_at, time_trial, activity_type
 `
 
-type CreateRaceParams struct {
-	ID         uuid.UUID          `json:"id"`
-	RoomID     uuid.UUID          `json:"room_id"`
-	RaceTypeID uuid.UUID          `json:"race_type_id"`
-	StartedAt  pgtype.Timestamptz `json:"started_at"`
-	Mode       string             `json:"mode"`
+type CreateActivityParams struct {
+	ID           uuid.UUID          `json:"id"`
+	RoomID       uuid.UUID          `json:"room_id"`
+	PresetID     uuid.UUID          `json:"preset_id"`
+	StartedAt    pgtype.Timestamptz `json:"started_at"`
+	ActivityType string             `json:"activity_type"`
 }
 
-// mode owns the race's kind; time_trial is kept for older readers and is
-// always derived from it, never passed separately.
-func (q *Queries) CreateRace(ctx context.Context, arg CreateRaceParams) (Race, error) {
-	row := q.db.QueryRow(ctx, createRace,
+// activity_type owns the activity's type; time_trial is kept for older readers
+// and is always derived from it, never passed separately.
+func (q *Queries) CreateActivity(ctx context.Context, arg CreateActivityParams) (Activity, error) {
+	row := q.db.QueryRow(ctx, createActivity,
 		arg.ID,
 		arg.RoomID,
-		arg.RaceTypeID,
+		arg.PresetID,
 		arg.StartedAt,
-		arg.Mode,
+		arg.ActivityType,
 	)
-	var i Race
+	var i Activity
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
-		&i.RaceTypeID,
+		&i.PresetID,
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.TimeTrial,
-		&i.Mode,
+		&i.ActivityType,
 	)
 	return i, err
 }
@@ -124,17 +126,17 @@ func (q *Queries) DeleteRoomEquipmentUnready(ctx context.Context, roomID uuid.UU
 	return items, nil
 }
 
-const finishRace = `-- name: FinishRace :exec
-UPDATE races SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL
+const finishActivity = `-- name: FinishActivity :exec
+UPDATE activities SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL
 `
 
-type FinishRaceParams struct {
+type FinishActivityParams struct {
 	ID         uuid.UUID          `json:"id"`
 	FinishedAt pgtype.Timestamptz `json:"finished_at"`
 }
 
-func (q *Queries) FinishRace(ctx context.Context, arg FinishRaceParams) error {
-	_, err := q.db.Exec(ctx, finishRace, arg.ID, arg.FinishedAt)
+func (q *Queries) FinishActivity(ctx context.Context, arg FinishActivityParams) error {
+	_, err := q.db.Exec(ctx, finishActivity, arg.ID, arg.FinishedAt)
 	return err
 }
 
@@ -165,22 +167,22 @@ func (q *Queries) FinishRaceRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRoomRace = `-- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.duration_seconds, r.host_user_id
+SELECT r.status, r.race_starts_at, r.preset_id, p.kind, p.target_value, p.label, a.id AS race_id, r.activity_type, r.duration_seconds, r.host_user_id
 FROM rooms r
-JOIN race_types rt ON rt.id = r.race_type_id
-LEFT JOIN races ON races.room_id = r.id
+JOIN presets p ON p.id = r.preset_id
+LEFT JOIN activities a ON a.room_id = r.id
 WHERE r.id = $1
 `
 
 type GetRoomRaceRow struct {
 	Status          string             `json:"status"`
 	RaceStartsAt    pgtype.Timestamptz `json:"race_starts_at"`
-	RaceTypeID      uuid.UUID          `json:"race_type_id"`
+	PresetID        uuid.UUID          `json:"preset_id"`
 	Kind            string             `json:"kind"`
 	TargetValue     int64              `json:"target_value"`
 	Label           string             `json:"label"`
 	RaceID          pgtype.UUID        `json:"race_id"`
-	Mode            string             `json:"mode"`
+	ActivityType    string             `json:"activity_type"`
 	DurationSeconds pgtype.Int4        `json:"duration_seconds"`
 	HostUserID      uuid.UUID          `json:"host_user_id"`
 }
@@ -191,12 +193,12 @@ func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow
 	err := row.Scan(
 		&i.Status,
 		&i.RaceStartsAt,
-		&i.RaceTypeID,
+		&i.PresetID,
 		&i.Kind,
 		&i.TargetValue,
 		&i.Label,
 		&i.RaceID,
-		&i.Mode,
+		&i.ActivityType,
 		&i.DurationSeconds,
 		&i.HostUserID,
 	)
@@ -261,11 +263,11 @@ func (q *Queries) IsRaceParticipant(ctx context.Context, arg IsRaceParticipantPa
 const listRaceResults = `-- name: ListRaceResults :many
 SELECT p.user_id, u.display_name, p.status,
        p.elapsed_milliseconds AS finish_elapsed_milliseconds,
-       r.started_at,
+       a.started_at,
        latest.distance_millimeters, latest.sampled_at
 FROM race_participants p
 JOIN users u ON u.id = p.user_id
-JOIN races r ON r.id = p.race_id
+JOIN activities a ON a.id = p.race_id
 LEFT JOIN LATERAL (
     SELECT s.distance_millimeters, s.sampled_at
     FROM telemetry_samples s WHERE s.race_id = p.race_id AND s.user_id = p.user_id
@@ -468,16 +470,16 @@ func (q *Queries) ListRoomLineup(ctx context.Context, roomID uuid.UUID) ([]ListR
 	return items, nil
 }
 
-const listUnfinishedRaces = `-- name: ListUnfinishedRaces :many
-SELECT r.id
-FROM races r JOIN rooms ro ON ro.id = r.room_id
-WHERE r.finished_at IS NULL AND ro.status = 'in_progress'
-ORDER BY r.id
+const listUnfinishedActivities = `-- name: ListUnfinishedActivities :many
+SELECT a.id
+FROM activities a JOIN rooms ro ON ro.id = a.room_id
+WHERE a.finished_at IS NULL AND ro.status = 'in_progress'
+ORDER BY a.id
 `
 
-// Begun races not yet finalized whose room is still racing, for resuming Run.
-func (q *Queries) ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listUnfinishedRaces)
+// Begun activities not yet finalized whose room is still in progress, for resuming Run.
+func (q *Queries) ListUnfinishedActivities(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listUnfinishedActivities)
 	if err != nil {
 		return nil, err
 	}
@@ -496,38 +498,38 @@ func (q *Queries) ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error) 
 	return items, nil
 }
 
-const lockRace = `-- name: LockRace :one
-SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, r.time_trial, r.mode, rt.kind, rt.target_value, ro.duration_seconds
-FROM races r
-JOIN race_types rt ON rt.id = r.race_type_id
-JOIN rooms ro ON ro.id = r.room_id
-WHERE r.id = $1 FOR UPDATE OF r
+const lockActivity = `-- name: LockActivity :one
+SELECT a.id, a.room_id, a.preset_id, a.started_at, a.finished_at, a.time_trial, a.activity_type, p.kind, p.target_value, ro.duration_seconds
+FROM activities a
+JOIN presets p ON p.id = a.preset_id
+JOIN rooms ro ON ro.id = a.room_id
+WHERE a.id = $1 FOR UPDATE OF a
 `
 
-type LockRaceRow struct {
+type LockActivityRow struct {
 	ID              uuid.UUID          `json:"id"`
 	RoomID          uuid.UUID          `json:"room_id"`
-	RaceTypeID      uuid.UUID          `json:"race_type_id"`
+	PresetID        uuid.UUID          `json:"preset_id"`
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
 	TimeTrial       bool               `json:"time_trial"`
-	Mode            string             `json:"mode"`
+	ActivityType    string             `json:"activity_type"`
 	Kind            string             `json:"kind"`
 	TargetValue     int64              `json:"target_value"`
 	DurationSeconds pgtype.Int4        `json:"duration_seconds"`
 }
 
-func (q *Queries) LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, error) {
-	row := q.db.QueryRow(ctx, lockRace, id)
-	var i LockRaceRow
+func (q *Queries) LockActivity(ctx context.Context, id uuid.UUID) (LockActivityRow, error) {
+	row := q.db.QueryRow(ctx, lockActivity, id)
+	var i LockActivityRow
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
-		&i.RaceTypeID,
+		&i.PresetID,
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.TimeTrial,
-		&i.Mode,
+		&i.ActivityType,
 		&i.Kind,
 		&i.TargetValue,
 		&i.DurationSeconds,

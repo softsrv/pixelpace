@@ -48,9 +48,9 @@ func TestQuickMatchQuerySurface(t *testing.T) {
 }
 
 func TestQuickMatchRating(t *testing.T) {
-	var finishes []db.RecentFinishesByRaceTypeRow
+	var finishes []db.RecentFinishesByPresetRow
 	for _, ms := range []int32{1000, 2000, 3000, 4000, 5000, 99000} {
-		finishes = append(finishes, db.RecentFinishesByRaceTypeRow{ElapsedMilliseconds: pgtype.Int4{Int32: ms, Valid: true}})
+		finishes = append(finishes, db.RecentFinishesByPresetRow{ElapsedMilliseconds: pgtype.Int4{Int32: ms, Valid: true}})
 	}
 	if average, rated := quickMatchRating(finishes); average != 3 || !rated {
 		t.Fatalf("last five average = %v, rated %v", average, rated)
@@ -61,7 +61,7 @@ func TestQuickMatchRating(t *testing.T) {
 	if average, rated := quickMatchRating(finishes[:2]); average != 1.5 || !rated {
 		t.Fatalf("short history = %v, rated %v", average, rated)
 	}
-	if _, rated := quickMatchRating([]db.RecentFinishesByRaceTypeRow{{}}); rated {
+	if _, rated := quickMatchRating([]db.RecentFinishesByPresetRow{{}}); rated {
 		t.Fatal("null elapsed time fabricated a rating")
 	}
 }

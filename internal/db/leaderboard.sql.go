@@ -15,10 +15,10 @@ import (
 const leaderboardPersonalBest = `-- name: LeaderboardPersonalBest :many
 SELECT rp.user_id, u.display_name, MIN(rp.elapsed_milliseconds)::integer AS elapsed_milliseconds
 FROM race_participants AS rp
-JOIN races AS r ON r.id = rp.race_id
+JOIN activities AS a ON a.id = rp.race_id
 JOIN users AS u ON u.id = rp.user_id
-WHERE r.race_type_id = $1
-  AND r.mode = $4
+WHERE a.preset_id = $1
+  AND a.activity_type = $4
   AND rp.status = 'finished'
   AND ($2::timestamptz IS NULL OR rp.finished_at >= $2)
   AND ($3::uuid[] IS NULL OR rp.user_id = ANY($3))
@@ -27,10 +27,10 @@ ORDER BY elapsed_milliseconds ASC, rp.user_id ASC
 `
 
 type LeaderboardPersonalBestParams struct {
-	RaceTypeID uuid.UUID          `json:"race_type_id"`
-	Column2    pgtype.Timestamptz `json:"column_2"`
-	Column3    []uuid.UUID        `json:"column_3"`
-	Mode       string             `json:"mode"`
+	PresetID     uuid.UUID          `json:"preset_id"`
+	Column2      pgtype.Timestamptz `json:"column_2"`
+	Column3      []uuid.UUID        `json:"column_3"`
+	ActivityType string             `json:"activity_type"`
 }
 
 type LeaderboardPersonalBestRow struct {
@@ -41,10 +41,10 @@ type LeaderboardPersonalBestRow struct {
 
 func (q *Queries) LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPersonalBestParams) ([]LeaderboardPersonalBestRow, error) {
 	rows, err := q.db.Query(ctx, leaderboardPersonalBest,
-		arg.RaceTypeID,
+		arg.PresetID,
 		arg.Column2,
 		arg.Column3,
-		arg.Mode,
+		arg.ActivityType,
 	)
 	if err != nil {
 		return nil, err
@@ -67,30 +67,30 @@ func (q *Queries) LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPe
 const timeTrialPersonalBest = `-- name: TimeTrialPersonalBest :one
 SELECT rp.elapsed_milliseconds
 FROM race_participants AS rp
-JOIN races AS r ON r.id = rp.race_id
-WHERE r.race_type_id = $1
+JOIN activities AS a ON a.id = rp.race_id
+WHERE a.preset_id = $1
   AND rp.user_id = $2
-  AND r.mode = 'time_trial'
+  AND a.activity_type = 'time_trial'
   AND rp.status = 'finished'
   AND rp.elapsed_milliseconds IS NOT NULL
-  AND r.started_at < $3::timestamptz
+  AND a.started_at < $3::timestamptz
   AND rp.finished_at < $3::timestamptz
 ORDER BY rp.elapsed_milliseconds ASC
 LIMIT 1
 `
 
 type TimeTrialPersonalBestParams struct {
-	RaceTypeID uuid.UUID          `json:"race_type_id"`
-	UserID     uuid.UUID          `json:"user_id"`
-	Before     pgtype.Timestamptz `json:"before"`
+	PresetID uuid.UUID          `json:"preset_id"`
+	UserID   uuid.UUID          `json:"user_id"`
+	Before   pgtype.Timestamptz `json:"before"`
 }
 
-// The racer's own fastest finished Time Trial at a race type, from races that
+// The racer's own fastest finished Time Trial at a preset, from activities that
 // started and were finished by the racer before the given instant (the minimum
 // elapsed time). No row when there is none. A Time Trial's pacer rows at this
 // time; bounding on the finish keeps it fixed for the whole race.
 func (q *Queries) TimeTrialPersonalBest(ctx context.Context, arg TimeTrialPersonalBestParams) (pgtype.Int4, error) {
-	row := q.db.QueryRow(ctx, timeTrialPersonalBest, arg.RaceTypeID, arg.UserID, arg.Before)
+	row := q.db.QueryRow(ctx, timeTrialPersonalBest, arg.PresetID, arg.UserID, arg.Before)
 	var elapsed_milliseconds pgtype.Int4
 	err := row.Scan(&elapsed_milliseconds)
 	return elapsed_milliseconds, err

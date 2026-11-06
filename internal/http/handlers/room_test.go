@@ -56,7 +56,7 @@ type fakeBeginner struct {
 	runStarted chan struct{}
 }
 
-func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, error) {
+func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Activity, error) {
 	b.mu.Lock()
 	b.rooms = append(b.rooms, roomID)
 	b.ctxs = append(b.ctxs, ctx)
@@ -70,15 +70,15 @@ func (b *fakeBeginner) Begin(ctx context.Context, roomID uuid.UUID) (db.Race, er
 	}
 	if block {
 		<-ctx.Done()
-		return db.Race{}, ctx.Err()
+		return db.Activity{}, ctx.Err()
 	}
 	if err != nil {
-		return db.Race{}, err
+		return db.Activity{}, err
 	}
 	if raceID != uuid.Nil {
-		return db.Race{ID: raceID, RoomID: roomID}, nil
+		return db.Activity{ID: raceID, RoomID: roomID}, nil
 	}
-	return db.Race{ID: uuid.New(), RoomID: roomID}, nil
+	return db.Activity{ID: uuid.New(), RoomID: roomID}, nil
 }
 
 func (b *fakeBeginner) Run(ctx context.Context, raceID uuid.UUID) error {
@@ -99,8 +99,8 @@ func (b *fakeBeginner) Run(ctx context.Context, raceID uuid.UUID) error {
 	return err
 }
 
-func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
-	return s.createFn(ctx, userID, raceTypeID, mode, warmupMinutes)
+func (s *stubRoomService) CreateRoom(ctx context.Context, userID, presetID uuid.UUID, activityType string, warmupMinutes *int32) (uuid.UUID, string, error) {
+	return s.createFn(ctx, userID, presetID, activityType, warmupMinutes)
 }
 
 func (s *stubRoomService) JoinRoom(ctx context.Context, userID uuid.UUID, code string) (uuid.UUID, error) {
@@ -178,7 +178,7 @@ type roomOperation struct {
 func roomOperations() []roomOperation {
 	roomID, raceID, targetID := uuid.New(), uuid.New(), uuid.New()
 	return []roomOperation{
-		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}, "mode": {app.ModeRace}}, roomCall{operation: "create", raceID: raceID, mode: app.ModeRace}, http.StatusCreated},
+		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}, "activity_type": {app.ActivityTypeRace}}, roomCall{operation: "create", raceID: raceID, mode: app.ActivityTypeRace}, http.StatusCreated},
 		{"join", (*handlers.RoomHandler).Join, "/rooms/join", url.Values{"join_code": {" ABC234 "}}, roomCall{operation: "join", code: "ABC234"}, http.StatusOK},
 		{"leave", (*handlers.RoomHandler).Leave, "/rooms/" + roomID.String() + "/leave", url.Values{}, roomCall{operation: "leave", roomID: roomID}, http.StatusNoContent},
 		{"kick", (*handlers.RoomHandler).Kick, "/rooms/" + roomID.String() + "/kick", url.Values{"target_user_id": {targetID.String()}}, roomCall{operation: "kick", roomID: roomID, targetID: targetID}, http.StatusNoContent},
@@ -275,8 +275,8 @@ func TestRoomHandlersServiceErrors(t *testing.T) {
 		{app.ErrRoomNotJoinable, http.StatusConflict},
 		{app.ErrParticipantReady, http.StatusConflict},
 		{app.ErrNotEnoughParticipants, http.StatusConflict},
-		{app.ErrInvalidRaceType, http.StatusConflict},
-		{app.ErrInvalidSessionMode, http.StatusBadRequest},
+		{app.ErrInvalidPreset, http.StatusConflict},
+		{app.ErrInvalidActivityType, http.StatusBadRequest},
 		{app.ErrInvalidWarmupMinutes, http.StatusBadRequest},
 		{errors.New("private database failure"), http.StatusInternalServerError},
 	}
@@ -346,16 +346,16 @@ func TestRoomCreateInvalidOrMissingModeRejected(t *testing.T) {
 		{"missing mode", url.Values{"race_type_id": {raceTypeID.String()}}},
 		{"empty mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {""}}},
 		{"sprint mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {"sprint"}}},
+		{"empty activity_type", url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {""}}},
+		{"sprint activity_type", url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {"sprint"}}},
+		{"unknown activity_type", url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {"marathon"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
 			svc := &stubRoomService{
 				createFn: func(ctx context.Context, userID, rID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
-					switch mode {
-					case app.ModeRace, app.ModeTimeTrial:
-						return stubRoomID, "ABC234", nil
-					default:
-						return uuid.Nil, "", app.ErrInvalidSessionMode
-					}
+					calls++
+					return stubRoomID, "ABC234", nil
 				},
 			}
 			op := roomOperation{
@@ -370,10 +370,45 @@ func TestRoomCreateInvalidOrMissingModeRejected(t *testing.T) {
 			if rr.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%q", rr.Code, rr.Body.String())
 			}
+			if calls != 0 {
+				t.Fatalf("service calls = %d, want 0 (no room created on invalid activity_type)", calls)
+			}
 			if redirect := rr.Header().Get("HX-Redirect"); redirect != "" {
 				t.Fatalf("HX-Redirect = %q, want none", redirect)
 			}
 		})
+	}
+}
+
+// TestRoomCreateActivityTypeRace asserts that posting the dashboard create form
+// with activity_type=race passes "race" to CreateRoom and redirects to the lobby.
+// Dashboard submit label: "Create race".
+func TestRoomCreateActivityTypeRace(t *testing.T) {
+	raceTypeID := uuid.New()
+	var gotActivityType string
+	svc := recordingRoomService(func(c roomCall) error { return nil })
+	svc.createFn = func(_ context.Context, _, raceID uuid.UUID, activityType string, _ *int32) (uuid.UUID, string, error) {
+		gotActivityType = activityType
+		return stubRoomID, "ABC234", nil
+	}
+	form := url.Values{"race_type_id": {raceTypeID.String()}, "activity_type": {"race"}}
+	op := roomOperation{
+		name:    "create",
+		handler: (*handlers.RoomHandler).Create,
+		path:    "/rooms",
+		form:    form,
+		want:    roomCall{operation: "create", raceID: raceTypeID, mode: app.ActivityTypeRace},
+		status:  http.StatusCreated,
+	}
+	rr := serveRoomRequest(t, op, svc, uuid.New(), form.Encode(), "", true)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%q", rr.Code, rr.Body.String())
+	}
+	if gotActivityType != app.ActivityTypeRace {
+		t.Fatalf("CreateRoom activityType = %q, want %q", gotActivityType, app.ActivityTypeRace)
+	}
+	if got, want := rr.Header().Get("HX-Redirect"), "/rooms/"+stubRoomID.String()+"/lobby"; got != want {
+		t.Fatalf("HX-Redirect = %q, want %q", got, want)
 	}
 }
 
@@ -695,14 +730,14 @@ func TestRoomCreateTimeTrialBeginsAndOpensRacePage(t *testing.T) {
 	}
 	beginner := &fakeBeginner{}
 	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
-	form := url.Values{"race_type_id": {raceTypeID.String()}, "mode": {app.ModeTimeTrial}}
+	form := url.Values{"race_type_id": {raceTypeID.String()}, "mode": {app.ActivityTypeTimeTrial}}
 	op := roomOperations()[0]
 	rr := serveRoomRequestWith(t, h, op, uuid.New(), form.Encode(), "", true)
 	h.Wait()
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%q", rr.Code, rr.Body.String())
 	}
-	if len(modes) != 1 || modes[0] != app.ModeTimeTrial {
+	if len(modes) != 1 || modes[0] != app.ActivityTypeTimeTrial {
 		t.Fatalf("CreateRoom modes = %v, want one time_trial", modes)
 	}
 	if got, want := rr.Header().Get("HX-Redirect"), "/rooms/"+stubRoomID.String()+"/race"; got != want {
@@ -721,7 +756,7 @@ func TestRoomCreateTimeTrialBeginsAndOpensRacePage(t *testing.T) {
 }
 
 // Creating a warmup skips the lobby like a time trial and carries only its
-// length: no race type is read from the form, and the service gets the minutes.
+// length: no preset is read from the form, and the service gets the minutes.
 func TestRoomCreateWarmupBeginsAndOpensRacePage(t *testing.T) {
 	var gotMode string
 	var gotMinutes *int32
@@ -733,14 +768,14 @@ func TestRoomCreateWarmupBeginsAndOpensRacePage(t *testing.T) {
 	}
 	beginner := &fakeBeginner{}
 	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
-	form := url.Values{"mode": {app.ModeWarmup}, "minutes": {"5"}}
+	form := url.Values{"mode": {app.ActivityTypeWarmup}, "minutes": {"5"}}
 	rr := serveRoomRequestWith(t, h, roomOperations()[0], uuid.New(), form.Encode(), "", true)
 	h.Wait()
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%q", rr.Code, rr.Body.String())
 	}
-	if gotMode != app.ModeWarmup || gotMinutes == nil || *gotMinutes != 5 || gotType != uuid.Nil {
-		t.Fatalf("CreateRoom = %q, %v, %s; want warmup, 5 minutes, no race type", gotMode, gotMinutes, gotType)
+	if gotMode != app.ActivityTypeWarmup || gotMinutes == nil || *gotMinutes != 5 || gotType != uuid.Nil {
+		t.Fatalf("CreateRoom = %q, %v, %s; want warmup, 5 minutes, no preset", gotMode, gotMinutes, gotType)
 	}
 	if got, want := rr.Header().Get("HX-Redirect"), "/rooms/"+stubRoomID.String()+"/race"; got != want {
 		t.Fatalf("HX-Redirect = %q, want %q (the race page, not the lobby)", got, want)
@@ -764,7 +799,7 @@ func TestRoomCreateWarmupInvalidMinutesRejected(t *testing.T) {
 			})
 			beginner := &fakeBeginner{}
 			h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
-			form := url.Values{"mode": {app.ModeWarmup}, "minutes": {minutes}}
+			form := url.Values{"mode": {app.ActivityTypeWarmup}, "minutes": {minutes}}
 			rr := serveRoomRequestWith(t, h, roomOperations()[0], uuid.New(), form.Encode(), "", true)
 			h.Wait()
 			if rr.Code != http.StatusBadRequest {
@@ -788,7 +823,7 @@ func TestRoomCreateWarmupServiceRefusalIsBadRequest(t *testing.T) {
 	svc.createFn = func(context.Context, uuid.UUID, uuid.UUID, string, *int32) (uuid.UUID, string, error) {
 		return uuid.Nil, "", fmt.Errorf("wrapped: %w", app.ErrInvalidWarmupMinutes)
 	}
-	form := url.Values{"mode": {app.ModeWarmup}, "minutes": {"5"}}
+	form := url.Values{"mode": {app.ActivityTypeWarmup}, "minutes": {"5"}}
 	rr := serveRoomRequest(t, roomOperations()[0], svc, uuid.New(), form.Encode(), "", true)
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "1 to 20") {
 		t.Fatalf("status = %d, body = %q; want 400 naming the rule", rr.Code, rr.Body.String())
@@ -880,7 +915,7 @@ func TestRoomCreateWarmupNoRacersReadyDoesNotReset(t *testing.T) {
 		return nil
 	}
 	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
-	form := url.Values{"mode": {app.ModeWarmup}, "minutes": {"5"}}
+	form := url.Values{"mode": {app.ActivityTypeWarmup}, "minutes": {"5"}}
 	rr := serveRoomRequestWith(t, h, roomOperations()[0], uuid.New(), form.Encode(), "", true)
 	h.Wait()
 	if rr.Code != http.StatusCreated {

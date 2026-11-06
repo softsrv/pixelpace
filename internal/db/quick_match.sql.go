@@ -13,59 +13,60 @@ import (
 )
 
 const enqueueQuickMatch = `-- name: EnqueueQuickMatch :exec
-INSERT INTO quick_match_queue (id, user_id, race_type_id)
+INSERT INTO quick_match_queue (id, user_id, preset_id)
 VALUES ($1, $2, $3)
 `
 
 type EnqueueQuickMatchParams struct {
-	ID         uuid.UUID `json:"id"`
-	UserID     uuid.UUID `json:"user_id"`
-	RaceTypeID uuid.UUID `json:"race_type_id"`
+	ID       uuid.UUID `json:"id"`
+	UserID   uuid.UUID `json:"user_id"`
+	PresetID uuid.UUID `json:"preset_id"`
 }
 
+// Writes only preset_id; the 000021 sync trigger fills its old twin column.
 func (q *Queries) EnqueueQuickMatch(ctx context.Context, arg EnqueueQuickMatchParams) error {
-	_, err := q.db.Exec(ctx, enqueueQuickMatch, arg.ID, arg.UserID, arg.RaceTypeID)
+	_, err := q.db.Exec(ctx, enqueueQuickMatch, arg.ID, arg.UserID, arg.PresetID)
 	return err
 }
 
 const leaveQuickMatch = `-- name: LeaveQuickMatch :exec
-DELETE FROM quick_match_queue WHERE user_id = $1 AND race_type_id = $2
+DELETE FROM quick_match_queue WHERE user_id = $1 AND preset_id = $2
 `
 
 type LeaveQuickMatchParams struct {
-	UserID     uuid.UUID `json:"user_id"`
-	RaceTypeID uuid.UUID `json:"race_type_id"`
+	UserID   uuid.UUID `json:"user_id"`
+	PresetID uuid.UUID `json:"preset_id"`
 }
 
 func (q *Queries) LeaveQuickMatch(ctx context.Context, arg LeaveQuickMatchParams) error {
-	_, err := q.db.Exec(ctx, leaveQuickMatch, arg.UserID, arg.RaceTypeID)
+	_, err := q.db.Exec(ctx, leaveQuickMatch, arg.UserID, arg.PresetID)
 	return err
 }
 
-const listWaitingByRaceType = `-- name: ListWaitingByRaceType :many
+const listWaitingByPreset = `-- name: ListWaitingByPreset :many
 SELECT user_id, joined_at,
        EXTRACT(EPOCH FROM (NOW() - joined_at))::double precision AS waited_seconds
 FROM quick_match_queue
-WHERE race_type_id = $1
+WHERE preset_id = $1
 ORDER BY joined_at ASC, id ASC
 FOR UPDATE
 `
 
-type ListWaitingByRaceTypeRow struct {
+type ListWaitingByPresetRow struct {
 	UserID        uuid.UUID          `json:"user_id"`
 	JoinedAt      pgtype.Timestamptz `json:"joined_at"`
 	WaitedSeconds float64            `json:"waited_seconds"`
 }
 
-func (q *Queries) ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUID) ([]ListWaitingByRaceTypeRow, error) {
-	rows, err := q.db.Query(ctx, listWaitingByRaceType, raceTypeID)
+func (q *Queries) ListWaitingByPreset(ctx context.Context, presetID uuid.UUID) ([]ListWaitingByPresetRow, error) {
+	rows, err := q.db.Query(ctx, listWaitingByPreset, presetID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListWaitingByRaceTypeRow{}
+	items := []ListWaitingByPresetRow{}
 	for rows.Next() {
-		var i ListWaitingByRaceTypeRow
+		var i ListWaitingByPresetRow
 		if err := rows.Scan(&i.UserID, &i.JoinedAt, &i.WaitedSeconds); err != nil {
 			return nil, err
 		}
@@ -77,35 +78,35 @@ func (q *Queries) ListWaitingByRaceType(ctx context.Context, raceTypeID uuid.UUI
 	return items, nil
 }
 
-const recentFinishesByRaceType = `-- name: RecentFinishesByRaceType :many
+const recentFinishesByPreset = `-- name: RecentFinishesByPreset :many
 SELECT rp.elapsed_milliseconds, rp.finished_at
 FROM race_participants AS rp
-JOIN races AS r ON r.id = rp.race_id
-WHERE r.race_type_id = $1 AND rp.user_id = $2
+JOIN activities AS a ON a.id = rp.race_id
+WHERE a.preset_id = $1 AND rp.user_id = $2
   AND rp.status = 'finished'
-  AND r.mode <> 'warmup'
+  AND a.activity_type <> 'warmup'
 ORDER BY rp.finished_at DESC NULLS LAST, rp.id DESC
 `
 
-type RecentFinishesByRaceTypeParams struct {
-	RaceTypeID uuid.UUID `json:"race_type_id"`
-	UserID     uuid.UUID `json:"user_id"`
+type RecentFinishesByPresetParams struct {
+	PresetID uuid.UUID `json:"preset_id"`
+	UserID   uuid.UUID `json:"user_id"`
 }
 
-type RecentFinishesByRaceTypeRow struct {
+type RecentFinishesByPresetRow struct {
 	ElapsedMilliseconds pgtype.Int4        `json:"elapsed_milliseconds"`
 	FinishedAt          pgtype.Timestamptz `json:"finished_at"`
 }
 
-func (q *Queries) RecentFinishesByRaceType(ctx context.Context, arg RecentFinishesByRaceTypeParams) ([]RecentFinishesByRaceTypeRow, error) {
-	rows, err := q.db.Query(ctx, recentFinishesByRaceType, arg.RaceTypeID, arg.UserID)
+func (q *Queries) RecentFinishesByPreset(ctx context.Context, arg RecentFinishesByPresetParams) ([]RecentFinishesByPresetRow, error) {
+	rows, err := q.db.Query(ctx, recentFinishesByPreset, arg.PresetID, arg.UserID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []RecentFinishesByRaceTypeRow{}
+	items := []RecentFinishesByPresetRow{}
 	for rows.Next() {
-		var i RecentFinishesByRaceTypeRow
+		var i RecentFinishesByPresetRow
 		if err := rows.Scan(&i.ElapsedMilliseconds, &i.FinishedAt); err != nil {
 			return nil, err
 		}

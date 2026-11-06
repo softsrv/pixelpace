@@ -4,25 +4,38 @@ An online rowing application where users connect a rowing machine (or a dev-mode
 
 ## Language
 
+**Activity**:
+A rowing session in the application undertaken by one or more participants: a Race, a Time Trial, or a Warmup.
+_Avoid_: Session, match, workout
+
+**Activity Type**:
+The category of activity: **Race**, **Time Trial**, or **Warmup**. Only a race has a lobby (Room) and matchmaking (Quick Match); Time Trial and Warmup start immediately as solo activities.
+_Avoid_: Mode, game mode, session mode
+
+**Kind**:
+The measurement category of a Preset: **Fixed Distance**, **Fixed Time**, or **Interval**. Race and Time Trial activities have a Kind (determined by their Preset); Warmup has none (it is always a timed 1–20 minute solo session).
+_Avoid_: Format, workout type, activity type
+
+**Preset**:
+Defines an activity's win condition and target, chosen from a **fixed preset catalog** — never a freeform value — so results stay comparable within a Leaderboard. Starts with **Fixed Distance** (500m / 1000m / 2000m / 5000m / 10000m — first to reach the target wins, ranked by elapsed time). Designed to extend to **Fixed Time** (5 / 10 / 20 minutes — most distance covered wins) and **Interval** (a sequence of Segments) without a schema redesign.
+_Note_: Wire names for the preset stay unchanged from the earlier Race Type naming: form field `race_type_id`, URL query parameter `race_type`, and endpoint `/rooms/{id}/race-type` (decision U1).
+_Avoid_: Race Type, race format, game mode
+
 **Race**:
 A live, synchronous, multi-participant rowing event where all participants start at the same instant and are ranked by outcome when it ends.
 _Avoid_: Session, match, workout
 
-**Race Type**:
-Defines a race's win condition and target, chosen from a **fixed preset catalog** — never a freeform value — so results stay comparable within a Leaderboard. Starts with **Fixed Distance** (500m / 1000m / 2000m / 5000m / 10000m — first to reach the target wins, ranked by elapsed time). Designed to extend to **Fixed Time** (5 / 10 / 20 minutes — most distance covered wins) and **Interval** (a sequence of Segments) without a schema redesign.
-_Avoid_: Race format, workout type, game mode
-
 **Time Trial**:
-A mode chosen on the dashboard, not an entrant count: a racer rowing alone against the clock to set a personal best. A begun race stays a race even if others drop out; a race room never silently turns into a time trial.
-A Time Trial whose racer has an earlier finished Time Trial at that Race Type shows a **Pacer**: a boat that rows the distance at the racer's personal best (their fastest such time). The Pacer is a lane only — never an entrant, never ranked, never on a Leaderboard. A first Time Trial at a Race Type has no Pacer.
+An activity type chosen on the dashboard, not an entrant count: a racer rowing alone against the clock to set a personal best. A begun race stays a race even if others drop out; a room created as a race never silently turns into a time trial. A Time Trial is an independent activity type, not a kind of Race.
+A Time Trial whose racer has an earlier finished Time Trial at that Preset shows a **Pacer**: a boat that rows the distance at the racer's personal best (their fastest such time). The Pacer is a lane only — never an entrant, never ranked, never on a Leaderboard. A first Time Trial at a Preset has no Pacer.
 _Avoid_: Solo race, practice, workout
 
 **Warmup**:
-A timed 1–20 minute solo session with no pacer, chosen on the dashboard, ending in a summary only. Nothing is saved beyond the session itself: never on a leaderboard, never used as a pacer time, never used in matchmaking, and never posted to Concept2.
+A timed 1–20 minute solo activity with no pacer, chosen on the dashboard, ending in a summary only. Has no Kind or Preset. Nothing is saved beyond the activity itself: never on a leaderboard, never used as a pacer time, never used in matchmaking, and never posted to Concept2.
 _Avoid_: Practice, free row, cooldown
 
 **Leaderboard**:
-A ranking of each racer's own **personal-best** result (not every result they've ever posted) for a single Race Type and **mode** — Race or Time Trial. The two modes never mix: the 500m Race Leaderboard and the 500m Time Trial Leaderboard are separate rankings. Further filtered by a **time window** (All-Time / Month / Week — each its own ranking, not a combined one) and a **scope** (Global, or Friends-only). An "in your area" geography-based scope is a deferred future idea, not yet designed.
+A ranking of each racer's own **personal-best** result (not every result they've ever posted) for a single Preset and **activity type** — Race or Time Trial. The two activity types never mix: the 500m Race Leaderboard and the 500m Time Trial Leaderboard are separate rankings. Warmup activities never appear on a leaderboard. Further filtered by a **time window** (All-Time / Month / Week — each its own ranking, not a combined one) and a **scope** (Global, or Friends-only). An "in your area" geography-based scope is a deferred future idea, not yet designed.
 _Avoid_: Rankings, standings
 
 **Telemetry Sample**:
@@ -38,7 +51,7 @@ A single browser tab or device's live link to a Race. A racer holds at most one 
 _Avoid_: Session (already used for auth device sessions), socket, instance
 
 **Room**:
-The private space where racers gather before a Race starts, entered via a shareable code or a direct invite to a Friend. Has a Host, and starts once every participant is Ready.
+The private space where racers gather before a Race starts, entered via a shareable code or a direct invite to a Friend. Only Race activities use a Room; Time Trial and Warmup activities bypass it. Has a Host, and starts once every participant is Ready.
 _Avoid_: Lobby, race room
 
 **Host**:
@@ -54,11 +67,11 @@ The fixed 10-second delay between the Host starting a Race and the Race actually
 _Avoid_: Start delay
 
 **Quick Match**:
-An alternative to a private Room: a racer joins a queue and is automatically paired, via Matchmaking, against other queued racers for the same Race Type.
+An alternative to a private Room: a racer joins a queue and is automatically paired, via Matchmaking, against other queued racers for the same Preset. Every room created by Quick Match is a Race activity.
 _Avoid_: Ranked queue, auto-match
 
 **Matchmaking**:
-Pairing Quick Match queue entrants using a rolling average of each racer's own recent finish times for the Race Type they're queuing for. No cross-player skill rating (e.g. ELO) — each racer is compared only against their own history.
+Pairing Quick Match queue entrants using a rolling average of each racer's own recent finish times (from Race and Time Trial finishes, never Warmup) for the Preset they're queuing for. No cross-player skill rating (e.g. ELO) — each racer is compared only against their own history.
 _Avoid_: Skill rating, ELO, ranking
 
 **Friend**:
@@ -74,5 +87,5 @@ A Race outcome for a participant whose Connection was lost for good (not a brief
 _Avoid_: Abandoned, incomplete
 
 **Segment**:
-One distance-or-time chunk of an Interval Race Type (e.g. the "500m" in a 500m/1000m/500m pyramid). An Interval Race Type is an ordered sequence of Segments, not a single scalar target — segments are not assumed uniform.
-_Avoid_: Interval (that's the Race Type; "Segment" is one piece of it), split
+One distance-or-time chunk of an Interval Preset (e.g. the "500m" in a 500m/1000m/500m pyramid). An Interval Preset is an ordered sequence of Segments, not a single scalar target — segments are not assumed uniform.
+_Avoid_: Interval (that's the Preset; "Segment" is one piece of it), split

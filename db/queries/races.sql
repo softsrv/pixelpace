@@ -3,11 +3,11 @@ UPDATE rooms SET status = 'in_progress'
 WHERE id = $1 AND status = 'counting_down'
 RETURNING *;
 
--- mode owns the race's kind; time_trial is kept for older readers and is
--- always derived from it, never passed separately.
--- name: CreateRace :one
-INSERT INTO races (id, room_id, race_type_id, started_at, mode, time_trial)
-VALUES (@id, @room_id, @race_type_id, @started_at, @mode::text, @mode::text = 'time_trial')
+-- activity_type owns the activity's type; time_trial is kept for older readers
+-- and is always derived from it, never passed separately.
+-- name: CreateActivity :one
+INSERT INTO activities (id, room_id, preset_id, started_at, activity_type, time_trial)
+VALUES (@id, @room_id, @preset_id, @started_at, @activity_type::text, @activity_type::text = 'time_trial')
 RETURNING *;
 
 -- name: ListRaceRoomParticipants :many
@@ -31,12 +31,12 @@ SELECT u.id, u.display_name
 FROM race_participants p JOIN users u ON u.id = p.user_id
 WHERE p.race_id = $1 ORDER BY p.id;
 
--- name: LockRace :one
-SELECT r.*, rt.kind, rt.target_value, ro.duration_seconds
-FROM races r
-JOIN race_types rt ON rt.id = r.race_type_id
-JOIN rooms ro ON ro.id = r.room_id
-WHERE r.id = $1 FOR UPDATE OF r;
+-- name: LockActivity :one
+SELECT a.*, p.kind, p.target_value, ro.duration_seconds
+FROM activities a
+JOIN presets p ON p.id = a.preset_id
+JOIN rooms ro ON ro.id = a.room_id
+WHERE a.id = $1 FOR UPDATE OF a;
 
 -- name: IsRaceParticipant :one
 SELECT EXISTS (SELECT 1 FROM race_participants WHERE race_id = $1 AND user_id = $2);
@@ -74,28 +74,28 @@ UPDATE race_participants
 SET status = 'finished', elapsed_milliseconds = $2, finished_at = $3
 WHERE id = $1 AND status <> 'dnf';
 
--- name: FinishRace :exec
-UPDATE races SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL;
+-- name: FinishActivity :exec
+UPDATE activities SET finished_at = $2 WHERE id = $1 AND finished_at IS NULL;
 
 -- name: FinishRaceRoom :exec
 UPDATE rooms SET status = 'finished' WHERE id = $1 AND status = 'in_progress';
 
--- Begun races not yet finalized whose room is still racing, for resuming Run.
--- name: ListUnfinishedRaces :many
-SELECT r.id
-FROM races r JOIN rooms ro ON ro.id = r.room_id
-WHERE r.finished_at IS NULL AND ro.status = 'in_progress'
-ORDER BY r.id;
+-- Begun activities not yet finalized whose room is still in progress, for resuming Run.
+-- name: ListUnfinishedActivities :many
+SELECT a.id
+FROM activities a JOIN rooms ro ON ro.id = a.room_id
+WHERE a.finished_at IS NULL AND ro.status = 'in_progress'
+ORDER BY a.id;
 
 -- Every participant with their public name, recorded finish and latest sample.
 -- name: ListRaceResults :many
 SELECT p.user_id, u.display_name, p.status,
        p.elapsed_milliseconds AS finish_elapsed_milliseconds,
-       r.started_at,
+       a.started_at,
        latest.distance_millimeters, latest.sampled_at
 FROM race_participants p
 JOIN users u ON u.id = p.user_id
-JOIN races r ON r.id = p.race_id
+JOIN activities a ON a.id = p.race_id
 LEFT JOIN LATERAL (
     SELECT s.distance_millimeters, s.sampled_at
     FROM telemetry_samples s WHERE s.race_id = p.race_id AND s.user_id = p.user_id
@@ -104,10 +104,10 @@ LEFT JOIN LATERAL (
 WHERE p.race_id = $1 ORDER BY p.id;
 
 -- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.duration_seconds, r.host_user_id
+SELECT r.status, r.race_starts_at, r.preset_id, p.kind, p.target_value, p.label, a.id AS race_id, r.activity_type, r.duration_seconds, r.host_user_id
 FROM rooms r
-JOIN race_types rt ON rt.id = r.race_type_id
-LEFT JOIN races ON races.room_id = r.id
+JOIN presets p ON p.id = r.preset_id
+LEFT JOIN activities a ON a.room_id = r.id
 WHERE r.id = $1;
 
 -- Lanes follow the same order Begin seeds race participants in.

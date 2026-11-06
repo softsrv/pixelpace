@@ -396,15 +396,17 @@ type RaceRacer struct {
 // equipment; RaceID is nil until the countdown has ended and Begin has created
 // the race. Racers are in the order Begin seeds race participants, so lanes
 // stay stable throughout. Finished is true once the race has ended and the
-// room is marked finished. Pacer is set only for a Time Trial whose racer has
-// an earlier finished Time Trial at the race type; it is a lane, never an
-// entrant.
+// room is marked finished. Mode is the room's session mode (race, time_trial
+// or warmup), chosen when the room was created. Pacer is set only for a
+// time_trial whose racer has a Time Trial at the race type finished before
+// this one began; it is a lane, never an entrant.
 type RoomRace struct {
 	RoomID            uuid.UUID
 	RaceID            *uuid.UUID
 	RaceStartsAt      *time.Time
 	Label             string
 	TargetMillimeters int64
+	Mode              string
 	Racers            []RaceRacer
 	Finished          bool
 	Pacer             *RacePacer
@@ -445,7 +447,7 @@ func (s *RaceService) RoomRace(ctx context.Context, roomID, userID uuid.UUID) (R
 	if err != nil {
 		return RoomRace{}, fmt.Errorf("list room lineup: %w", err)
 	}
-	view := RoomRace{RoomID: roomID, Label: row.Label, TargetMillimeters: row.TargetValue, Racers: make([]RaceRacer, 0, len(lineup)), Finished: row.Status == "finished"}
+	view := RoomRace{RoomID: roomID, Label: row.Label, TargetMillimeters: row.TargetValue, Mode: row.Mode, Racers: make([]RaceRacer, 0, len(lineup)), Finished: row.Status == "finished"}
 	for _, racer := range lineup {
 		view.Racers = append(view.Racers, RaceRacer{
 			PublicPlayer: NewPublicPlayer(racer.ID, racer.DisplayName), EquipmentReady: racer.EquipmentReady,

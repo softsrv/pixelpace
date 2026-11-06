@@ -21,7 +21,7 @@ FROM race_participants AS rp
 JOIN races AS r ON r.id = rp.race_id
 WHERE r.race_type_id = @race_type_id
   AND rp.user_id = @user_id
-  AND r.time_trial = true
+  AND r.mode = 'time_trial'
   AND rp.status = 'finished'
   AND rp.elapsed_milliseconds IS NOT NULL
   AND r.started_at < @before::timestamptz

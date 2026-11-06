@@ -849,7 +849,7 @@ func TestRaceServiceRoomRaceNoPersonalBestHasNoPacer(t *testing.T) {
 	logs := captureLogs(t)
 	f.begin(t)
 	start, raceType := f.race.StartedAt.Time, f.raceType(t)
-	want := app.RoomRace{RoomID: f.room, RaceID: &f.race.ID, RaceStartsAt: &start, Label: "500m", TargetMillimeters: 500000}
+	want := app.RoomRace{RoomID: f.room, RaceID: &f.race.ID, RaceStartsAt: &start, Label: "500m", TargetMillimeters: 500000, Mode: "time_trial"}
 
 	check := func(name string) {
 		t.Helper()
@@ -1122,6 +1122,41 @@ func TestRaceServiceRoomRacePacerIgnoresTimeTrialFinishedMidRace(t *testing.T) {
 	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
 	if err != nil || view.Pacer == nil || view.Pacer.ElapsedMilliseconds != 110000 {
 		t.Fatalf("pacer = %+v err=%v, want 110000ms (the mid-race finish must not count)", view.Pacer, err)
+	}
+}
+
+// CLM-5: only a time_trial-mode finish paces a time trial. A faster finished
+// race, and a finished warmup, at the same race type never become the pacer;
+// races.mode decides, not the kept time_trial column (one race row here
+// carries a stale time_trial=true to prove it).
+func TestRaceServiceRoomRacePacerIsNeverARaceOrWarmup(t *testing.T) {
+	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
+	ctx := context.Background()
+	f.begin(t)
+	start, raceType := f.race.StartedAt.Time, f.raceType(t)
+	f.seedHistory(t, 0,
+		pastResult{raceType, start.Add(-3 * time.Hour), false, "finished", 90000},
+		pastResult{raceType, start.Add(-2 * time.Hour), true, "finished", 80000},
+		pastResult{raceType, start.Add(-time.Hour), true, "finished", 70000},
+	)
+	// Re-label the two time_trial history rows: one a race whose legacy
+	// time_trial flag still reads true, one a warmup.
+	for _, q := range []string{
+		"UPDATE races SET mode = 'race' WHERE id = (SELECT r.id FROM races r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 80000)",
+		"UPDATE races SET mode = 'warmup', time_trial = false WHERE id = (SELECT r.id FROM races r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 70000)",
+	} {
+		if tag, err := f.pool.Exec(ctx, q, f.users[0]); err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("relabel history: rows=%d err=%v", tag.RowsAffected(), err)
+		}
+	}
+	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil || view.Mode != "time_trial" || view.Pacer != nil {
+		t.Fatalf("mode=%q pacer=%+v err=%v, want a time_trial view with no pacer from races or warmups", view.Mode, view.Pacer, err)
+	}
+	f.seedHistory(t, 0, pastResult{raceType, start.Add(-time.Hour), true, "finished", 120000})
+	view, err = f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil || view.Pacer == nil || view.Pacer.ElapsedMilliseconds != 120000 {
+		t.Fatalf("pacer = %+v err=%v, want the slower but only time trial, 120000ms", view.Pacer, err)
 	}
 }
 

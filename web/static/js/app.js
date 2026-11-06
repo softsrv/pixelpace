@@ -71,12 +71,12 @@ document.addEventListener('change', function (evt) {
   var label = document.querySelector(select.getAttribute('data-submit-label-target'));
   if (label && text) label.textContent = text;
 
-  if (select.name === 'activity_type' || select.name === 'mode') {
+  if (select.name === 'activity_type') {
     var form = select.form || (select.closest && select.closest('form'));
     if (!form) return;
     var isWarmup = select.value === 'warmup';
-    var distanceField = form.querySelector('#preset-field') || form.querySelector('#race-type-field') || form.querySelector('[data-activity-type-field="distance"]') || form.querySelector('[data-mode-field="distance"]');
-    var warmupField = form.querySelector('#warmup-minutes-field') || form.querySelector('[data-activity-type-field="warmup"]') || form.querySelector('[data-mode-field="warmup"]');
+    var distanceField = form.querySelector('#preset-field') || form.querySelector('[data-activity-type-field="distance"]');
+    var warmupField = form.querySelector('#warmup-minutes-field') || form.querySelector('[data-activity-type-field="warmup"]');
     var distanceSelect = form.querySelector('select[name="race_type_id"]');
     var minutesInput = form.querySelector('input[name="minutes"]');
 

@@ -20,7 +20,7 @@ function inert() {
 // The race card's mode options, read from the real template, so the test
 // follows the markup players get.
 function modeOptions() {
-  var select = dashboardHtml.match(/<select name="activity_type"[^>]*>([\s\S]*?)<\/select>/) || dashboardHtml.match(/<select name="mode"[^>]*>([\s\S]*?)<\/select>/);
+  var select = dashboardHtml.match(/<select name="activity_type"[^>]*>([\s\S]*?)<\/select>/);
   assert.ok(select, 'dashboard.html has the activity_type select');
   return Array.from(select[1].matchAll(/<option value="([^"]+)" data-submit-label="([^"]+)"/g), function (m) {
     return { value: m[1], label: m[2], getAttribute: function (name) { return name === 'data-submit-label' ? m[2] : null; } };
@@ -63,7 +63,7 @@ function modeSelect(options, value, form) {
     closest: function (sel) { return sel === 'form' ? form : null; },
     options: options,
     selectedIndex: options.findIndex(function (o) { return o.value === value; }),
-    matches: function (sel) { return sel === 'select[data-submit-label-target]' || sel === 'select[name="activity_type"]' || sel === 'select[name="mode"]'; },
+    matches: function (sel) { return sel === 'select[data-submit-label-target]' || sel === 'select[name="activity_type"]'; },
     getAttribute: function (name) { return name === 'data-submit-label-target' ? '#create-room-submit-label' : null; }
   };
 }
@@ -98,8 +98,8 @@ test('changing mode to warmup hides distance select and enables minutes input', 
 
   var fakeForm = {
     querySelector: function (sel) {
-      if (sel === '#preset-field' || sel === '#race-type-field' || sel === '[data-activity-type-field="distance"]' || sel === '[data-mode-field="distance"]') return distanceField;
-      if (sel === '#warmup-minutes-field' || sel === '[data-activity-type-field="warmup"]' || sel === '[data-mode-field="warmup"]') return warmupField;
+      if (sel === '#preset-field' || sel === '[data-activity-type-field="distance"]') return distanceField;
+      if (sel === '#warmup-minutes-field' || sel === '[data-activity-type-field="warmup"]') return warmupField;
       if (sel === 'select[name="race_type_id"]') return distanceSelect;
       if (sel === 'input[name="minutes"]') return minutesInput;
       return null;

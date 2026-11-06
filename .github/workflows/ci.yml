@@ -63,7 +63,7 @@ jobs:
           fi
 
       - name: Install sqlc
-        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+        run: make sqlc-install
 
       - name: Check sqlc freshness
         run: make sqlc-check

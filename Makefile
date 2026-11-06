@@ -8,6 +8,10 @@ VALKEY_NAME      := $(APP_NAME)-valkey
 VALKEY_PORT      := 6379
 DEV_NAME         := $(APP_NAME)-dev
 DEV_IMAGE        := $(APP_NAME)-dev
+# The one owner of the sqlc version: CI installs it via `make sqlc-install`,
+# and sqlc-check refuses any other version (it is recorded in the headers of
+# the generated files under internal/db).
+SQLC_VERSION     := v1.31.1
 
 # Load .env if present (for local dev convenience)
 -include .env
@@ -17,7 +21,7 @@ export
         daisyui-install pixi-install tailwind tailwind-watch \
         smtp4dev smtp4dev-stop valkey valkey-stop \
         migrate-up migrate-down migrate-create migrate-status \
-        sqlc-generate sqlc-check \
+        sqlc-install sqlc-generate sqlc-check \
         docker-build docker-run prod clean
 
 ## ── Development ─────────────────────────────────────────────────────────────
@@ -172,10 +176,27 @@ migrate-status:
 sqlc-generate:
 	sqlc generate -f db/sqlc.yaml
 
-sqlc-check: sqlc-generate
-	@if [ -n "$$(git status --porcelain internal/db)" ]; then \
-		git status --porcelain internal/db; \
-		git diff internal/db; \
+sqlc-install:
+	go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+
+# Fails when sqlc is missing or not $(SQLC_VERSION), when git fails, or when
+# regenerating changes or adds any file under internal/db.
+sqlc-check:
+	@command -v sqlc >/dev/null 2>&1 || { \
+		echo "sqlc not found: run 'make sqlc-install' (installs sqlc $(SQLC_VERSION))" >&2; \
+		exit 1; \
+	}
+	@v=$$(sqlc version) || { echo "sqlc-check: 'sqlc version' failed" >&2; exit 1; }; \
+	if [ "$$v" != "$(SQLC_VERSION)" ]; then \
+		echo "sqlc $$v found, but internal/db is generated with $(SQLC_VERSION): run 'make sqlc-install'" >&2; \
+		exit 1; \
+	fi
+	@$(MAKE) --no-print-directory sqlc-generate
+	@out=$$(git status --porcelain -- internal/db) || { echo "sqlc-check: git status failed" >&2; exit 1; }; \
+	if [ -n "$$out" ]; then \
+		echo "internal/db is stale; run 'make sqlc-generate' and commit:" >&2; \
+		echo "$$out"; \
+		git diff -- internal/db; \
 		exit 1; \
 	fi
 

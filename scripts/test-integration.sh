@@ -43,23 +43,35 @@ SUFFIX="${$}_${RANDOM}"
 PG_CONTAINER="pixelpace-it-${SUFFIX}-pg"
 VALKEY_CONTAINER="pixelpace-it-${SUFFIX}-valkey"
 HOST_LABEL="$(hostname 2>/dev/null || echo unknown)"
+UID_LABEL="$(id -u)"
 LABEL_ARGS=(
   --label "pixelpace-it=1"
   --label "pixelpace-it.run=${SUFFIX}"
   --label "pixelpace-it.pid=$$"
   --label "pixelpace-it.host=${HOST_LABEL}"
+  --label "pixelpace-it.uid=${UID_LABEL}"
 )
 TEST_LOG=""
 
 # Startup sweep: remove containers left by an earlier run on this host whose
 # process is gone (SIGKILL, host crash). A live run's containers are never touched.
 if stale="$(run_bounded 15 "docker ps (stale sweep)" docker ps -a \
-  --filter "label=pixelpace-it=1" --filter "label=pixelpace-it.host=${HOST_LABEL}" \
+  --filter "label=pixelpace-it=1" \
+  --filter "label=pixelpace-it.host=${HOST_LABEL}" \
+  --filter "label=pixelpace-it.uid=${UID_LABEL}" \
   --format '{{.ID}} {{.Label "pixelpace-it.pid"}}')"; then
   while read -r cid cpid; do
     [ -n "$cid" ] || continue
-    if [ -n "$cpid" ] && kill -0 "$cpid" 2>/dev/null; then
-      continue
+    if [ -n "$cpid" ]; then
+      if ps -p "$cpid" >/dev/null 2>&1 || kill -0 "$cpid" 2>/dev/null; then
+        continue
+      fi
+      kill_err="$(LC_ALL=C kill -0 "$cpid" 2>&1 || true)"
+      case "$kill_err" in
+        *"Operation not permitted"*|*"operation not permitted"*|*"EPERM"*)
+          continue
+          ;;
+      esac
     fi
     echo "Removing stale integration container ${cid} (run pid ${cpid:-unknown} is gone)"
     run_bounded 30 "docker rm (stale ${cid})" docker rm -f -v "$cid" >/dev/null ||
@@ -100,7 +112,7 @@ remove_run_containers() {
 
 cleanup() {
   local rc=$? clean=0
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM HUP
   remove_run_containers || clean=1
   if [ "$DOCKER_RUN_INCOMPLETE" -eq 1 ]; then
     # A killed `docker run` client can leave the daemon creating the container
@@ -118,7 +130,7 @@ cleanup() {
   fi
   exit "$rc"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT INT TERM HUP
 
 for image in "$PG_IMAGE" "$VALKEY_IMAGE"; do
   if ! run_bounded "$PULL_TIMEOUT" "docker pull ${image}" docker pull "$image" >/dev/null; then
@@ -220,7 +232,7 @@ export VALKEY_ADDR="127.0.0.1:${VALKEY_PORT}"
 # bash 3.2 (macOS) from treating an empty "$@" as unbound under set -u.
 TEST_LOG="$(mktemp)"
 set +e
-go test -tags integration -p 1 -v ./... ${@+"$@"} 2>&1 | tee "$TEST_LOG"
+go test -tags integration -p 1 -timeout "${IT_TIMEOUT:-15m}" -v ./... ${@+"$@"} 2>&1 | tee "$TEST_LOG"
 test_rc=${PIPESTATUS[0]}
 set -e
 

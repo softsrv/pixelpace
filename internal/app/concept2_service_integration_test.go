@@ -1339,6 +1339,34 @@ func TestIntegration_Concept2Poster_UnconnectedAndDNFQueueNothing(t *testing.T) 
 	})
 }
 
+// CLM-11: a finished warmup is never posted to Concept2: a connected auto-post
+// user who finishes a warmup gets no concept2_result_posts row and no post attempt.
+func TestIntegration_Concept2Poster_WarmupQueuesNothing(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	ctx := context.Background()
+	const target int64 = 500000
+	f := seedModeRoom(t, "warmup", 1, target, 5*time.Millisecond)
+	poster := posterFor(f.pool, lb.URL, clock, nil)
+	f.withResultPoster(poster)
+	connectConcept2(t, f.pool, f.users[0], "warmup-user")
+	f.begin(t)
+	f.ingest(t, 0, 100000, target, f.now)
+	if err := f.svc.Run(ctx, f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	posts := resultPosts(t, f.pool, f.race.ID)
+	if len(posts) != 0 {
+		t.Fatalf("posts for warmup participant = %+v, want none", posts)
+	}
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue = %d, want 0", n)
+	}
+	if calls := lb.received(""); len(calls) != 0 {
+		t.Fatalf("outbound Logbook calls = %+v, want none", calls)
+	}
+}
+
 // CLM-18: with auto_post off a finalized race queues nothing for the user;
 // once it is back on only races finalized afterwards are queued.
 func TestIntegration_Concept2Poster_AutoPostOffQueuesNothingAndNoBackPosting(t *testing.T) {

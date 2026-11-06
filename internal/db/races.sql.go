@@ -15,7 +15,7 @@ import (
 const beginRaceRoom = `-- name: BeginRaceRoom :one
 UPDATE rooms SET status = 'in_progress'
 WHERE id = $1 AND status = 'counting_down'
-RETURNING id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at
+RETURNING id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds
 `
 
 func (q *Queries) BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error) {
@@ -29,6 +29,8 @@ func (q *Queries) BeginRaceRoom(ctx context.Context, id uuid.UUID) (Room, error)
 		&i.JoinCode,
 		&i.CreatedAt,
 		&i.RaceStartsAt,
+		&i.Mode,
+		&i.DurationSeconds,
 	)
 	return i, err
 }
@@ -45,9 +47,9 @@ func (q *Queries) CountRoomEquipmentUnready(ctx context.Context, roomID uuid.UUI
 }
 
 const createRace = `-- name: CreateRace :one
-INSERT INTO races (id, room_id, race_type_id, started_at, time_trial)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, room_id, race_type_id, started_at, finished_at, time_trial
+INSERT INTO races (id, room_id, race_type_id, started_at, mode, time_trial)
+VALUES ($1, $2, $3, $4, $5::text, $5::text = 'time_trial')
+RETURNING id, room_id, race_type_id, started_at, finished_at, time_trial, mode
 `
 
 type CreateRaceParams struct {
@@ -55,16 +57,18 @@ type CreateRaceParams struct {
 	RoomID     uuid.UUID          `json:"room_id"`
 	RaceTypeID uuid.UUID          `json:"race_type_id"`
 	StartedAt  pgtype.Timestamptz `json:"started_at"`
-	TimeTrial  bool               `json:"time_trial"`
+	Mode       string             `json:"mode"`
 }
 
+// mode owns the race's kind; time_trial is kept for older readers and is
+// always derived from it, never passed separately.
 func (q *Queries) CreateRace(ctx context.Context, arg CreateRaceParams) (Race, error) {
 	row := q.db.QueryRow(ctx, createRace,
 		arg.ID,
 		arg.RoomID,
 		arg.RaceTypeID,
 		arg.StartedAt,
-		arg.TimeTrial,
+		arg.Mode,
 	)
 	var i Race
 	err := row.Scan(
@@ -74,6 +78,7 @@ func (q *Queries) CreateRace(ctx context.Context, arg CreateRaceParams) (Race, e
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.TimeTrial,
+		&i.Mode,
 	)
 	return i, err
 }
@@ -160,7 +165,7 @@ func (q *Queries) FinishRaceRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getRoomRace = `-- name: GetRoomRace :one
-SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id
+SELECT r.status, r.race_starts_at, r.race_type_id, rt.kind, rt.target_value, rt.label, races.id AS race_id, r.mode, r.host_user_id
 FROM rooms r
 JOIN race_types rt ON rt.id = r.race_type_id
 LEFT JOIN races ON races.room_id = r.id
@@ -175,6 +180,8 @@ type GetRoomRaceRow struct {
 	TargetValue  int64              `json:"target_value"`
 	Label        string             `json:"label"`
 	RaceID       pgtype.UUID        `json:"race_id"`
+	Mode         string             `json:"mode"`
+	HostUserID   uuid.UUID          `json:"host_user_id"`
 }
 
 func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow, error) {
@@ -188,6 +195,8 @@ func (q *Queries) GetRoomRace(ctx context.Context, id uuid.UUID) (GetRoomRaceRow
 		&i.TargetValue,
 		&i.Label,
 		&i.RaceID,
+		&i.Mode,
+		&i.HostUserID,
 	)
 	return i, err
 }
@@ -486,7 +495,7 @@ func (q *Queries) ListUnfinishedRaces(ctx context.Context) ([]uuid.UUID, error) 
 }
 
 const lockRace = `-- name: LockRace :one
-SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, r.time_trial, rt.kind, rt.target_value
+SELECT r.id, r.room_id, r.race_type_id, r.started_at, r.finished_at, r.time_trial, r.mode, rt.kind, rt.target_value
 FROM races r JOIN race_types rt ON rt.id = r.race_type_id
 WHERE r.id = $1 FOR UPDATE OF r
 `
@@ -498,6 +507,7 @@ type LockRaceRow struct {
 	StartedAt   pgtype.Timestamptz `json:"started_at"`
 	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
 	TimeTrial   bool               `json:"time_trial"`
+	Mode        string             `json:"mode"`
 	Kind        string             `json:"kind"`
 	TargetValue int64              `json:"target_value"`
 }
@@ -512,6 +522,7 @@ func (q *Queries) LockRace(ctx context.Context, id uuid.UUID) (LockRaceRow, erro
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.TimeTrial,
+		&i.Mode,
 		&i.Kind,
 		&i.TargetValue,
 	)

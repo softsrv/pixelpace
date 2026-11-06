@@ -26,7 +26,7 @@ import (
 
 // Each function field lets a test control the corresponding service operation.
 type stubRoomService struct {
-	createFn func(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, string, error)
+	createFn func(context.Context, uuid.UUID, uuid.UUID, string, *int32) (uuid.UUID, string, error)
 	joinFn   func(context.Context, uuid.UUID, string) (uuid.UUID, error)
 	leaveFn  func(context.Context, uuid.UUID, uuid.UUID) error
 	kickFn   func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
@@ -99,8 +99,8 @@ func (b *fakeBeginner) Run(ctx context.Context, raceID uuid.UUID) error {
 	return err
 }
 
-func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
-	return s.createFn(ctx, userID, raceTypeID)
+func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
+	return s.createFn(ctx, userID, raceTypeID, mode, warmupMinutes)
 }
 
 func (s *stubRoomService) JoinRoom(ctx context.Context, userID uuid.UUID, code string) (uuid.UUID, error) {
@@ -137,12 +137,16 @@ type roomCall struct {
 	raceID    uuid.UUID
 	targetID  uuid.UUID
 	code      string
+	mode      string
 }
 
 func recordingRoomService(record func(roomCall) error) *stubRoomService {
 	return &stubRoomService{
-		createFn: func(_ context.Context, userID, raceID uuid.UUID) (uuid.UUID, string, error) {
-			return stubRoomID, "ABC234", record(roomCall{operation: "create", userID: userID, raceID: raceID})
+		createFn: func(_ context.Context, userID, raceID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
+			if warmupMinutes != nil {
+				return uuid.Nil, "", fmt.Errorf("unexpected warmup minutes %d", *warmupMinutes)
+			}
+			return stubRoomID, "ABC234", record(roomCall{operation: "create", userID: userID, raceID: raceID, mode: mode})
 		},
 		joinFn: func(_ context.Context, userID uuid.UUID, code string) (uuid.UUID, error) {
 			return stubRoomID, record(roomCall{operation: "join", userID: userID, code: code})
@@ -174,7 +178,7 @@ type roomOperation struct {
 func roomOperations() []roomOperation {
 	roomID, raceID, targetID := uuid.New(), uuid.New(), uuid.New()
 	return []roomOperation{
-		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}}, roomCall{operation: "create", raceID: raceID}, http.StatusCreated},
+		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}, "mode": {app.ModeRace}}, roomCall{operation: "create", raceID: raceID, mode: app.ModeRace}, http.StatusCreated},
 		{"join", (*handlers.RoomHandler).Join, "/rooms/join", url.Values{"join_code": {" ABC234 "}}, roomCall{operation: "join", code: "ABC234"}, http.StatusOK},
 		{"leave", (*handlers.RoomHandler).Leave, "/rooms/" + roomID.String() + "/leave", url.Values{}, roomCall{operation: "leave", roomID: roomID}, http.StatusNoContent},
 		{"kick", (*handlers.RoomHandler).Kick, "/rooms/" + roomID.String() + "/kick", url.Values{"target_user_id": {targetID.String()}}, roomCall{operation: "kick", roomID: roomID, targetID: targetID}, http.StatusNoContent},
@@ -272,6 +276,7 @@ func TestRoomHandlersServiceErrors(t *testing.T) {
 		{app.ErrParticipantReady, http.StatusConflict},
 		{app.ErrNotEnoughParticipants, http.StatusConflict},
 		{app.ErrInvalidRaceType, http.StatusConflict},
+		{app.ErrInvalidSessionMode, http.StatusBadRequest},
 		{errors.New("private database failure"), http.StatusInternalServerError},
 	}
 	for _, op := range roomOperations() {
@@ -326,6 +331,47 @@ func TestRoomHandlersRejectInvalidRequests(t *testing.T) {
 						t.Errorf("invalid form %q status = %d, want 400", body, rr.Code)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestRoomCreateInvalidOrMissingModeRejected(t *testing.T) {
+	raceTypeID := uuid.New()
+	for _, tc := range []struct {
+		name string
+		form url.Values
+	}{
+		{"missing mode", url.Values{"race_type_id": {raceTypeID.String()}}},
+		{"empty mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {""}}},
+		{"sprint mode", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {"sprint"}}},
+		{"warmup mode rejected for now", url.Values{"race_type_id": {raceTypeID.String()}, "mode": {"warmup"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &stubRoomService{
+				createFn: func(ctx context.Context, userID, rID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
+					switch mode {
+					case app.ModeRace, app.ModeTimeTrial:
+						return stubRoomID, "ABC234", nil
+					default:
+						return uuid.Nil, "", app.ErrInvalidSessionMode
+					}
+				},
+			}
+			op := roomOperation{
+				name:    "create",
+				handler: (*handlers.RoomHandler).Create,
+				path:    "/rooms",
+				form:    tc.form,
+				want:    roomCall{operation: "create"},
+				status:  http.StatusBadRequest,
+			}
+			rr := serveRoomRequest(t, op, svc, uuid.New(), tc.form.Encode(), "", true)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%q", rr.Code, rr.Body.String())
+			}
+			if redirect := rr.Header().Get("HX-Redirect"); redirect != "" {
+				t.Fatalf("HX-Redirect = %q, want none", redirect)
 			}
 		})
 	}
@@ -616,14 +662,61 @@ func TestRoomHandlersHTMXNavigation(t *testing.T) {
 				"start":  {"HX-Redirect", "/rooms/" + roomID.String() + "/race"},
 			}[op.name]
 			svc := recordingRoomService(func(roomCall) error { return nil })
-			rr := serveRoomRequest(t, op, svc, uuid.New(), op.form.Encode(), roomID.String(), true)
+			beginner := &fakeBeginner{}
+			h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+			rr := serveRoomRequestWith(t, h, op, uuid.New(), op.form.Encode(), roomID.String(), true)
+			h.Wait()
 			if rr.Code != op.status {
 				t.Fatalf("status = %d, want %d", rr.Code, op.status)
 			}
 			if got := rr.Header().Get(want[0]); got != want[1] {
 				t.Errorf("%s = %q, want %q", want[0], got, want[1])
 			}
+			// Creating a race only opens its lobby; the race begins on Start.
+			beginner.mu.Lock()
+			begun := len(beginner.rooms)
+			beginner.mu.Unlock()
+			if op.name == "create" && begun != 0 {
+				t.Errorf("create began %d races, want none", begun)
+			}
 		})
+	}
+}
+
+// Creating a time trial skips the lobby: the created room's race begins once,
+// outside the request, and the host is sent straight to its race page.
+func TestRoomCreateTimeTrialBeginsAndOpensRacePage(t *testing.T) {
+	raceTypeID := uuid.New()
+	var modes []string
+	svc := recordingRoomService(func(c roomCall) error { modes = append(modes, c.mode); return nil })
+	svc.resetFn = func(context.Context, uuid.UUID) error {
+		t.Error("reset after a successful begin")
+		return nil
+	}
+	beginner := &fakeBeginner{}
+	h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+	form := url.Values{"race_type_id": {raceTypeID.String()}, "mode": {app.ModeTimeTrial}}
+	op := roomOperations()[0]
+	rr := serveRoomRequestWith(t, h, op, uuid.New(), form.Encode(), "", true)
+	h.Wait()
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%q", rr.Code, rr.Body.String())
+	}
+	if len(modes) != 1 || modes[0] != app.ModeTimeTrial {
+		t.Fatalf("CreateRoom modes = %v, want one time_trial", modes)
+	}
+	if got, want := rr.Header().Get("HX-Redirect"), "/rooms/"+stubRoomID.String()+"/race"; got != want {
+		t.Fatalf("HX-Redirect = %q, want %q", got, want)
+	}
+	if len(beginner.rooms) != 1 || beginner.rooms[0] != stubRoomID {
+		t.Fatalf("begins = %v, want one for %s", beginner.rooms, stubRoomID)
+	}
+	// httptest's request context ends with the handler; the begin context must not.
+	if err := beginner.ctxs[0].Err(); err != nil {
+		t.Fatalf("begin context done after the request: %v", err)
+	}
+	if len(beginner.runs) != 1 {
+		t.Fatalf("runs = %v, want 1 run", beginner.runs)
 	}
 }
 
@@ -651,8 +744,15 @@ func TestRoomStartRefusedDoesNotRedirect(t *testing.T) {
 }
 
 // A begin that found no racer ready has already dissolved the room, so the
-// handler does not try to return it to waiting.
+// handler does not try to return it to waiting. The outcome is not swallowed:
+// it is logged with the room and the cause, and the host's race page reads the
+// dissolved room to say why.
 func TestRoomStartNoRacersReadyDoesNotReset(t *testing.T) {
+	logs := &capturedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
 	roomID := uuid.New()
 	beginner := &fakeBeginner{err: fmt.Errorf("schedule: %w", app.ErrNoRacersReady)}
 	svc := recordingRoomService(func(roomCall) error { return nil })
@@ -668,6 +768,21 @@ func TestRoomStartNoRacersReadyDoesNotReset(t *testing.T) {
 	}
 	if len(beginner.runs) != 0 {
 		t.Fatalf("no racers ready ran races: %v", beginner.runs)
+	}
+	logged := false
+	logs.mu.Lock()
+	defer logs.mu.Unlock()
+	for _, r := range logs.records {
+		var room, cause bool
+		r.Attrs(func(a slog.Attr) bool {
+			room = room || (a.Key == "room_id" && fmt.Sprint(a.Value.Any()) == roomID.String())
+			cause = cause || (a.Key == "error" && strings.Contains(fmt.Sprint(a.Value.Any()), app.ErrNoRacersReady.Error()))
+			return true
+		})
+		logged = logged || (room && cause)
+	}
+	if !logged {
+		t.Fatalf("no-racers-ready outcome not logged with room and cause: %+v", logs.records)
 	}
 }
 

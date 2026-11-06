@@ -19,7 +19,7 @@ import (
 
 // roomServicer defines the subset of app.RoomService that RoomHandler requires.
 type roomServicer interface {
-	CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID) (uuid.UUID, string, error)
+	CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error)
 	JoinRoom(ctx context.Context, userID uuid.UUID, joinCode string) (uuid.UUID, error)
 	Roster(ctx context.Context, callerUserID, roomID uuid.UUID) (app.RoomRoster, error)
 	LeaveRoom(ctx context.Context, userID, roomID uuid.UUID) error
@@ -75,7 +75,7 @@ func NewRoomHandler(ctx context.Context, roomSvc roomServicer, beginner raceBegi
 	return &RoomHandler{ctx: ctx, room: roomSvc, beginner: beginner}
 }
 
-// Wait blocks until every race begin launched by Start has finished.
+// Wait blocks until every race begin launched by Create or Start has finished.
 func (h *RoomHandler) Wait() {
 	h.background.Wait()
 }
@@ -117,13 +117,21 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid race type ID", http.StatusBadRequest)
 		return
 	}
-	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, raceTypeID)
+	mode := r.PostForm.Get("mode")
+	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, raceTypeID, mode, nil)
 	if err != nil {
 		writeRoomError(w, r, err)
 		return
 	}
-	// HTMX forms follow the redirect to the new room's lobby.
-	w.Header().Set("HX-Redirect", lobbyPath(roomID))
+	if mode == app.ModeRace {
+		// HTMX forms follow the redirect to the new room's lobby.
+		w.Header().Set("HX-Redirect", lobbyPath(roomID))
+	} else {
+		// A solo session has no lobby: CreateRoom left it counting down, so
+		// its race begins now and the host goes straight to the race page.
+		h.beginInBackground(r.Context(), roomID)
+		w.Header().Set("HX-Redirect", racePath(roomID))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"room_id": roomID.String(), "join_code": code})
@@ -261,10 +269,18 @@ func (h *RoomHandler) Start(w http.ResponseWriter, r *http.Request) {
 		writeRoomError(w, r, err)
 		return
 	}
-	// The countdown outlives the request, so begin on a context the response
-	// does not cancel. It is cancelled when the handler's lifetime ends.
-	// A failed begin returns the room to waiting.
-	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	h.beginInBackground(r.Context(), roomID)
+	// The host goes straight to the race page; guests follow from the lobby.
+	w.Header().Set("HX-Redirect", racePath(roomID))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// beginInBackground begins a counting-down room's race outside the request.
+// The countdown outlives the request, so begin runs on a context the response
+// does not cancel; it is cancelled when the handler's lifetime ends. A failed
+// begin returns the room to waiting.
+func (h *RoomHandler) beginInBackground(reqCtx context.Context, roomID uuid.UUID) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(reqCtx))
 	stop := context.AfterFunc(h.ctx, cancel)
 	h.background.Add(1)
 	go func() {
@@ -272,17 +288,15 @@ func (h *RoomHandler) Start(w http.ResponseWriter, r *http.Request) {
 		defer stop()
 		h.beginRace(ctx, roomID)
 	}()
-	// The host goes straight to the race page; guests follow from the lobby.
-	w.Header().Set("HX-Redirect", racePath(roomID))
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *RoomHandler) beginRace(ctx context.Context, roomID uuid.UUID) {
 	race, err := h.beginner.Begin(ctx, roomID)
 	if err != nil {
 		if errors.Is(err, app.ErrNoRacersReady) {
-			// Begin dissolved the room; there is no lobby to return to.
-			slog.InfoContext(ctx, "race abandoned: no racer was ready", "room_id", roomID)
+			// Begin dissolved the room; there is no lobby to return to. The
+			// host's race page reads the dissolved room and says why.
+			slog.InfoContext(ctx, "race abandoned: no racer was ready", "room_id", roomID, "error", err)
 			return
 		}
 		slog.ErrorContext(ctx, "race begin failed", "room_id", roomID, "error", err)
@@ -312,6 +326,8 @@ func writeRoomError(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, app.ErrNotHost):
 		status = http.StatusForbidden
+	case errors.Is(err, app.ErrInvalidSessionMode):
+		status = http.StatusBadRequest
 	case errors.Is(err, app.ErrRoomFull), errors.Is(err, app.ErrAlreadyParticipant),
 		errors.Is(err, app.ErrNotAllReady), errors.Is(err, app.ErrInvalidStatusTransition),
 		errors.Is(err, app.ErrRoomNotJoinable), errors.Is(err, app.ErrParticipantReady),

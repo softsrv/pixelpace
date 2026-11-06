@@ -62,11 +62,13 @@ if (trackEl && window.PIXI) startRaceView(trackEl, window.PIXI);
 export async function startRaceView(trackEl, PIXI) {
   var selfId = trackEl.dataset.selfId;
   var targetMillimeters = Number(trackEl.dataset.targetMm);
+  var mode = trackEl.dataset.mode;
   var statusUrl = trackEl.dataset.statusUrl;
   var readyUrl = trackEl.dataset.readyUrl;
   var lobbyUrl = trackEl.dataset.lobbyUrl;
   var resultsUrl = trackEl.dataset.resultsUrl;
   var dashboardUrl = trackEl.dataset.dashboardUrl || '/dashboard';
+  var pageUrl = trackEl.dataset.pageUrl;
   var finishedOnLoad = trackEl.dataset.finished === 'true';
   var finishPollMs = trackEl.dataset.finishPollMs ? Number(trackEl.dataset.finishPollMs) : FINISH_POLL_MS;
   var statusEl = document.getElementById('race-status');
@@ -240,6 +242,7 @@ export async function startRaceView(trackEl, PIXI) {
     if (res && res.ok) return;
     if (res && res.status === 404) return dropped();
     if (res && res.status === 409) return backToLobby();
+    if (res && res.status === 410) return notConnected();
     reported = false;
     setTimeout(reportReady, READY_RETRY_MS);
   }
@@ -252,6 +255,7 @@ export async function startRaceView(trackEl, PIXI) {
       if (stopped) return;
       if (res && res.status === 404) return dropped();
       if (res && res.status === 409) return backToLobby();
+      if (res && res.status === 410) return notConnected();
       if (res && res.ok) {
         var body = await res.json().catch(function () { return null; });
         if (body) applyStatus(body, sentAt, Date.now());
@@ -268,16 +272,17 @@ export async function startRaceView(trackEl, PIXI) {
     // An absent key leaves the pacer as it is; null means there is none.
     if (status.pacer === null) {
       removePacer();
-      if (Array.isArray(status.racers)) {
-        if (status.racers.length === 1) setHidden(pacerNoteEl, false);
-        else if (status.racers.length >= 2) setHidden(pacerNoteEl, true);
+      if (mode === 'time_trial' && (!Array.isArray(status.racers) || status.racers.length <= 1)) {
+        setHidden(pacerNoteEl, false);
+      } else {
+        setHidden(pacerNoteEl, true);
       }
     } else if (status.pacer) {
       // The server decides whether a pacer exists; an unusable time still
       // draws the boat, labelled by formatPace's '—' fallback, as on load.
       setPacer(Number(status.pacer.elapsed_milliseconds));
       setHidden(pacerNoteEl, true);
-    } else if (Array.isArray(status.racers) && status.racers.length >= 2) {
+    } else if (mode !== 'time_trial' || (Array.isArray(status.racers) && status.racers.length >= 2)) {
       setHidden(pacerNoteEl, true);
     }
     if (status.race_starts_at && startsAt === null) {
@@ -495,6 +500,14 @@ export async function startRaceView(trackEl, PIXI) {
   function backToLobby() {
     stopped = true;
     if (lobbyUrl) window.location.assign(lobbyUrl);
+  }
+
+  // 410: this time trial or warmup was dissolved before its start because
+  // the rowing machine never connected. Reloading lands on the server's page
+  // that says so and links back to the dashboard.
+  function notConnected() {
+    stopped = true;
+    window.location.assign(pageUrl || dashboardUrl);
   }
 
   function setStatus(message) {

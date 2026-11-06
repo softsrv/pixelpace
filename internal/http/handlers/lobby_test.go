@@ -355,24 +355,39 @@ func TestLobbyAcceptAndDeclineInvite(t *testing.T) {
 	}
 }
 
-// A solo host is told about the pacer only on a distance race; timed races
-// never get one.
-func TestLobbyPanelSoloHintMentionsPacerOnlyForDistanceRaces(t *testing.T) {
-	const pacerLine = "a pacer boat rows at your best"
+// A solo host is told that a race needs at least one other rower, and the start
+// button says 'Start race'. Solo hints and 'Start time trial' never appear in the lobby.
+func TestLobbyPanelRacesRequireOtherRowers(t *testing.T) {
 	roomID := uuid.New()
 	for _, tc := range []struct {
-		name      string
-		distance  bool
-		wantPacer bool
+		name         string
+		participants []app.RoomRosterEntry
+		canStart     bool
+		wantHint     string
 	}{
-		{"distance race", true, true},
-		{"timed race", false, false},
+		{
+			name: "solo host",
+			participants: []app.RoomRosterEntry{
+				{PublicPlayer: app.PublicPlayer{UserID: lobbyUser.ID, Name: "Hosty"}, Host: true},
+			},
+			canStart: false,
+			wantHint: "A race needs at least one other rower.",
+		},
+		{
+			name: "two participants not ready",
+			participants: []app.RoomRosterEntry{
+				{PublicPlayer: app.PublicPlayer{UserID: lobbyUser.ID, Name: "Hosty"}, Host: true},
+				{PublicPlayer: app.PublicPlayer{UserID: uuid.New(), Name: "Guesty"}, Ready: false},
+			},
+			canStart: false,
+			wantHint: "You can start once everyone is ready.",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &stubLobbyService{lobbyFn: func(context.Context, uuid.UUID, uuid.UUID) (app.RoomLobby, error) {
 				lobby := waitingLobby(roomID)
-				lobby.Participants = lobby.Participants[:1]
-				lobby.DistanceRace = tc.distance
+				lobby.Participants = tc.participants
+				lobby.CanStart = tc.canStart
 				return lobby, nil
 			}}
 			h := handlers.NewLobbyHandler(svc, svc, newProductionRenderer(t), "https://pixelpace.test/")
@@ -380,11 +395,20 @@ func TestLobbyPanelSoloHintMentionsPacerOnlyForDistanceRaces(t *testing.T) {
 			req.SetPathValue("id", roomID.String())
 			rr := serveAuthenticated(t, lobbyUser, http.HandlerFunc(h.Panel), req)
 			body := rr.Body.String()
-			if rr.Code != http.StatusOK || !strings.Contains(body, "Rowing solo counts as a time trial") {
-				t.Fatalf("status = %d, body = %q; want the solo hint", rr.Code, body)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %q", rr.Code, body)
 			}
-			if got := strings.Contains(body, pacerLine); got != tc.wantPacer {
-				t.Errorf("pacer line shown = %v, want %v; body = %q", got, tc.wantPacer, body)
+			if !strings.Contains(body, "Start race") {
+				t.Errorf("panel missing 'Start race': body = %q", body)
+			}
+			if strings.Contains(body, "Start time trial") {
+				t.Errorf("panel unexpectedly contains 'Start time trial': body = %q", body)
+			}
+			if strings.Contains(body, "Rowing solo counts as a time trial") {
+				t.Errorf("panel unexpectedly contains 'Rowing solo counts as a time trial': body = %q", body)
+			}
+			if tc.wantHint != "" && !strings.Contains(body, tc.wantHint) {
+				t.Errorf("panel missing hint %q: body = %q", tc.wantHint, body)
 			}
 		})
 	}

@@ -132,7 +132,8 @@ function setupPage(options) {
   var track = fakeElement('div');
   Object.assign(track.dataset, {
     selfId: 'u-self', targetMm: options.targetMm || '500000',
-    statusUrl: '/rooms/r1/race/status', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
+    mode: options.mode || 'race',
+    statusUrl: '/rooms/r1/race/status', pageUrl: '/rooms/r1/race', readyUrl: '/rooms/r1/race/ready', lobbyUrl: '/rooms/r1/lobby',
     resultsUrl: '/rooms/r1/race/results', dashboardUrl: '/dashboard',
     finished: options.finished ? 'true' : 'false', raceId: options.finished ? 'race-1' : '',
     finishPollMs: options.finishPollMs || '1'
@@ -321,6 +322,20 @@ test('a racer removed before the start (ready 404) never opens the modal', async
   await settle();
   assert.equal(page.parts.modal.open, false);
   assert.equal(page.status.textContent, REMOVED, 'keeps the removal notice');
+});
+
+test('a time trial dissolved because the rowing machine never connected (status 410) reloads onto the not-connected page', async function () {
+  var page = setupPage({
+    mode: 'time_trial', finished: false, pm5: false,
+    lanes: [{ dataset: { userId: 'u-self', self: 'true' }, textContent: 'Me' }],
+    responses: { '/rooms/r1/race/status': function () { return jsonResponse(410, null); } }
+  });
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+  await settle();
+  assert.deepEqual(page.assigned, ['/rooms/r1/race'], 'reloads the race page, which renders the message');
+  assert.equal(page.calls.filter(function (u) { return u === '/rooms/r1/race/status'; }).length, 1, 'stops polling');
 });
 
 test('finishing your own row says you are waiting for the others', async function () {
@@ -909,6 +924,7 @@ test('note shown again on pacer null in a solo race', async function () {
   var phase = 0;
   var served = [0, 0];
   var page = setupPage({
+    mode: 'time_trial',
     finished: false,
     pacerNote: true,
     lanes: [laneItem('u-self', 'Me', true)],
@@ -933,6 +949,36 @@ test('note shown again on pacer null in a solo race', async function () {
   await until(function () { return pacerLanes(page).length === 0 && !page.pacerNote.hidden; });
   assert.equal(page.pacerNote.hidden, false, 'note is shown again on pacer null in a solo race');
   assert.equal(page.pacerNote.classList.contains('hidden'), false);
+
+  page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
+});
+
+test('note hidden on pacer null in a race with one racer', async function () {
+  var self = [{ user_id: 'u-self', equipment_ready: true }];
+  var page = setupPage({
+    mode: 'race',
+    finished: false,
+    pacerNote: true,
+    lanes: [laneItem('u-self', 'Me', true)],
+    responses: {
+      '/rooms/r1/race/status': function () {
+        return jsonResponse(200, {
+          server_time: new Date().toISOString(),
+          racers: self,
+          pacer: null
+        });
+      }
+    }
+  });
+  assert.equal(page.pacerNote.hidden, false, 'note starts visible');
+
+  var pixi = makePixi();
+  pixi.releaseInit();
+  await startRaceView(page.track, pixi.PIXI);
+
+  await until(function () { return page.pacerNote.hidden; });
+  assert.equal(page.pacerNote.hidden, true, 'note is hidden in a race even with 1 racer');
+  assert.equal(page.pacerNote.classList.contains('hidden'), true);
 
   page.doc.dispatchEvent(new CustomEvent('pixelpace:race-finished'));
 });

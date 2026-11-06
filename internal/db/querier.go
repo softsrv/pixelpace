@@ -34,6 +34,8 @@ type Querier interface {
 	CountRoomParticipants(ctx context.Context, roomID uuid.UUID) (int64, error)
 	CreateFriendRequest(ctx context.Context, arg CreateFriendRequestParams) (FriendRequest, error)
 	CreateFriendship(ctx context.Context, arg CreateFriendshipParams) error
+	// mode owns the race's kind; time_trial is kept for older readers and is
+	// always derived from it, never passed separately.
 	CreateRace(ctx context.Context, arg CreateRaceParams) (Race, error)
 	CreateRaceParticipant(ctx context.Context, arg CreateRaceParticipantParams) error
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)

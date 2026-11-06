@@ -37,7 +37,20 @@ type raceFixture struct {
 	onSleep func()
 }
 
+// seedRaceRoom seeds a counting-down race-mode room of n ready racers.
 func seedRaceRoom(t *testing.T, n int, target int64, threshold time.Duration) *raceFixture {
+	t.Helper()
+	return seedModeRoom(t, "race", n, target, threshold)
+}
+
+// seedTimeTrialRoom seeds a counting-down time_trial-mode room of n ready
+// racers, as the dashboard's 'Start time trial' creates.
+func seedTimeTrialRoom(t *testing.T, n int, target int64, threshold time.Duration) *raceFixture {
+	t.Helper()
+	return seedModeRoom(t, "time_trial", n, target, threshold)
+}
+
+func seedModeRoom(t *testing.T, mode string, n int, target int64, threshold time.Duration) *raceFixture {
 	t.Helper()
 	f := &raceFixture{pool: testDB(t), fake: realtime.NewFake(), room: uuid.Must(uuid.NewV7()), now: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
 	ctx := context.Background()
@@ -77,7 +90,13 @@ func seedRaceRoom(t *testing.T, n int, target int64, threshold time.Duration) *r
 	for i := range code {
 		code[i] = alphabet[int(entropy[10+i])%len(alphabet)]
 	}
-	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'counting_down', $4)", f.room, raceType, f.users[0], string(code[:])); err != nil {
+	// A warmup room holds a duration; every other mode holds none.
+	var duration *int32
+	if mode == "warmup" {
+		minute := int32(60)
+		duration = &minute
+	}
+	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'counting_down', $4, $5, $6)", f.room, raceType, f.users[0], string(code[:]), mode, duration); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range f.users {
@@ -258,15 +277,41 @@ func TestRaceServiceBegin(t *testing.T) {
 	}
 }
 
-func TestRaceServiceBeginSoloIsTimeTrial(t *testing.T) {
-	f := seedRaceRoom(t, 1, 500000, time.Minute)
-	f.begin(t)
-	var timeTrial bool
-	if err := f.pool.QueryRow(context.Background(), "SELECT time_trial FROM races WHERE id = $1", f.race.ID).Scan(&timeTrial); err != nil {
-		t.Fatal(err)
-	}
-	if !timeTrial || !f.race.TimeTrial {
-		t.Fatalf("time_trial=%v race=%+v", timeTrial, f.race)
+// The race takes its mode from the room, not from how many entrants begin,
+// and the kept time_trial column is derived from that mode on every row:
+// true exactly when the mode is time_trial.
+func TestRaceServiceBeginModeComesFromRoomAndOwnsTimeTrial(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, mode string
+		racers     int
+	}{
+		{"race of two", "race", 2},
+		{"race of one", "race", 1},
+		{"time trial", "time_trial", 1},
+		{"warmup", "warmup", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := seedModeRoom(t, tc.mode, tc.racers, 500000, time.Minute)
+			if tc.mode == "warmup" {
+				// A warmup room runs on the warmup race type.
+				if _, err := f.pool.Exec(ctx, "UPDATE rooms SET race_type_id = '01950000-0000-7000-8000-000000000009' WHERE id = $1", f.room); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.begin(t)
+			var mode string
+			var timeTrial bool
+			if err := f.pool.QueryRow(ctx, "SELECT mode, time_trial FROM races WHERE id = $1", f.race.ID).Scan(&mode, &timeTrial); err != nil {
+				t.Fatal(err)
+			}
+			if mode != tc.mode || f.race.Mode != tc.mode {
+				t.Fatalf("races.mode=%q race=%+v, want %q", mode, f.race, tc.mode)
+			}
+			if want := tc.mode == "time_trial"; timeTrial != want || f.race.TimeTrial != want {
+				t.Fatalf("time_trial=%v race=%+v, want %v for mode %q", timeTrial, f.race, want, tc.mode)
+			}
+		})
 	}
 }
 
@@ -629,6 +674,40 @@ func TestRaceServiceRoomRace(t *testing.T) {
 	}
 }
 
+// A time trial or warmup whose host's rowing machine never connected is
+// dissolved by Begin, which removes the host's participant row too. RoomRace
+// still knows the host and reports ErrSessionNotConnected to them, so the race
+// page can say why; a race-mode room dissolved the same way, or anyone who is
+// not its host, keeps today's answer.
+func TestRaceServiceRoomRaceSoloNotConnected(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want error
+	}{
+		{"time_trial", app.ErrSessionNotConnected},
+		{"warmup", app.ErrSessionNotConnected},
+		{"race", app.ErrParticipantNotFound},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			f := seedModeRoom(t, tc.mode, 1, 500000, time.Minute)
+			f.dropUnreadyAtStart(t, 0)
+			ctx := context.Background()
+			if _, err := f.svc.Begin(ctx, f.room); !errors.Is(err, app.ErrNoRacersReady) {
+				t.Fatalf("begin = %v, want ErrNoRacersReady", err)
+			}
+			if status := f.roomStatus(t); status != "dissolved" {
+				t.Fatalf("room status = %q, want dissolved", status)
+			}
+			if _, err := f.svc.RoomRace(ctx, f.room, f.users[0]); !errors.Is(err, tc.want) {
+				t.Fatalf("host RoomRace = %v, want %v", err, tc.want)
+			}
+			if _, err := f.svc.RoomRace(ctx, f.room, uuid.Must(uuid.NewV7())); !errors.Is(err, app.ErrParticipantNotFound) {
+				t.Fatalf("outsider RoomRace = %v, want ErrParticipantNotFound", err)
+			}
+		})
+	}
+}
+
 // pastResult records one earlier result for a fixture user, in a finished
 // history room of its own so the fixture room keeps a single race.
 type pastResult struct {
@@ -660,7 +739,7 @@ func (f *raceFixture) seedHistory(t *testing.T, user int, results ...pastResult)
 	}
 	for _, r := range results {
 		race := uuid.Must(uuid.NewV7())
-		if _, err := f.pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial) VALUES ($1, $2, $3, $4, $5, $6)", race, room, r.raceType, r.startedAt, r.startedAt.Add(time.Hour), r.timeTrial); err != nil {
+		if _, err := f.pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial, mode) VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 THEN 'time_trial' ELSE 'race' END)", race, room, r.raceType, r.startedAt, r.startedAt.Add(time.Hour), r.timeTrial); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := f.pool.Exec(ctx, "INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, $4, $5, $6)", uuid.Must(uuid.NewV7()), race, f.users[user], r.status, r.startedAt.Add(time.Duration(r.elapsed)*time.Millisecond), r.elapsed); err != nil {
@@ -670,7 +749,7 @@ func (f *raceFixture) seedHistory(t *testing.T, user int, results ...pastResult)
 }
 
 func TestRaceServiceRoomRaceTimeTrialPacerIsFastestEarlierTimeTrial(t *testing.T) {
-	f := seedRaceRoom(t, 1, 500000, time.Minute)
+	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
 	ctx := context.Background()
 	f.begin(t)
 	start := f.race.StartedAt.Time
@@ -753,7 +832,7 @@ func (f *raceFixture) nextRoom(t *testing.T, user int) uuid.UUID {
 	for i := range code {
 		code[i] = alphabet[int(entropy[10+i])%len(alphabet)]
 	}
-	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) SELECT $1, race_type_id, $3, 'counting_down', $4 FROM rooms WHERE id = $2", room, f.room, f.users[user], string(code[:])); err != nil {
+	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) SELECT $1, race_type_id, $3, 'counting_down', $4, mode, duration_seconds FROM rooms WHERE id = $2", room, f.room, f.users[user], string(code[:])); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.pool.Exec(ctx, "INSERT INTO room_participants (id, room_id, user_id, equipment_ready_at) VALUES ($1, $2, $3, NOW())", uuid.Must(uuid.NewV7()), room, f.users[user]); err != nil {
@@ -772,7 +851,7 @@ func (l failingPersonalBests) TimeTrialPersonalBest(context.Context, db.TimeTria
 // CLM-2: another user's faster Time Trials never become the solo racer's
 // pacer; only the racer's own result does.
 func TestRaceServiceRoomRacePacerIsNeverAnotherUsersTime(t *testing.T) {
-	f := seedRaceRoom(t, 2, 500000, time.Minute)
+	f := seedTimeTrialRoom(t, 2, 500000, time.Minute)
 	ctx := context.Background()
 	// User 1 is a racer elsewhere, never in this room.
 	if _, err := f.pool.Exec(ctx, "DELETE FROM room_participants WHERE room_id = $1 AND user_id = $2", f.room, f.users[1]); err != nil {
@@ -799,12 +878,12 @@ func TestRaceServiceRoomRacePacerIsNeverAnotherUsersTime(t *testing.T) {
 // and unfinished ones) gets the race view with no pacer and no error, and
 // that is not logged as a failure.
 func TestRaceServiceRoomRaceNoPersonalBestHasNoPacer(t *testing.T) {
-	f := seedRaceRoom(t, 1, 500000, time.Minute)
+	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
 	ctx := context.Background()
 	logs := captureLogs(t)
 	f.begin(t)
 	start, raceType := f.race.StartedAt.Time, f.raceType(t)
-	want := app.RoomRace{RoomID: f.room, RaceID: &f.race.ID, RaceStartsAt: &start, Label: "500m", TargetMillimeters: 500000}
+	want := app.RoomRace{RoomID: f.room, RaceID: &f.race.ID, RaceStartsAt: &start, Label: "500m", TargetMillimeters: 500000, Mode: "time_trial"}
 
 	check := func(name string) {
 		t.Helper()
@@ -838,9 +917,10 @@ func TestRaceServiceRoomRaceNoPersonalBestHasNoPacer(t *testing.T) {
 	}
 }
 
-// CLM-10: the pacer depends on the entrants at the start. (a) several
-// entrants: none; (b) a lobby of two that starts with one: the pacer; (c) two
-// entrants, one of whom leaves mid-race: still none.
+// CLM-10: the pacer belongs to the time_trial mode, never to a race. (a)
+// several entrants: none; (b) a race lobby of two that starts with one stays a
+// race: mode 'race', time_trial false, no pacer, ranked on the Race board; (c)
+// two entrants, one of whom leaves mid-race: still none.
 func TestRaceServiceRoomRacePacerOnlyForOneEntrantAtStart(t *testing.T) {
 	ctx := context.Background()
 	t.Run("several entrants", func(t *testing.T) {
@@ -856,16 +936,45 @@ func TestRaceServiceRoomRacePacerOnlyForOneEntrantAtStart(t *testing.T) {
 		}
 	})
 	t.Run("lobby of two starts with one", func(t *testing.T) {
-		f := seedRaceRoom(t, 2, 500000, time.Minute)
+		const target = 500000
+		f := seedRaceRoom(t, 2, target, time.Minute)
 		f.dropUnreadyAtStart(t, 1)
 		f.begin(t)
-		if !f.race.TimeTrial {
-			t.Fatalf("race = %+v, want a Time Trial after the drop", f.race)
+		var mode string
+		var timeTrial bool
+		if err := f.pool.QueryRow(ctx, "SELECT mode, time_trial FROM races WHERE id = $1", f.race.ID).Scan(&mode, &timeTrial); err != nil {
+			t.Fatal(err)
 		}
-		f.seedHistory(t, 0, pastResult{f.raceType(t), f.race.StartedAt.Time.Add(-time.Hour), true, "finished", 115000})
+		if mode != "race" || timeTrial {
+			t.Fatalf("mode=%q time_trial=%v, want a race after the drop", mode, timeTrial)
+		}
+		start, raceType := f.race.StartedAt.Time, f.raceType(t)
+		f.seedHistory(t, 0, pastResult{raceType, start.Add(-time.Hour), true, "finished", 115000})
 		view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
-		if err != nil || view.Pacer == nil || view.Pacer.ElapsedMilliseconds != 115000 {
-			t.Fatalf("pacer = %+v err=%v, want 115000ms", view.Pacer, err)
+		if err != nil || view.Pacer != nil || len(view.Racers) != 1 {
+			t.Fatalf("view = %+v pacer=%+v err=%v, want one racer and no pacer", view, view.Pacer, err)
+		}
+		f.now = start.Add(2 * time.Minute)
+		f.ingest(t, 0, 100000, target, start.Add(100*time.Second))
+		if err := f.svc.Run(ctx, f.race.ID); err != nil {
+			t.Fatal(err)
+		}
+		boards := app.NewLeaderboardService(db.New(f.pool), nil, app.LeaderboardServiceConfig{})
+		onBoard := func(mode string) bool {
+			t.Helper()
+			rows, err := boards.Leaderboard(ctx, "global", "all-time", mode, raceType, f.users[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range rows {
+				if row.UserID == f.users[0] && row.ElapsedMilliseconds == 100000 {
+					return true
+				}
+			}
+			return false
+		}
+		if !onBoard("race") || onBoard("time-trial") {
+			t.Fatalf("race result on race board=%v, time-trial board=%v; want race only", onBoard("race"), onBoard("time-trial"))
 		}
 	})
 	t.Run("an entrant leaves mid-race", func(t *testing.T) {
@@ -893,7 +1002,7 @@ func TestRaceServiceRoomRacePacerOnlyForOneEntrantAtStart(t *testing.T) {
 // racer's own Concept2 post.
 func TestRaceServiceRoomRacePacerIsNotAnEntrant(t *testing.T) {
 	const target = 500000
-	f := seedRaceRoom(t, 1, target, time.Minute)
+	f := seedTimeTrialRoom(t, 1, target, time.Minute)
 	ctx := context.Background()
 	lb := newFakeLogbook(t)
 	f.withResultPoster(newConcept2Poster(f.pool, lb))
@@ -951,10 +1060,10 @@ func TestRaceServiceRoomRacePacerIsNotAnEntrant(t *testing.T) {
 // CLM-13: a solo room on a timed race type gets no pacer, even with earlier
 // finished Time Trials at that type.
 func TestRaceServiceRoomRaceTimedRaceHasNoPacer(t *testing.T) {
-	f := seedRaceRoom(t, 1, 500000, time.Minute)
+	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
 	ctx := context.Background()
 	var timed uuid.UUID
-	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'time' ORDER BY target_value LIMIT 1").Scan(&timed); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE id = '01950000-0000-7000-8000-000000000006'").Scan(&timed); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.pool.Exec(ctx, "UPDATE rooms SET race_type_id = $1 WHERE id = $2", timed, f.room); err != nil {
@@ -971,7 +1080,7 @@ func TestRaceServiceRoomRaceTimedRaceHasNoPacer(t *testing.T) {
 // CLM-14: a failing personal-best lookup costs only the pacer: RoomRace still
 // returns the view, logs one error naming the room, and Begin is unaffected.
 func TestRaceServiceRoomRacePacerLookupFailureIsLoggedNotReturned(t *testing.T) {
-	f := seedRaceRoom(t, 1, 500000, time.Minute)
+	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
 	ctx := context.Background()
 	f.withPersonalBests(failingPersonalBests{err: errors.New("personal best lookup exploded")})
 	logs := captureLogs(t)
@@ -1007,7 +1116,7 @@ func TestRaceServiceRoomRacePacerLookupFailureIsLoggedNotReturned(t *testing.T) 
 // finish in this race leaves its pacer alone and paces the next race.
 func TestRaceServiceRoomRacePacerIgnoresThisAndLaterRaces(t *testing.T) {
 	const target = 500000
-	f := seedRaceRoom(t, 1, target, time.Minute)
+	f := seedTimeTrialRoom(t, 1, target, time.Minute)
 	ctx := context.Background()
 	f.begin(t)
 	start := f.race.StartedAt.Time
@@ -1035,7 +1144,7 @@ func TestRaceServiceRoomRacePacerIgnoresThisAndLaterRaces(t *testing.T) {
 // this race never becomes this race's pacer: the pacer stays fixed at the best
 // finished before this race started.
 func TestRaceServiceRoomRacePacerIgnoresTimeTrialFinishedMidRace(t *testing.T) {
-	f := seedRaceRoom(t, 1, 500000, time.Minute)
+	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
 	ctx := context.Background()
 	f.begin(t)
 	start := f.race.StartedAt.Time
@@ -1047,6 +1156,41 @@ func TestRaceServiceRoomRacePacerIgnoresTimeTrialFinishedMidRace(t *testing.T) {
 	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
 	if err != nil || view.Pacer == nil || view.Pacer.ElapsedMilliseconds != 110000 {
 		t.Fatalf("pacer = %+v err=%v, want 110000ms (the mid-race finish must not count)", view.Pacer, err)
+	}
+}
+
+// CLM-5: only a time_trial-mode finish paces a time trial. A faster finished
+// race, and a finished warmup, at the same race type never become the pacer;
+// races.mode decides, not the kept time_trial column (one race row here
+// carries a stale time_trial=true to prove it).
+func TestRaceServiceRoomRacePacerIsNeverARaceOrWarmup(t *testing.T) {
+	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
+	ctx := context.Background()
+	f.begin(t)
+	start, raceType := f.race.StartedAt.Time, f.raceType(t)
+	f.seedHistory(t, 0,
+		pastResult{raceType, start.Add(-3 * time.Hour), false, "finished", 90000},
+		pastResult{raceType, start.Add(-2 * time.Hour), true, "finished", 80000},
+		pastResult{raceType, start.Add(-time.Hour), true, "finished", 70000},
+	)
+	// Re-label the two time_trial history rows: one a race whose legacy
+	// time_trial flag still reads true, one a warmup.
+	for _, q := range []string{
+		"UPDATE races SET mode = 'race' WHERE id = (SELECT r.id FROM races r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 80000)",
+		"UPDATE races SET mode = 'warmup', time_trial = false WHERE id = (SELECT r.id FROM races r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 70000)",
+	} {
+		if tag, err := f.pool.Exec(ctx, q, f.users[0]); err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("relabel history: rows=%d err=%v", tag.RowsAffected(), err)
+		}
+	}
+	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil || view.Mode != "time_trial" || view.Pacer != nil {
+		t.Fatalf("mode=%q pacer=%+v err=%v, want a time_trial view with no pacer from races or warmups", view.Mode, view.Pacer, err)
+	}
+	f.seedHistory(t, 0, pastResult{raceType, start.Add(-time.Hour), true, "finished", 120000})
+	view, err = f.svc.RoomRace(ctx, f.room, f.users[0])
+	if err != nil || view.Pacer == nil || view.Pacer.ElapsedMilliseconds != 120000 {
+		t.Fatalf("pacer = %+v err=%v, want the slower but only time trial, 120000ms", view.Pacer, err)
 	}
 }
 

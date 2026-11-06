@@ -80,7 +80,7 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		"Race":      race,
 		"Lanes":     lanes,
 		"Pacer":     race.Pacer,
-		"Solo":      len(race.Racers) == 1,
+		"Mode":      race.Mode,
 		"LaneCount": laneCount,
 	}
 	if race.Pacer != nil {
@@ -168,6 +168,14 @@ func (h *RacePageHandler) roomRace(w http.ResponseWriter, r *http.Request, toLob
 			http.Redirect(w, r, lobbyPath(roomID), http.StatusSeeOther)
 			return uuid.Nil, app.RoomRace{}, false
 		}
+		if toLobby && errors.Is(err, app.ErrSessionNotConnected) {
+			// A solo session whose rowing machine never connected was
+			// dissolved before its start; say so instead of a dead track.
+			h.renderer.Page(w, http.StatusOK, "room-unavailable.html", map[string]any{
+				"User": user, "Title": notConnectedTitle, "Message": notConnectedMessage,
+			})
+			return uuid.Nil, app.RoomRace{}, false
+		}
 		if toLobby && errors.Is(err, app.ErrParticipantNotFound) {
 			// A racer dropped before the start has no participant row, so
 			// race.mjs never runs for them: tell them on the page itself.
@@ -187,6 +195,14 @@ func (h *RacePageHandler) roomRace(w http.ResponseWriter, r *http.Request, toLob
 // someone who never joined, so it covers both without saying more.
 const removedFromRaceMessage = "You're not in this race. If your rowing machine wasn't connected in time, you were removed from it before the start."
 
+// notConnectedTitle and notConnectedMessage are what the race page shows the
+// host of a time trial or warmup that never started because their rowing
+// machine was not connected. race.mjs shows the same message on a 410.
+const (
+	notConnectedTitle   = "Rowing machine not connected"
+	notConnectedMessage = "Your rowing machine wasn't connected, so the session didn't start. Head back to the dashboard and try again once it's connected."
+)
+
 func writeRaceError(w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError
 	switch {
@@ -196,6 +212,9 @@ func writeRaceError(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, app.ErrRaceNotStarted), errors.Is(err, app.ErrInvalidRaceType):
 		status = http.StatusConflict
+	// The solo session is over before it began: nothing will ever start.
+	case errors.Is(err, app.ErrSessionNotConnected):
+		status = http.StatusGone
 	}
 	if status == http.StatusInternalServerError {
 		slog.ErrorContext(r.Context(), "room race request failed", "error", err)

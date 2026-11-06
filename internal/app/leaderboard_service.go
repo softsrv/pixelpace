@@ -44,8 +44,9 @@ func NewLeaderboardService(q *db.Queries, friends friendLister, cfg LeaderboardS
 // Windows use completion time: month is a trailing calendar month in UTC,
 // week is seven days, and all-time has no lower bound. Friends includes only
 // the caller's friends, not the caller, unless they are in that resolved set.
-// Mode "race" ranks races with other entrants; "time-trial" ranks solo races.
-// The two never mix, so a 500m race and a 500m time trial rank separately.
+// Mode "race" ranks races and "time-trial" ranks time trials, as chosen when
+// the session began, never inferred from entrant count. The two never mix, so
+// a 500m race and a 500m time trial rank separately. Warmups rank on neither.
 func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window, mode string, raceTypeID, callerID uuid.UUID) ([]LeaderboardRow, error) {
 	if scope != "global" && scope != "friends" {
 		return nil, ErrInvalidLeaderboardFilter
@@ -53,8 +54,9 @@ func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window, mod
 	params := db.LeaderboardPersonalBestParams{RaceTypeID: raceTypeID}
 	switch mode {
 	case "race":
+		params.Mode = "race"
 	case "time-trial":
-		params.TimeTrial = true
+		params.Mode = "time_trial"
 	default:
 		return nil, ErrInvalidLeaderboardFilter
 	}

@@ -32,29 +32,56 @@ func roomIntegrationFriends(t *testing.T, pool *pgxpool.Pool, a, b uuid.UUID) {
 	})
 }
 
-// A host alone in their room can start right away; the race is a Time Trial.
-func TestRoomIntegrationSoloHostCanStart(t *testing.T) {
+// A host alone in a race-mode lobby cannot start: CanStart is false,
+// StartRace returns ErrNotEnoughParticipants, and no race is created.
+// Adding a second ready participant allows the start to succeed.
+func TestRoomIntegrationSoloHostCannotStartRace(t *testing.T) {
 	pool := roomIntegrationDB(t)
 	ctx := context.Background()
 	host := roomIntegrationUser(t, pool)
-	roomID, _ := roomIntegrationCreate(t, pool, host)
+	roomID, code := roomIntegrationCreate(t, pool, host)
 	s := NewRoomService(db.New(pool), pool)
 	lobby, err := s.Lobby(ctx, host, roomID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !lobby.IsHost || !lobby.CanStart || len(lobby.Participants) != 1 {
-		t.Fatalf("solo host lobby = %+v", lobby)
+	if !lobby.IsHost || lobby.CanStart || len(lobby.Participants) != 1 {
+		t.Fatalf("solo host lobby = %+v, want CanStart=false", lobby)
+	}
+	if err := s.StartRace(ctx, host, roomID); !errors.Is(err, ErrNotEnoughParticipants) {
+		t.Fatalf("solo start = %v, want ErrNotEnoughParticipants", err)
+	}
+	var raceCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&raceCount); err != nil {
+		t.Fatal(err)
+	}
+	if raceCount != 0 {
+		t.Fatalf("race count = %d, want 0", raceCount)
+	}
+
+	guest := roomIntegrationUser(t, pool)
+	if _, err := s.JoinRoom(ctx, guest, code); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkReady(ctx, guest, roomID); err != nil {
+		t.Fatal(err)
+	}
+	lobby, err = s.Lobby(ctx, host, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !lobby.CanStart {
+		t.Fatalf("lobby with 2 ready participants CanStart = false, want true")
 	}
 	if err := s.StartRace(ctx, host, roomID); err != nil {
-		t.Fatalf("solo start = %v", err)
+		t.Fatalf("two-participant start = %v, want nil", err)
 	}
 	var status string
 	if err := pool.QueryRow(ctx, "SELECT status FROM rooms WHERE id = $1", roomID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != "counting_down" {
-		t.Fatalf("room status = %s", status)
+		t.Fatalf("room status = %s, want counting_down", status)
 	}
 }
 

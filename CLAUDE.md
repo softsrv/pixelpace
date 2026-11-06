@@ -11,7 +11,7 @@ make dev-stop         # Stop and remove the dev container
 make run              # Run without hot-reload
 make build            # Compile to ./bin/app
 make test             # Run unit tests
-make test-integration # Run integration tests (requires Docker; uses testcontainers)
+make test-integration # Run integration tests (starts disposable Postgres and Valkey containers via Docker, applies migrations, and runs integration-tagged tests one package at a time with -p 1)
 make test-cover       # Run tests with HTML coverage report
 make fmt              # gofmt the repo
 make lint             # golangci-lint run
@@ -38,7 +38,7 @@ Merges into `main` require a pull request with `ci` green. Run `make fmt lint te
 To run a single test:
 ```bash
 go test ./internal/auth/... -run TestJWTRoundTrip
-go test -tags integration ./internal/app/... -run TestAuthServiceIntegration
+TEST_DATABASE_URL=... go test -tags integration ./internal/app/... -run TestAuthServiceIntegration # needs TEST_DATABASE_URL (and VALKEY_ADDR where used), or use make test-integration
 ```
 
 ## Architecture

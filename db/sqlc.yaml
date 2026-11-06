@@ -2,7 +2,9 @@ version: "2"
 sql:
   - engine: "postgresql"
     queries: "queries/"
-    schema: "migrations/"
+    schema:
+      - "migrations/"
+      - "sqlc/drop_compat_views.sql"
     gen:
       go:
         package: "db"

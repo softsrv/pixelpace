@@ -79,7 +79,7 @@ func TestRoomIntegrationFinishedRoomReleasesPlayers(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, "DELETE FROM telemetry_samples WHERE race_id = $1", race.ID)
 		_, _ = pool.Exec(ctx, "DELETE FROM race_participants WHERE race_id = $1", race.ID)
-		_, _ = pool.Exec(ctx, "DELETE FROM races WHERE id = $1", race.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM activities WHERE id = $1", race.ID)
 	})
 
 	// Finalize the race (sets races.finished_at and rooms.status='finished')

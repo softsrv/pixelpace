@@ -49,7 +49,7 @@ type RoomInvite struct {
 // PresetOptions lists the presets a lobby can pick. Only distance-kind
 // presets can be raced on the track today.
 func (s *RoomService) PresetOptions(ctx context.Context) ([]PresetOption, error) {
-	rows, err := s.q.ListDistanceRaceTypes(ctx)
+	rows, err := s.q.ListDistancePresets(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list presets: %w", err)
 	}
@@ -76,9 +76,9 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 	}
 	lobby := RoomLobby{
 		RoomID: room.ID, Status: room.Status, JoinCode: room.JoinCode,
-		PresetID: room.RaceTypeID, RaceLabel: room.RaceLabel, DistanceRace: room.RaceKind == "distance",
+		PresetID: room.PresetID, RaceLabel: room.PresetLabel, DistanceRace: room.PresetKind == "distance",
 		IsHost: callerUserID == room.HostUserID, InvitedIDs: map[uuid.UUID]bool{},
-		ActivityType: room.Mode,
+		ActivityType: room.ActivityType,
 	}
 	member := false
 	guestsReady := true
@@ -113,7 +113,7 @@ func (s *RoomService) Lobby(ctx context.Context, callerUserID, roomID uuid.UUID)
 // ChangePreset lets the host pick another distance-kind preset while the room
 // waits. Everyone agreed to the old preset, so every ready flag is cleared.
 func (s *RoomService) ChangePreset(ctx context.Context, callerUserID, roomID, presetID uuid.UUID) error {
-	preset, err := s.q.GetRaceType(ctx, presetID)
+	preset, err := s.q.GetPreset(ctx, presetID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidPreset
@@ -130,10 +130,10 @@ func (s *RoomService) ChangePreset(ctx context.Context, callerUserID, roomID, pr
 		if room.Status != "waiting" {
 			return ErrRoomNotJoinable
 		}
-		if room.RaceTypeID == presetID {
+		if room.PresetID == presetID {
 			return nil
 		}
-		if err := qtx.UpdateRoomRaceType(ctx, db.UpdateRoomRaceTypeParams{ID: roomID, RaceTypeID: presetID}); err != nil {
+		if err := qtx.UpdateRoomPreset(ctx, db.UpdateRoomPresetParams{ID: roomID, PresetID: presetID}); err != nil {
 			return fmt.Errorf("update preset: %w", err)
 		}
 		if err := qtx.ResetRoomReadiness(ctx, roomID); err != nil {
@@ -209,7 +209,7 @@ func (s *RoomService) PendingInvites(ctx context.Context, userID uuid.UUID) ([]R
 	invites := make([]RoomInvite, 0, len(rows))
 	for _, row := range rows {
 		invites = append(invites, RoomInvite{
-			ID: row.ID, RoomID: row.RoomID, RaceLabel: row.RaceLabel,
+			ID: row.ID, RoomID: row.RoomID, RaceLabel: row.PresetLabel,
 			Inviter: NewPublicPlayer(row.InviterID, row.InviterDisplayName),
 		})
 	}

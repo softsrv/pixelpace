@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -24,6 +25,33 @@ func TestMigration000020ReversibleIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	const schema = "migration_000020_test"
+	for _, sql := range []string{
+		"CREATE SCHEMA " + schema,
+		"SET LOCAL search_path = " + schema + ", public",
+	} {
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	entries, err := os.ReadDir("../../db/migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasSuffix(name, ".up.sql") && name < "000021" {
+			migration, err := os.ReadFile("../../db/migrations/" + name)
+			if err != nil {
+				t.Fatalf("read migration %s: %v", name, err)
+			}
+			if _, err := tx.Exec(ctx, string(migration)); err != nil {
+				t.Fatalf("apply migration %s: %v", name, err)
+			}
+		}
+	}
 
 	downSQL, err := os.ReadFile("../../db/migrations/000020_add_session_mode.down.sql")
 	if err != nil {
@@ -62,7 +90,7 @@ ON CONFLICT DO NOTHING;
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.columns
-			WHERE table_name = 'rooms' AND column_name = 'mode'
+			WHERE table_schema = current_schema() AND table_name = 'rooms' AND column_name = 'mode'
 		)
 	`).Scan(&roomsModeExists); err != nil {
 		t.Fatal(err)
@@ -73,7 +101,11 @@ ON CONFLICT DO NOTHING;
 		}
 	}
 
-	user := roomIntegrationUser(t, pool)
+	user := uuid.Must(uuid.NewV7())
+	if _, err := tx.Exec(ctx, "INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, 'unused', 'Racer')",
+		user, user.String()+"@example.com"); err != nil {
+		t.Fatal(err)
+	}
 	sentinelID := uuid.MustParse("01950000-0000-7000-8000-000000000009")
 
 	// Seed non-warmup race-mode room and race
@@ -153,7 +185,7 @@ ON CONFLICT DO NOTHING;
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM information_schema.columns
-				WHERE table_name = $1 AND column_name = $2
+				WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2
 			)
 		`, col.table, col.column).Scan(&colExists); err != nil {
 			t.Fatal(err)

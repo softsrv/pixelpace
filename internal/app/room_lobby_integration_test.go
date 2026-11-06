@@ -52,7 +52,7 @@ func TestRoomIntegrationSoloHostCannotStartRace(t *testing.T) {
 		t.Fatalf("solo start = %v, want ErrNotEnoughParticipants", err)
 	}
 	var raceCount int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&raceCount); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM activities WHERE room_id = $1", roomID).Scan(&raceCount); err != nil {
 		t.Fatal(err)
 	}
 	if raceCount != 0 {
@@ -265,8 +265,8 @@ func roomIntegrationStartedRoom(t *testing.T, pool *pgxpool.Pool, guests int) (u
 	// Registered after the extra users, so it runs before they are deleted.
 	t.Cleanup(func() {
 		for _, sql := range []string{
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 		} {
 			if _, err := pool.Exec(context.Background(), sql, roomID); err != nil {
 				t.Error(err)
@@ -408,7 +408,7 @@ func TestRaceIntegrationBeginWithNobodyReadyDissolvesRoom(t *testing.T) {
 		t.Fatalf("room = %+v, %v; want dissolved", room, err)
 	}
 	var races int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM activities WHERE room_id = $1", roomID).Scan(&races); err != nil || races != 0 {
 		t.Fatalf("races = %d, %v", races, err)
 	}
 }

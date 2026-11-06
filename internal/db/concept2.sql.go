@@ -113,7 +113,7 @@ DELETE FROM concept2_connections c WHERE c.user_id = $1
 
 // Disconnect: deletes the connection and, in the same statement, the user's
 // pending result posts, so a later reconnect (possibly to another Concept2
-// account) never sends races finished before it. Posted and failed rows are
+// account) never sends activities finished before it. Posted and failed rows are
 // kept: results already in the Logbook are left alone.
 func (q *Queries) DeleteConcept2Connection(ctx context.Context, userID uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteConcept2Connection, userID)
@@ -172,12 +172,12 @@ const getConcept2PostPayload = `-- name: GetConcept2PostPayload :one
 SELECT p.id, p.user_id, p.race_id,
        rp.elapsed_milliseconds, rp.finished_at,
        rp.pm5_serial_number, rp.pm5_firmware_version, rp.pm5_hardware_revision,
-       rt.kind, rt.target_value,
+       pr.kind, pr.target_value,
        c.timezone
 FROM concept2_result_posts p
 JOIN race_participants rp ON rp.race_id = p.race_id AND rp.user_id = p.user_id AND rp.status = 'finished'
-JOIN races r ON r.id = p.race_id
-JOIN race_types rt ON rt.id = r.race_type_id
+JOIN activities a ON a.id = p.race_id
+JOIN presets pr ON pr.id = a.preset_id
 JOIN concept2_connections c ON c.user_id = p.user_id
 WHERE p.id = $1 AND p.user_id = $2
 `
@@ -228,10 +228,10 @@ const listConcept2PostCandidates = `-- name: ListConcept2PostCandidates :many
 
 SELECT rp.user_id
 FROM race_participants rp
-JOIN races r ON r.id = rp.race_id
+JOIN activities a ON a.id = rp.race_id
 JOIN concept2_connections c ON c.user_id = rp.user_id
 WHERE rp.race_id = $1
-  AND r.mode <> 'warmup'
+  AND a.activity_type <> 'warmup'
   AND rp.status = 'finished'
   AND c.auto_post
 ORDER BY rp.user_id
@@ -463,7 +463,7 @@ type SetConcept2AutoPostParams struct {
 }
 
 // Switching auto-post off also deletes the user's pending result posts in the
-// same statement, so switching it back on never sends races finished while it
+// same statement, so switching it back on never sends activities finished while it
 // was off (no back-posting). Switching it on deletes nothing.
 func (q *Queries) SetConcept2AutoPost(ctx context.Context, arg SetConcept2AutoPostParams) (Concept2Connection, error) {
 	row := q.db.QueryRow(ctx, setConcept2AutoPost, arg.AutoPost, arg.UserID)

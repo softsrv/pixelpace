@@ -29,7 +29,7 @@ type raceFixture struct {
 	fake  *realtime.Fake
 	room  uuid.UUID
 	users []uuid.UUID
-	race  db.Race
+	race  db.Activity
 	now   time.Time
 	cfg   app.RaceServiceConfig
 	// onSleep runs on every injected sleep after the clock advances, so a
@@ -55,15 +55,15 @@ func seedModeRoom(t *testing.T, mode string, n int, target int64, threshold time
 	f := &raceFixture{pool: testDB(t), fake: realtime.NewFake(), room: uuid.Must(uuid.NewV7()), now: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
 	ctx := context.Background()
 	var raceType uuid.UUID
-	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' AND target_value = $1", target).Scan(&raceType); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT id FROM presets WHERE kind = 'distance' AND target_value = $1", target).Scan(&raceType); err != nil {
 		t.Fatal(err)
 	}
 	// Cleanup is scoped to this fixture, in foreign-key dependency order.
 	t.Cleanup(func() {
 		for _, query := range []string{
-			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 			"DELETE FROM rooms WHERE id = $1",
 		} {
 			if _, err := f.pool.Exec(ctx, query, f.room); err != nil {
@@ -96,7 +96,7 @@ func seedModeRoom(t *testing.T, mode string, n int, target int64, threshold time
 		minute := int32(60)
 		duration = &minute
 	}
-	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'counting_down', $4, $5, $6)", f.room, raceType, f.users[0], string(code[:]), mode, duration); err != nil {
+	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, preset_id, host_user_id, status, join_code, activity_type, duration_seconds) VALUES ($1, $2, $3, 'counting_down', $4, $5, $6)", f.room, raceType, f.users[0], string(code[:]), mode, duration); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range f.users {
@@ -155,7 +155,7 @@ func (f *raceFixture) participantStatuses(t *testing.T) []string {
 func (f *raceFixture) raceFinishedAt(t *testing.T) pgtype.Timestamptz {
 	t.Helper()
 	var at pgtype.Timestamptz
-	if err := f.pool.QueryRow(context.Background(), "SELECT finished_at FROM races WHERE id = $1", f.race.ID).Scan(&at); err != nil {
+	if err := f.pool.QueryRow(context.Background(), "SELECT finished_at FROM activities WHERE id = $1", f.race.ID).Scan(&at); err != nil {
 		t.Fatal(err)
 	}
 	return at
@@ -232,7 +232,7 @@ func TestRaceServiceBegin(t *testing.T) {
 	ctx := context.Background()
 	var status string
 	var started time.Time
-	if err := f.pool.QueryRow(ctx, "SELECT rooms.status, races.started_at FROM rooms JOIN races ON races.room_id = rooms.id WHERE races.id = $1", f.race.ID).Scan(&status, &started); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT rooms.status, activities.started_at FROM rooms JOIN activities ON activities.room_id = rooms.id WHERE activities.id = $1", f.race.ID).Scan(&status, &started); err != nil {
 		t.Fatal(err)
 	}
 	if status != "in_progress" || !started.Equal(before.Add(time.Millisecond)) || !f.race.StartedAt.Valid || f.race.TimeTrial {
@@ -269,7 +269,7 @@ func TestRaceServiceBegin(t *testing.T) {
 		t.Fatalf("duplicate begin: %v", err)
 	}
 	var count int
-	if err := f.pool.QueryRow(ctx, "SELECT count(*) FROM races WHERE room_id = $1", f.room).Scan(&count); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT count(*) FROM activities WHERE room_id = $1", f.room).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -295,18 +295,18 @@ func TestRaceServiceBeginModeComesFromRoomAndOwnsTimeTrial(t *testing.T) {
 			f := seedModeRoom(t, tc.mode, tc.racers, 500000, time.Minute)
 			if tc.mode == "warmup" {
 				// A warmup room runs on the warm-up preset.
-				if _, err := f.pool.Exec(ctx, "UPDATE rooms SET race_type_id = $1 WHERE id = $2", app.WarmupPresetID, f.room); err != nil {
+				if _, err := f.pool.Exec(ctx, "UPDATE rooms SET preset_id = $1 WHERE id = $2", app.WarmupPresetID, f.room); err != nil {
 					t.Fatal(err)
 				}
 			}
 			f.begin(t)
 			var mode string
 			var timeTrial bool
-			if err := f.pool.QueryRow(ctx, "SELECT mode, time_trial FROM races WHERE id = $1", f.race.ID).Scan(&mode, &timeTrial); err != nil {
+			if err := f.pool.QueryRow(ctx, "SELECT activity_type, time_trial FROM activities WHERE id = $1", f.race.ID).Scan(&mode, &timeTrial); err != nil {
 				t.Fatal(err)
 			}
-			if mode != tc.mode || f.race.Mode != tc.mode {
-				t.Fatalf("races.mode=%q race=%+v, want %q", mode, f.race, tc.mode)
+			if mode != tc.mode || f.race.ActivityType != tc.mode {
+				t.Fatalf("activities.activity_type=%q race=%+v, want %q", mode, f.race, tc.mode)
 			}
 			if want := tc.mode == "time_trial"; timeTrial != want || f.race.TimeTrial != want {
 				t.Fatalf("time_trial=%v race=%+v, want %v for mode %q", timeTrial, f.race, want, tc.mode)
@@ -515,7 +515,7 @@ func TestRaceServiceWinnerAndFinalize(t *testing.T) {
 				}
 			}
 			var finished time.Time
-			if err := f.pool.QueryRow(ctx, "SELECT finished_at FROM races WHERE id = $1", f.race.ID).Scan(&finished); err != nil {
+			if err := f.pool.QueryRow(ctx, "SELECT finished_at FROM activities WHERE id = $1", f.race.ID).Scan(&finished); err != nil {
 				t.Fatal(err)
 			}
 			if !finished.Equal(f.now) {
@@ -724,8 +724,8 @@ func (f *raceFixture) seedHistory(t *testing.T, user int, results ...pastResult)
 	room := uuid.Must(uuid.NewV7())
 	t.Cleanup(func() {
 		for _, query := range []string{
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 			"DELETE FROM rooms WHERE id = $1",
 		} {
 			if _, err := f.pool.Exec(ctx, query, room); err != nil {
@@ -734,12 +734,12 @@ func (f *raceFixture) seedHistory(t *testing.T, user int, results ...pastResult)
 		}
 	})
 	// Finished rooms do not participate in the active join-code unique index.
-	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) SELECT $1, race_type_id, host_user_id, 'finished', 'HSTRYZ' FROM rooms WHERE id = $2", room, f.room); err != nil {
+	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, preset_id, host_user_id, status, join_code) SELECT $1, preset_id, host_user_id, 'finished', 'HSTRYZ' FROM rooms WHERE id = $2", room, f.room); err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range results {
 		race := uuid.Must(uuid.NewV7())
-		if _, err := f.pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial, mode) VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 THEN 'time_trial' ELSE 'race' END)", race, room, r.raceType, r.startedAt, r.startedAt.Add(time.Hour), r.timeTrial); err != nil {
+		if _, err := f.pool.Exec(ctx, "INSERT INTO activities (id, room_id, preset_id, started_at, finished_at, time_trial, activity_type) VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 THEN 'time_trial' ELSE 'race' END)", race, room, r.raceType, r.startedAt, r.startedAt.Add(time.Hour), r.timeTrial); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := f.pool.Exec(ctx, "INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, $4, $5, $6)", uuid.Must(uuid.NewV7()), race, f.users[user], r.status, r.startedAt.Add(time.Duration(r.elapsed)*time.Millisecond), r.elapsed); err != nil {
@@ -754,10 +754,10 @@ func TestRaceServiceRoomRaceTimeTrialPacerIsFastestEarlierTimeTrial(t *testing.T
 	f.begin(t)
 	start := f.race.StartedAt.Time
 	var raceType, otherType uuid.UUID
-	if err := f.pool.QueryRow(ctx, "SELECT race_type_id FROM rooms WHERE id = $1", f.room).Scan(&raceType); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT preset_id FROM rooms WHERE id = $1", f.room).Scan(&raceType); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' AND id <> $1 ORDER BY target_value LIMIT 1", raceType).Scan(&otherType); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT id FROM presets WHERE kind = 'distance' AND id <> $1 ORDER BY target_value LIMIT 1", raceType).Scan(&otherType); err != nil {
 		t.Fatal(err)
 	}
 	f.seedHistory(t, 0,
@@ -785,7 +785,7 @@ func TestRaceServiceRoomRaceTimeTrialPacerIsFastestEarlierTimeTrial(t *testing.T
 func (f *raceFixture) raceType(t *testing.T) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
-	if err := f.pool.QueryRow(context.Background(), "SELECT race_type_id FROM rooms WHERE id = $1", f.room).Scan(&id); err != nil {
+	if err := f.pool.QueryRow(context.Background(), "SELECT preset_id FROM rooms WHERE id = $1", f.room).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -816,9 +816,9 @@ func (f *raceFixture) nextRoom(t *testing.T, user int) uuid.UUID {
 	room := uuid.Must(uuid.NewV7())
 	t.Cleanup(func() {
 		for _, query := range []string{
-			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 			"DELETE FROM rooms WHERE id = $1",
 		} {
 			if _, err := f.pool.Exec(ctx, query, room); err != nil {
@@ -832,7 +832,7 @@ func (f *raceFixture) nextRoom(t *testing.T, user int) uuid.UUID {
 	for i := range code {
 		code[i] = alphabet[int(entropy[10+i])%len(alphabet)]
 	}
-	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) SELECT $1, race_type_id, $3, 'counting_down', $4, mode, duration_seconds FROM rooms WHERE id = $2", room, f.room, f.users[user], string(code[:])); err != nil {
+	if _, err := f.pool.Exec(ctx, "INSERT INTO rooms (id, preset_id, host_user_id, status, join_code, activity_type, duration_seconds) SELECT $1, preset_id, $3, 'counting_down', $4, activity_type, duration_seconds FROM rooms WHERE id = $2", room, f.room, f.users[user], string(code[:])); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.pool.Exec(ctx, "INSERT INTO room_participants (id, room_id, user_id, equipment_ready_at) VALUES ($1, $2, $3, NOW())", uuid.Must(uuid.NewV7()), room, f.users[user]); err != nil {
@@ -942,7 +942,7 @@ func TestRaceServiceRoomRacePacerOnlyForOneEntrantAtStart(t *testing.T) {
 		f.begin(t)
 		var mode string
 		var timeTrial bool
-		if err := f.pool.QueryRow(ctx, "SELECT mode, time_trial FROM races WHERE id = $1", f.race.ID).Scan(&mode, &timeTrial); err != nil {
+		if err := f.pool.QueryRow(ctx, "SELECT activity_type, time_trial FROM activities WHERE id = $1", f.race.ID).Scan(&mode, &timeTrial); err != nil {
 			t.Fatal(err)
 		}
 		if mode != "race" || timeTrial {
@@ -1022,7 +1022,7 @@ func TestRaceServiceRoomRacePacerIsNotAnEntrant(t *testing.T) {
 	}
 	var participants int
 	var timeTrial bool
-	if err := f.pool.QueryRow(ctx, "SELECT (SELECT count(*) FROM race_participants WHERE race_id = $1), time_trial FROM races WHERE id = $1", f.race.ID).Scan(&participants, &timeTrial); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT (SELECT count(*) FROM race_participants WHERE race_id = $1), time_trial FROM activities WHERE id = $1", f.race.ID).Scan(&participants, &timeTrial); err != nil {
 		t.Fatal(err)
 	}
 	if participants != 1 || !timeTrial {
@@ -1040,7 +1040,7 @@ func TestRaceServiceRoomRacePacerIsNotAnEntrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	var racers int
-	if err := f.pool.QueryRow(ctx, "SELECT count(DISTINCT rp.user_id) FROM race_participants rp JOIN races r ON r.id = rp.race_id WHERE r.race_type_id = $1 AND r.time_trial AND rp.status = 'finished'", raceType).Scan(&racers); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT count(DISTINCT rp.user_id) FROM race_participants rp JOIN activities r ON r.id = rp.race_id WHERE r.preset_id = $1 AND r.time_trial AND rp.status = 'finished'", raceType).Scan(&racers); err != nil {
 		t.Fatal(err)
 	}
 	var mine []app.LeaderboardRow
@@ -1063,10 +1063,10 @@ func TestRaceServiceRoomRaceTimedRaceHasNoPacer(t *testing.T) {
 	f := seedTimeTrialRoom(t, 1, 500000, time.Minute)
 	ctx := context.Background()
 	var timed uuid.UUID
-	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE id = '01950000-0000-7000-8000-000000000006'").Scan(&timed); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT id FROM presets WHERE id = '01950000-0000-7000-8000-000000000006'").Scan(&timed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.pool.Exec(ctx, "UPDATE rooms SET race_type_id = $1 WHERE id = $2", timed, f.room); err != nil {
+	if _, err := f.pool.Exec(ctx, "UPDATE rooms SET preset_id = $1 WHERE id = $2", timed, f.room); err != nil {
 		t.Fatal(err)
 	}
 	f.begin(t)
@@ -1086,7 +1086,7 @@ func TestRaceServiceRoomRacePacerLookupFailureIsLoggedNotReturned(t *testing.T) 
 	logs := captureLogs(t)
 	f.begin(t)
 	var timeTrial bool
-	if err := f.pool.QueryRow(ctx, "SELECT time_trial FROM races WHERE id = $1", f.race.ID).Scan(&timeTrial); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT time_trial FROM activities WHERE id = $1", f.race.ID).Scan(&timeTrial); err != nil {
 		t.Fatal(err)
 	}
 	if !timeTrial {
@@ -1176,8 +1176,8 @@ func TestRaceServiceRoomRacePacerIsNeverARaceOrWarmup(t *testing.T) {
 	// Re-label the two time_trial history rows: one a race whose legacy
 	// time_trial flag still reads true, one a warmup.
 	for _, q := range []string{
-		"UPDATE races SET mode = 'race' WHERE id = (SELECT r.id FROM races r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 80000)",
-		"UPDATE races SET mode = 'warmup', time_trial = false WHERE id = (SELECT r.id FROM races r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 70000)",
+		"UPDATE activities SET activity_type = 'race' WHERE id = (SELECT r.id FROM activities r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 80000)",
+		"UPDATE activities SET activity_type = 'warmup', time_trial = false WHERE id = (SELECT r.id FROM activities r JOIN race_participants rp ON rp.race_id = r.id WHERE rp.user_id = $1 AND rp.elapsed_milliseconds = 70000)",
 	} {
 		if tag, err := f.pool.Exec(ctx, q, f.users[0]); err != nil || tag.RowsAffected() != 1 {
 			t.Fatalf("relabel history: rows=%d err=%v", tag.RowsAffected(), err)
@@ -1678,7 +1678,7 @@ func TestRaceServiceUnfinishedRaces(t *testing.T) {
 func seedWarmupRoom(t *testing.T, threshold time.Duration) *raceFixture {
 	t.Helper()
 	f := seedModeRoom(t, "warmup", 1, 500000, threshold)
-	if _, err := f.pool.Exec(context.Background(), "UPDATE rooms SET race_type_id = $1 WHERE id = $2", app.WarmupPresetID, f.room); err != nil {
+	if _, err := f.pool.Exec(context.Background(), "UPDATE rooms SET preset_id = $1 WHERE id = $2", app.WarmupPresetID, f.room); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -1781,11 +1781,11 @@ func TestRaceServiceRoomRaceWarmupNeverReturnsPacer(t *testing.T) {
 	start := f.race.StartedAt.Time
 
 	// Seed an earlier finished Time Trial for the host at both a standard distance
-	// and at the warm-up sentinel preset (which matches f.room's race_type_id).
+	// and at the warm-up sentinel preset (which matches f.room's preset_id).
 	// Without the sentinel PB, timeTrialPacer finds nothing regardless of the mode
 	// guard; with it, only the mode guard prevents the warmup getting a pacer.
 	var distanceType uuid.UUID
-	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' ORDER BY target_value LIMIT 1").Scan(&distanceType); err != nil {
+	if err := f.pool.QueryRow(ctx, "SELECT id FROM presets WHERE kind = 'distance' ORDER BY target_value LIMIT 1").Scan(&distanceType); err != nil {
 		t.Fatal(err)
 	}
 	sentinelType := app.WarmupPresetID

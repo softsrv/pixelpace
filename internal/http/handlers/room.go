@@ -33,7 +33,7 @@ var _ roomServicer = (*app.RoomService)(nil)
 
 // raceBeginner runs a started room's countdown and creates its race.
 type raceBeginner interface {
-	Begin(ctx context.Context, roomID uuid.UUID) (db.Race, error)
+	Begin(ctx context.Context, roomID uuid.UUID) (db.Activity, error)
 	Run(ctx context.Context, raceID uuid.UUID) error
 }
 

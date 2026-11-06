@@ -52,12 +52,12 @@ func (s *LeaderboardService) Leaderboard(ctx context.Context, scope, window, act
 	if scope != "global" && scope != "friends" {
 		return nil, ErrInvalidLeaderboardFilter
 	}
-	params := db.LeaderboardPersonalBestParams{RaceTypeID: presetID}
+	params := db.LeaderboardPersonalBestParams{PresetID: presetID}
 	switch activityType {
 	case "race":
-		params.Mode = "race"
+		params.ActivityType = "race"
 	case "time-trial":
-		params.Mode = "time_trial"
+		params.ActivityType = "time_trial"
 	default:
 		return nil, ErrInvalidLeaderboardFilter
 	}

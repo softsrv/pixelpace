@@ -31,7 +31,7 @@ SELECT * FROM concept2_connections WHERE user_id = sqlc.arg(user_id) LIMIT 1;
 -- name: DeleteConcept2Connection :execrows
 -- Disconnect: deletes the connection and, in the same statement, the user's
 -- pending result posts, so a later reconnect (possibly to another Concept2
--- account) never sends races finished before it. Posted and failed rows are
+-- account) never sends activities finished before it. Posted and failed rows are
 -- kept: results already in the Logbook are left alone.
 WITH cancelled AS (
     DELETE FROM concept2_result_posts p
@@ -54,7 +54,7 @@ WHERE user_id = sqlc.arg(user_id);
 
 -- name: SetConcept2AutoPost :one
 -- Switching auto-post off also deletes the user's pending result posts in the
--- same statement, so switching it back on never sends races finished while it
+-- same statement, so switching it back on never sends activities finished while it
 -- was off (no back-posting). Switching it on deletes nothing.
 WITH cancelled AS (
     DELETE FROM concept2_result_posts p
@@ -76,10 +76,10 @@ RETURNING *;
 -- reconnects (ClaimDueConcept2Posts holds it), so no finish is lost.
 SELECT rp.user_id
 FROM race_participants rp
-JOIN races r ON r.id = rp.race_id
+JOIN activities a ON a.id = rp.race_id
 JOIN concept2_connections c ON c.user_id = rp.user_id
 WHERE rp.race_id = sqlc.arg(race_id)
-  AND r.mode <> 'warmup'
+  AND a.activity_type <> 'warmup'
   AND rp.status = 'finished'
   AND c.auto_post
 ORDER BY rp.user_id;
@@ -137,12 +137,12 @@ SELECT EXISTS (
 SELECT p.id, p.user_id, p.race_id,
        rp.elapsed_milliseconds, rp.finished_at,
        rp.pm5_serial_number, rp.pm5_firmware_version, rp.pm5_hardware_revision,
-       rt.kind, rt.target_value,
+       pr.kind, pr.target_value,
        c.timezone
 FROM concept2_result_posts p
 JOIN race_participants rp ON rp.race_id = p.race_id AND rp.user_id = p.user_id AND rp.status = 'finished'
-JOIN races r ON r.id = p.race_id
-JOIN race_types rt ON rt.id = r.race_type_id
+JOIN activities a ON a.id = p.race_id
+JOIN presets pr ON pr.id = a.preset_id
 JOIN concept2_connections c ON c.user_id = p.user_id
 WHERE p.id = sqlc.arg(id) AND p.user_id = sqlc.arg(user_id);
 

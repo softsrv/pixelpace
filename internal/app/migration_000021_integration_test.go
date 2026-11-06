@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/softsrv/starter/internal/db"
 )
 
 // Migration 000021 renames the stored activity data (expand step). These tests
@@ -569,6 +571,48 @@ func TestMigration000021RoundTripIntegration(t *testing.T) {
 
 	applyMigration21(t, tx, "up")
 	migration21Equal(t, "rows after second up", migration21Rows(t, tx, true), beforeDown)
+}
+
+// A time trial seeded under 000020 stays a time trial, and the hidden warm-up
+// preset keeps its id, kind, label and target and stays out of the distance
+// preset list the create card and lobby offer.
+func TestMigration000021TimeTrialAndWarmupSentinelIntegration(t *testing.T) {
+	tx := migration21Schema(t)
+	s := seedMigration21(t, tx)
+	const timeTrialSQL = "SELECT activity_type || ' ' || time_trial FROM activities WHERE id = $1"
+	const sentinelSQL = "SELECT (id, kind, target_value, label)::text FROM presets WHERE id = $1"
+	wantTimeTrial := migration21Scalar[string](t, tx, "SELECT mode || ' ' || time_trial FROM races WHERE id = $1", s.TimeTrial)
+	wantSentinel := migration21Scalar[string](t, tx, "SELECT (id, kind, target_value, label)::text FROM race_types WHERE id = $1", migration21WarmupPreset)
+	if wantTimeTrial != "time_trial true" {
+		t.Fatalf("seeded time trial = %q", wantTimeTrial)
+	}
+	if !strings.Contains(wantSentinel, ",time,") {
+		t.Fatalf("seeded warm-up sentinel = %q, want kind time", wantSentinel)
+	}
+
+	applyMigration21(t, tx, "up")
+
+	if got := migration21Scalar[string](t, tx, timeTrialSQL, s.TimeTrial); got != wantTimeTrial {
+		t.Errorf("time trial after up = %q, want %q", got, wantTimeTrial)
+	}
+	if got := migration21Scalar[string](t, tx, sentinelSQL, migration21WarmupPreset); got != wantSentinel {
+		t.Errorf("warm-up sentinel after up = %q, want %q", got, wantSentinel)
+	}
+	presets, err := db.New(tx).ListDistancePresets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(presets) == 0 {
+		t.Fatal("ListDistancePresets returned no presets")
+	}
+	for _, p := range presets {
+		if p.ID == migration21WarmupPreset {
+			t.Errorf("ListDistancePresets offers the warm-up sentinel: %+v", p)
+		}
+		if p.Kind != "distance" {
+			t.Errorf("ListDistancePresets offers kind %q: %+v", p.Kind, p)
+		}
+	}
 }
 
 func migration21Contains(list []string, want string) bool {

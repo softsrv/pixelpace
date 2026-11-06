@@ -27,7 +27,7 @@ type leaderboardRouterDB struct {
 
 func (d *leaderboardRouterDB) Query(_ context.Context, _ string, args ...any) (pgx.Rows, error) {
 	d.calls++
-	if len(args) != 4 || args[0] != d.raceType || args[3] != false {
+	if len(args) != 4 || args[0] != d.raceType || args[3] != "race" {
 		d.t.Fatalf("leaderboard query arguments = %v", args)
 	}
 	return &leaderboardRouterRows{racer: d.racer}, nil

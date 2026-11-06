@@ -1780,13 +1780,18 @@ func TestRaceServiceRoomRaceWarmupNeverReturnsPacer(t *testing.T) {
 	f.begin(t)
 	start := f.race.StartedAt.Time
 
-	// Seed an earlier finished Time Trial for the host at a standard distance.
+	// Seed an earlier finished Time Trial for the host at both a standard distance
+	// and at the Warmup sentinel race type (which matches f.room's race_type_id).
+	// Without the sentinel PB, timeTrialPacer finds nothing regardless of the mode
+	// guard; with it, only the mode guard prevents the warmup getting a pacer.
 	var distanceType uuid.UUID
 	if err := f.pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' ORDER BY target_value LIMIT 1").Scan(&distanceType); err != nil {
 		t.Fatal(err)
 	}
+	sentinelType := app.WarmupRaceTypeID
 	f.seedHistory(t, 0,
 		pastResult{distanceType, start.Add(-time.Hour), true, "finished", 110000},
+		pastResult{sentinelType, start.Add(-time.Hour), true, "finished", 100000},
 	)
 
 	view, err := f.svc.RoomRace(ctx, f.room, f.users[0])

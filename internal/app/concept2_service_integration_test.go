@@ -1367,6 +1367,46 @@ func TestIntegration_Concept2Poster_WarmupQueuesNothing(t *testing.T) {
 	}
 }
 
+// Only distance-kind presets post to Concept2: a queued result whose race is
+// on a time-kind preset is refused, its post failed with the reason and
+// nothing sent to the Logbook, while the same finish on a distance preset posts.
+func TestIntegration_Concept2Poster_TimeKindPresetIsRefused(t *testing.T) {
+	clock := newTestClock()
+	lb := newScriptedLogbook(t)
+	var poster *app.Concept2Service
+	f := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "time-kind")
+	})
+	// The seeded "5 min" preset is kind time.
+	if _, err := f.pool.Exec(context.Background(), "UPDATE activities SET preset_id = '01950000-0000-7000-8000-000000000006' WHERE id = $1", f.race.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := postDue(t, poster); n != 0 {
+		t.Fatalf("PostDue = %d, want 0", n)
+	}
+	p := postStateOf(t, f.pool, f.race.ID)
+	if p.Status != "failed" || p.LastError == nil || !strings.Contains(*p.LastError, "distance-kind preset") {
+		t.Fatalf("post of a time-kind result = %+v, want failed naming the distance-kind rule", p)
+	}
+	if calls := lb.received(resultsPath); len(calls) != 0 {
+		t.Fatalf("Logbook got %d posts for a time-kind result, want none", len(calls))
+	}
+
+	distance := finishedRace(t, nil, func(f *raceFixture) {
+		poster = posterFor(f.pool, lb.URL, clock, nil)
+		f.withResultPoster(poster)
+		connectConcept2(t, f.pool, f.users[0], "distance-kind")
+	})
+	if n := postDue(t, poster); n != 1 {
+		t.Fatalf("PostDue for a distance result = %d, want 1", n)
+	}
+	if p := postStateOf(t, distance.pool, distance.race.ID); p.Status != "posted" {
+		t.Fatalf("distance post = %+v, want posted", p)
+	}
+}
+
 // CLM-18: with auto_post off a finalized race queues nothing for the user;
 // once it is back on only races finalized afterwards are queued.
 func TestIntegration_Concept2Poster_AutoPostOffQueuesNothingAndNoBackPosting(t *testing.T) {
@@ -1428,7 +1468,7 @@ func rematch(t *testing.T, f *raceFixture) *raceFixture {
 	g.room = uuid.Must(uuid.NewV7())
 	code := strings.ToUpper(strings.NewReplacer("0", "A", "1", "B", "O", "C", "I", "D", "L", "E").Replace(strings.ReplaceAll(g.room.String(), "-", "")[26:32]))
 	if _, err := f.pool.Exec(ctx,
-		"INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) SELECT $1, race_type_id, host_user_id, 'counting_down', $3 FROM rooms WHERE id = $2",
+		"INSERT INTO rooms (id, preset_id, host_user_id, status, join_code) SELECT $1, preset_id, host_user_id, 'counting_down', $3 FROM rooms WHERE id = $2",
 		g.room, f.room, code); err != nil {
 		t.Fatal(err)
 	}
@@ -1439,10 +1479,10 @@ func rematch(t *testing.T, f *raceFixture) *raceFixture {
 	}
 	t.Cleanup(func() {
 		for _, query := range []string{
-			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM concept2_result_posts WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM concept2_result_posts WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 			"DELETE FROM room_participants WHERE room_id = $1",
 			"DELETE FROM rooms WHERE id = $1",
 		} {

@@ -49,8 +49,8 @@ func TestRaceWSIntegrationRosterIsFirstFrame(t *testing.T) {
 			query string
 			id    uuid.UUID
 		}{
-			{"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)", roomID},
-			{"DELETE FROM races WHERE room_id = $1", roomID},
+			{"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)", roomID},
+			{"DELETE FROM activities WHERE room_id = $1", roomID},
 			{"DELETE FROM rooms WHERE id = $1", roomID},
 			{"DELETE FROM users WHERE id = $1", named.ID},
 			{"DELETE FROM users WHERE id = $1", unnamed.ID},
@@ -69,11 +69,11 @@ func TestRaceWSIntegrationRosterIsFirstFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	var raceType uuid.UUID
-	if err := pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' AND target_value = $1", 500000).Scan(&raceType); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT id FROM presets WHERE kind = 'distance' AND target_value = $1", 500000).Scan(&raceType); err != nil {
 		t.Fatal(err)
 	}
 	rooms := app.NewRoomService(queries, pool)
-	roomID, code, err := rooms.CreateRoom(ctx, named.ID, raceType, app.ModeRace, nil)
+	roomID, code, err := rooms.CreateRoom(ctx, named.ID, raceType, app.ActivityTypeRace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestRaceWSIntegrationPersistsAndBroadcasts(t *testing.T) {
 		}{
 			{"DELETE FROM telemetry_samples WHERE race_id = $1", raceID},
 			{"DELETE FROM race_participants WHERE race_id = $1", raceID},
-			{"DELETE FROM races WHERE id = $1", raceID},
+			{"DELETE FROM activities WHERE id = $1", raceID},
 			{"DELETE FROM rooms WHERE id = $1", roomID},
 			{"DELETE FROM users WHERE id = $1", user.ID},
 			{"DELETE FROM users WHERE id = $1", outsider.ID},
@@ -160,7 +160,7 @@ func TestRaceWSIntegrationPersistsAndBroadcasts(t *testing.T) {
 		}
 	})
 	var raceType uuid.UUID
-	if err := pool.QueryRow(ctx, "SELECT id FROM race_types WHERE kind = 'distance' AND target_value = $1", 500000).Scan(&raceType); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT id FROM presets WHERE kind = 'distance' AND target_value = $1", 500000).Scan(&raceType); err != nil {
 		t.Fatal(err)
 	}
 	for _, u := range []uuid.UUID{user.ID, outsider.ID, peer.ID} {
@@ -173,10 +173,10 @@ func TestRaceWSIntegrationPersistsAndBroadcasts(t *testing.T) {
 	for i := range code {
 		code[i] = alphabet[int(roomID[10+i])%len(alphabet)]
 	}
-	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'in_progress', $4)", roomID, raceType, user.ID, string(code[:])); err != nil {
+	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, preset_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'in_progress', $4)", roomID, raceType, user.ID, string(code[:])); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at) VALUES ($1, $2, $3, $4)", raceID, roomID, raceType, time.Now()); err != nil {
+	if _, err := pool.Exec(ctx, "INSERT INTO activities (id, room_id, preset_id, started_at) VALUES ($1, $2, $3, $4)", raceID, roomID, raceType, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	for _, u := range []uuid.UUID{user.ID, peer.ID} {

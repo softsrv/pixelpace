@@ -58,7 +58,7 @@ func TestQuickMatchHandlers(t *testing.T) {
 			{"success", true, "valid", nil, "ABC234", op.status},
 			{"waiting", true, "valid", nil, "", op.status},
 			{"conflict", true, "valid", fmt.Errorf("wrapped: %w", app.ErrAlreadyQueued), "", http.StatusConflict},
-			{"invalid race", true, "valid", app.ErrInvalidRaceType, "", http.StatusConflict},
+			{"invalid preset", true, "valid", app.ErrInvalidPreset, "", http.StatusConflict},
 			{"not queued", true, "valid", app.ErrNotQueued, "", http.StatusNotFound},
 			{"internal", true, "valid", errors.New("private database detail"), "", http.StatusInternalServerError},
 			{"unauthorized", false, "valid", nil, "", http.StatusUnauthorized},

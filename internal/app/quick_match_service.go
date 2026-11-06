@@ -41,18 +41,18 @@ func NewQuickMatchService(q *db.Queries, pool pgxBeginner, rooms *RoomService, c
 }
 
 // Enqueue records a fresh search. A duplicate never resets the original wait.
-func (s *QuickMatchService) Enqueue(ctx context.Context, userID, raceTypeID uuid.UUID) error {
-	if _, err := s.q.GetRaceType(ctx, raceTypeID); err != nil {
+func (s *QuickMatchService) Enqueue(ctx context.Context, userID, presetID uuid.UUID) error {
+	if _, err := s.q.GetPreset(ctx, presetID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalidRaceType
+			return ErrInvalidPreset
 		}
-		return fmt.Errorf("get race type: %w", err)
+		return fmt.Errorf("get preset: %w", err)
 	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return fmt.Errorf("generate queue id: %w", err)
 	}
-	if err := s.q.EnqueueQuickMatch(ctx, db.EnqueueQuickMatchParams{ID: id, UserID: userID, RaceTypeID: raceTypeID}); err != nil {
+	if err := s.q.EnqueueQuickMatch(ctx, db.EnqueueQuickMatchParams{ID: id, UserID: userID, PresetID: presetID}); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return ErrAlreadyQueued
@@ -62,8 +62,8 @@ func (s *QuickMatchService) Enqueue(ctx context.Context, userID, raceTypeID uuid
 	return nil
 }
 
-func (s *QuickMatchService) Leave(ctx context.Context, userID, raceTypeID uuid.UUID) error {
-	if err := s.q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: userID, RaceTypeID: raceTypeID}); err != nil {
+func (s *QuickMatchService) Leave(ctx context.Context, userID, presetID uuid.UUID) error {
+	if err := s.q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: userID, PresetID: presetID}); err != nil {
 		return fmt.Errorf("leave quick match: %w", err)
 	}
 	return nil
@@ -72,21 +72,21 @@ func (s *QuickMatchService) Leave(ctx context.Context, userID, raceTypeID uuid.U
 // Match attempts to form a room containing the caller and returns its id and
 // join code. An empty code (and nil id) means the caller is still waiting. Clients can retry this POST as the search widens.
 // Queue row locks serialize competing matches and leaves across server instances.
-func (s *QuickMatchService) Match(ctx context.Context, userID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
+func (s *QuickMatchService) Match(ctx context.Context, userID, presetID uuid.UUID) (uuid.UUID, string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("begin quick match: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.q.WithTx(tx)
-	waiting, err := q.ListWaitingByRaceType(ctx, raceTypeID)
+	waiting, err := q.ListWaitingByPreset(ctx, presetID)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("list waiting racers: %w", err)
 	}
 	racers := make([]quickMatchRacer, 0, len(waiting))
 	found := false
 	for _, entry := range waiting {
-		finishes, err := q.RecentFinishesByRaceType(ctx, db.RecentFinishesByRaceTypeParams{RaceTypeID: raceTypeID, UserID: entry.UserID})
+		finishes, err := q.RecentFinishesByPreset(ctx, db.RecentFinishesByPresetParams{PresetID: presetID, UserID: entry.UserID})
 		if err != nil {
 			return uuid.Nil, "", fmt.Errorf("recent finishes: %w", err)
 		}
@@ -107,8 +107,8 @@ func (s *QuickMatchService) Match(ctx context.Context, userID, raceTypeID uuid.U
 	// transaction: a failed join or queue deletion cannot leave a partial room.
 	rooms := *s.rooms
 	rooms.q, rooms.pool = q, tx
-	// Quick Match rooms are always races.
-	roomID, code, err := rooms.CreateRoom(ctx, host, raceTypeID, ModeRace, nil)
+	// Matchmaking only produces race activities.
+	roomID, code, err := rooms.CreateRoom(ctx, host, presetID, ActivityTypeRace, nil)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("create quick match room: %w", err)
 	}
@@ -120,7 +120,7 @@ func (s *QuickMatchService) Match(ctx context.Context, userID, raceTypeID uuid.U
 		}
 	}
 	for _, racer := range group {
-		if err := q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: racer.userID, RaceTypeID: raceTypeID}); err != nil {
+		if err := q.LeaveQuickMatch(ctx, db.LeaveQuickMatchParams{UserID: racer.userID, PresetID: presetID}); err != nil {
 			return uuid.Nil, "", fmt.Errorf("remove matched racer: %w", err)
 		}
 	}
@@ -137,7 +137,7 @@ type quickMatchRacer struct {
 	rated    bool
 }
 
-func quickMatchRating(finishes []db.RecentFinishesByRaceTypeRow) (float64, bool) {
+func quickMatchRating(finishes []db.RecentFinishesByPresetRow) (float64, bool) {
 	if len(finishes) > 5 {
 		finishes = finishes[:5]
 	}

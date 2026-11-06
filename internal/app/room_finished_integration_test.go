@@ -79,7 +79,7 @@ func TestRoomIntegrationFinishedRoomReleasesPlayers(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, "DELETE FROM telemetry_samples WHERE race_id = $1", race.ID)
 		_, _ = pool.Exec(ctx, "DELETE FROM race_participants WHERE race_id = $1", race.ID)
-		_, _ = pool.Exec(ctx, "DELETE FROM races WHERE id = $1", race.ID)
+		_, _ = pool.Exec(ctx, "DELETE FROM activities WHERE id = $1", race.ID)
 	})
 
 	// Finalize the race (sets races.finished_at and rooms.status='finished')
@@ -97,7 +97,7 @@ func TestRoomIntegrationFinishedRoomReleasesPlayers(t *testing.T) {
 	}
 
 	// Case (a): Former host can create a new room
-	room2ID, code2, err := roomSvc.CreateRoom(ctx, host, roomTestID, ModeRace, nil)
+	room2ID, code2, err := roomSvc.CreateRoom(ctx, host, roomTestID, ActivityTypeRace, nil)
 	if err != nil {
 		t.Fatalf("former host create room: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestRoomIntegrationFinishedRoomReleasesPlayers(t *testing.T) {
 			return code1, nil
 		},
 	}
-	room3ID, reusedCode, err := roomSvcCustom.CreateRoom(ctx, outsider, roomTestID, ModeRace, nil)
+	room3ID, reusedCode, err := roomSvcCustom.CreateRoom(ctx, outsider, roomTestID, ActivityTypeRace, nil)
 	if err != nil {
 		t.Fatalf("create room reusing code: %v", err)
 	}

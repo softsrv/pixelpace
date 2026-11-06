@@ -80,7 +80,7 @@ func (h *RacePageHandler) Page(w http.ResponseWriter, r *http.Request) {
 		"Race":                 race,
 		"Lanes":                lanes,
 		"Pacer":                race.Pacer,
-		"Mode":                 race.Mode,
+		"ActivityType":         race.ActivityType,
 		"DurationMilliseconds": race.DurationMilliseconds,
 		"LaneCount":            laneCount,
 	}
@@ -211,7 +211,7 @@ func writeRaceError(w http.ResponseWriter, r *http.Request, err error) {
 	// the same answer as a missing room.
 	case errors.Is(err, app.ErrRoomNotFound), errors.Is(err, app.ErrParticipantNotFound):
 		status = http.StatusNotFound
-	case errors.Is(err, app.ErrRaceNotStarted), errors.Is(err, app.ErrInvalidRaceType):
+	case errors.Is(err, app.ErrRaceNotStarted), errors.Is(err, app.ErrInvalidPreset):
 		status = http.StatusConflict
 	// The solo session is over before it began: nothing will ever start.
 	case errors.Is(err, app.ErrSessionNotConnected):

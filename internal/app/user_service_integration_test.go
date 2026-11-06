@@ -279,8 +279,8 @@ func TestIntegration_DeleteAccount_Concept2Cascade(t *testing.T) {
 
 	// Seed concept2_result_posts to verify cascade on user deletion.
 	var raceTypeID uuid.UUID
-	if err := pool.QueryRow(ctx, "SELECT id FROM race_types LIMIT 1").Scan(&raceTypeID); err != nil {
-		t.Fatalf("query race_types: %v", err)
+	if err := pool.QueryRow(ctx, "SELECT id FROM presets LIMIT 1").Scan(&raceTypeID); err != nil {
+		t.Fatalf("query presets: %v", err)
 	}
 
 	roomID, err := uuid.NewV7()
@@ -295,7 +295,7 @@ func TestIntegration_DeleteAccount_Concept2Cascade(t *testing.T) {
 	}
 
 	// Host the room with user B so deleting user A does not cascade to the room or race.
-	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'in_progress', $4)",
+	if _, err := pool.Exec(ctx, "INSERT INTO rooms (id, preset_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'in_progress', $4)",
 		roomID, raceTypeID, b.ID, string(code[:])); err != nil {
 		t.Fatalf("insert room: %v", err)
 	}
@@ -304,14 +304,14 @@ func TestIntegration_DeleteAccount_Concept2Cascade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("uuid.NewV7 race: %v", err)
 	}
-	if _, err := pool.Exec(ctx, "INSERT INTO races (id, room_id, race_type_id, started_at) VALUES ($1, $2, $3, NOW())",
+	if _, err := pool.Exec(ctx, "INSERT INTO activities (id, room_id, preset_id, started_at) VALUES ($1, $2, $3, NOW())",
 		raceID, roomID, raceTypeID); err != nil {
 		t.Fatalf("insert race: %v", err)
 	}
 
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM concept2_result_posts WHERE race_id = $1", raceID)
-		_, _ = pool.Exec(context.Background(), "DELETE FROM races WHERE id = $1", raceID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM activities WHERE id = $1", raceID)
 		_, _ = pool.Exec(context.Background(), "DELETE FROM rooms WHERE id = $1", roomID)
 	})
 

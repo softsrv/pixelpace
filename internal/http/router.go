@@ -267,7 +267,7 @@ func NewRouter(ctx context.Context, cfg RouterConfig) *Router {
 	mux.Handle("POST /rooms/{id}/start", verifiedMW(http.HandlerFunc(roomH.Start)))
 	mux.Handle("GET /rooms/{id}/lobby", verifiedMW(http.HandlerFunc(lobbyH.Page)))
 	mux.Handle("GET /rooms/{id}/lobby/panel", verifiedMW(http.HandlerFunc(lobbyH.Panel)))
-	mux.Handle("POST /rooms/{id}/race-type", verifiedMW(http.HandlerFunc(lobbyH.ChangeRaceType)))
+	mux.Handle("POST /rooms/{id}/race-type", verifiedMW(http.HandlerFunc(lobbyH.ChangePreset)))
 	mux.Handle("POST /rooms/{id}/unready", verifiedMW(http.HandlerFunc(lobbyH.MarkUnready)))
 	mux.Handle("POST /rooms/{id}/invites", verifiedMW(http.HandlerFunc(lobbyH.Invite)))
 	mux.Handle("GET /rooms/{id}/race", verifiedMW(http.HandlerFunc(racePageH.Page)))

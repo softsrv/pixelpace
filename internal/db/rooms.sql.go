@@ -73,7 +73,7 @@ func (q *Queries) DissolveRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getActiveRoomByJoinCode = `-- name: GetActiveRoomByJoinCode :one
-SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds FROM rooms
+SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds, activity_type, preset_id FROM rooms
 WHERE join_code = $1 AND status NOT IN ('finished', 'dissolved')
 FOR UPDATE
 `
@@ -91,17 +91,19 @@ func (q *Queries) GetActiveRoomByJoinCode(ctx context.Context, joinCode string) 
 		&i.RaceStartsAt,
 		&i.Mode,
 		&i.DurationSeconds,
+		&i.ActivityType,
+		&i.PresetID,
 	)
 	return i, err
 }
 
-const getRaceType = `-- name: GetRaceType :one
-SELECT id, kind, target_value, label FROM race_types WHERE id = $1
+const getPreset = `-- name: GetPreset :one
+SELECT id, kind, target_value, label FROM presets WHERE id = $1
 `
 
-func (q *Queries) GetRaceType(ctx context.Context, id uuid.UUID) (RaceType, error) {
-	row := q.db.QueryRow(ctx, getRaceType, id)
-	var i RaceType
+func (q *Queries) GetPreset(ctx context.Context, id uuid.UUID) (Preset, error) {
+	row := q.db.QueryRow(ctx, getPreset, id)
+	var i Preset
 	err := row.Scan(
 		&i.ID,
 		&i.Kind,
@@ -123,7 +125,7 @@ func (q *Queries) GetRemainingRoomParticipant(ctx context.Context, roomID uuid.U
 }
 
 const getRoomForUpdate = `-- name: GetRoomForUpdate :one
-SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds FROM rooms WHERE id = $1 FOR UPDATE
+SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds, activity_type, preset_id FROM rooms WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, error) {
@@ -139,6 +141,8 @@ func (q *Queries) GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, err
 		&i.RaceStartsAt,
 		&i.Mode,
 		&i.DurationSeconds,
+		&i.ActivityType,
+		&i.PresetID,
 	)
 	return i, err
 }
@@ -167,20 +171,20 @@ func (q *Queries) GetRoomInviteForInvitee(ctx context.Context, arg GetRoomInvite
 }
 
 const getRoomLobby = `-- name: GetRoomLobby :one
-SELECT r.id, r.status, r.join_code, r.host_user_id, r.race_type_id, rt.label AS race_label, rt.kind AS race_kind, r.mode
-FROM rooms r JOIN race_types rt ON rt.id = r.race_type_id
+SELECT r.id, r.status, r.join_code, r.host_user_id, r.preset_id, p.label AS preset_label, p.kind AS preset_kind, r.activity_type
+FROM rooms r JOIN presets p ON p.id = r.preset_id
 WHERE r.id = $1
 `
 
 type GetRoomLobbyRow struct {
-	ID         uuid.UUID `json:"id"`
-	Status     string    `json:"status"`
-	JoinCode   string    `json:"join_code"`
-	HostUserID uuid.UUID `json:"host_user_id"`
-	RaceTypeID uuid.UUID `json:"race_type_id"`
-	RaceLabel  string    `json:"race_label"`
-	RaceKind   string    `json:"race_kind"`
-	Mode       string    `json:"mode"`
+	ID           uuid.UUID `json:"id"`
+	Status       string    `json:"status"`
+	JoinCode     string    `json:"join_code"`
+	HostUserID   uuid.UUID `json:"host_user_id"`
+	PresetID     uuid.UUID `json:"preset_id"`
+	PresetLabel  string    `json:"preset_label"`
+	PresetKind   string    `json:"preset_kind"`
+	ActivityType string    `json:"activity_type"`
 }
 
 func (q *Queries) GetRoomLobby(ctx context.Context, id uuid.UUID) (GetRoomLobbyRow, error) {
@@ -191,10 +195,10 @@ func (q *Queries) GetRoomLobby(ctx context.Context, id uuid.UUID) (GetRoomLobbyR
 		&i.Status,
 		&i.JoinCode,
 		&i.HostUserID,
-		&i.RaceTypeID,
-		&i.RaceLabel,
-		&i.RaceKind,
-		&i.Mode,
+		&i.PresetID,
+		&i.PresetLabel,
+		&i.PresetKind,
+		&i.ActivityType,
 	)
 	return i, err
 }
@@ -223,7 +227,7 @@ func (q *Queries) GetRoomParticipant(ctx context.Context, arg GetRoomParticipant
 }
 
 const getRoomRaceID = `-- name: GetRoomRaceID :one
-SELECT id FROM races WHERE room_id = $1 LIMIT 1
+SELECT id FROM activities WHERE room_id = $1 LIMIT 1
 `
 
 func (q *Queries) GetRoomRaceID(ctx context.Context, roomID uuid.UUID) (uuid.UUID, error) {
@@ -234,26 +238,28 @@ func (q *Queries) GetRoomRaceID(ctx context.Context, roomID uuid.UUID) (uuid.UUI
 }
 
 const insertRoom = `-- name: InsertRoom :exec
-INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds)
+INSERT INTO rooms (id, preset_id, host_user_id, status, join_code, activity_type, duration_seconds)
 VALUES ($1, $2, $3, 'waiting', $4, $5, $6)
 `
 
 type InsertRoomParams struct {
 	ID              uuid.UUID   `json:"id"`
-	RaceTypeID      uuid.UUID   `json:"race_type_id"`
+	PresetID        uuid.UUID   `json:"preset_id"`
 	HostUserID      uuid.UUID   `json:"host_user_id"`
 	JoinCode        string      `json:"join_code"`
-	Mode            string      `json:"mode"`
+	ActivityType    string      `json:"activity_type"`
 	DurationSeconds pgtype.Int4 `json:"duration_seconds"`
 }
 
+// Writes only the new columns; the 000021 sync trigger fills the old twins
+// until the contract migration drops them.
 func (q *Queries) InsertRoom(ctx context.Context, arg InsertRoomParams) error {
 	_, err := q.db.Exec(ctx, insertRoom,
 		arg.ID,
-		arg.RaceTypeID,
+		arg.PresetID,
 		arg.HostUserID,
 		arg.JoinCode,
-		arg.Mode,
+		arg.ActivityType,
 		arg.DurationSeconds,
 	)
 	return err
@@ -298,19 +304,19 @@ func (q *Queries) InsertRoomParticipant(ctx context.Context, arg InsertRoomParti
 	return err
 }
 
-const listDistanceRaceTypes = `-- name: ListDistanceRaceTypes :many
-SELECT id, kind, target_value, label FROM race_types WHERE kind = 'distance' ORDER BY target_value
+const listDistancePresets = `-- name: ListDistancePresets :many
+SELECT id, kind, target_value, label FROM presets WHERE kind = 'distance' ORDER BY target_value
 `
 
-func (q *Queries) ListDistanceRaceTypes(ctx context.Context) ([]RaceType, error) {
-	rows, err := q.db.Query(ctx, listDistanceRaceTypes)
+func (q *Queries) ListDistancePresets(ctx context.Context) ([]Preset, error) {
+	rows, err := q.db.Query(ctx, listDistancePresets)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []RaceType{}
+	items := []Preset{}
 	for rows.Next() {
-		var i RaceType
+		var i Preset
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
@@ -328,10 +334,10 @@ func (q *Queries) ListDistanceRaceTypes(ctx context.Context) ([]RaceType, error)
 }
 
 const listPendingRoomInvites = `-- name: ListPendingRoomInvites :many
-SELECT ri.id, ri.room_id, rt.label AS race_label, u.id AS inviter_id, u.display_name AS inviter_display_name
+SELECT ri.id, ri.room_id, p.label AS preset_label, u.id AS inviter_id, u.display_name AS inviter_display_name
 FROM room_invites ri
 JOIN rooms r ON r.id = ri.room_id
-JOIN race_types rt ON rt.id = r.race_type_id
+JOIN presets p ON p.id = r.preset_id
 JOIN users u ON u.id = ri.inviter_user_id
 WHERE ri.invitee_user_id = $1
   AND r.status = 'waiting'
@@ -345,7 +351,7 @@ ORDER BY ri.created_at DESC, ri.id
 type ListPendingRoomInvitesRow struct {
 	ID                 uuid.UUID   `json:"id"`
 	RoomID             uuid.UUID   `json:"room_id"`
-	RaceLabel          string      `json:"race_label"`
+	PresetLabel        string      `json:"preset_label"`
 	InviterID          uuid.UUID   `json:"inviter_id"`
 	InviterDisplayName pgtype.Text `json:"inviter_display_name"`
 }
@@ -364,7 +370,7 @@ func (q *Queries) ListPendingRoomInvites(ctx context.Context, inviteeUserID uuid
 		if err := rows.Scan(
 			&i.ID,
 			&i.RoomID,
-			&i.RaceLabel,
+			&i.PresetLabel,
 			&i.InviterID,
 			&i.InviterDisplayName,
 		); err != nil {
@@ -549,16 +555,16 @@ func (q *Queries) StartRoomCountdown(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const updateRoomRaceType = `-- name: UpdateRoomRaceType :exec
-UPDATE rooms SET race_type_id = $2 WHERE id = $1
+const updateRoomPreset = `-- name: UpdateRoomPreset :exec
+UPDATE rooms SET preset_id = $2 WHERE id = $1
 `
 
-type UpdateRoomRaceTypeParams struct {
-	ID         uuid.UUID `json:"id"`
-	RaceTypeID uuid.UUID `json:"race_type_id"`
+type UpdateRoomPresetParams struct {
+	ID       uuid.UUID `json:"id"`
+	PresetID uuid.UUID `json:"preset_id"`
 }
 
-func (q *Queries) UpdateRoomRaceType(ctx context.Context, arg UpdateRoomRaceTypeParams) error {
-	_, err := q.db.Exec(ctx, updateRoomRaceType, arg.ID, arg.RaceTypeID)
+func (q *Queries) UpdateRoomPreset(ctx context.Context, arg UpdateRoomPresetParams) error {
+	_, err := q.db.Exec(ctx, updateRoomPreset, arg.ID, arg.PresetID)
 	return err
 }

@@ -28,8 +28,8 @@ func NewLeaderboardHandler(svc leaderboardServicer) *LeaderboardHandler {
 }
 
 // Leaderboard serves JSON for race_type, scope (global/friends), window
-// (all-time/month/week), and mode (race/time-trial). They default to global,
-// all-time, and race.
+// (all-time/month/week), and activity (race/time-trial), falling back to mode.
+// They default to global, all-time, and race.
 func (h *LeaderboardHandler) Leaderboard(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.UserFromContext(r.Context())
 	if !ok {
@@ -37,22 +37,26 @@ func (h *LeaderboardHandler) Leaderboard(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	query := r.URL.Query()
-	raceTypeID, err := uuid.Parse(query.Get("race_type"))
+	presetID, err := uuid.Parse(query.Get("race_type"))
 	if err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
-	scope, window, mode := query.Get("scope"), query.Get("window"), query.Get("mode")
+	activity := query.Get("activity")
+	if activity == "" {
+		activity = query.Get("mode")
+	}
+	if activity == "" {
+		activity = "race"
+	}
+	scope, window := query.Get("scope"), query.Get("window")
 	if scope == "" {
 		scope = "global"
 	}
 	if window == "" {
 		window = "all-time"
 	}
-	if mode == "" {
-		mode = "race"
-	}
-	rows, err := h.leaderboard.Leaderboard(r.Context(), scope, window, mode, raceTypeID, user.ID)
+	rows, err := h.leaderboard.Leaderboard(r.Context(), scope, window, activity, presetID, user.ID)
 	if err != nil {
 		if errors.Is(err, app.ErrInvalidLeaderboardFilter) {
 			http.Error(w, "Bad Request", http.StatusBadRequest)

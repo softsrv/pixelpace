@@ -39,9 +39,9 @@ func seedLeaderboard(t *testing.T, count int) *leaderboardFixture {
 	ctx := context.Background()
 	t.Cleanup(func() {
 		for _, query := range []string{
-			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM races WHERE room_id = $1)",
-			"DELETE FROM races WHERE room_id = $1",
+			"DELETE FROM telemetry_samples WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM race_participants WHERE race_id IN (SELECT id FROM activities WHERE room_id = $1)",
+			"DELETE FROM activities WHERE room_id = $1",
 			"DELETE FROM rooms WHERE id = $1",
 		} {
 			if _, err := f.pool.Exec(ctx, query, f.room); err != nil {
@@ -57,13 +57,13 @@ func seedLeaderboard(t *testing.T, count int) *leaderboardFixture {
 			}
 		}
 		for _, id := range []uuid.UUID{f.raceType, f.otherType} {
-			if _, err := f.pool.Exec(ctx, "DELETE FROM race_types WHERE id = $1", id); err != nil {
+			if _, err := f.pool.Exec(ctx, "DELETE FROM presets WHERE id = $1", id); err != nil {
 				t.Error(err)
 			}
 		}
 	})
 	for _, id := range []uuid.UUID{f.raceType, f.otherType} {
-		f.exec(t, "INSERT INTO race_types (id, kind, target_value, label) VALUES ($1, 'distance', 500000, 'leaderboard test')", id)
+		f.exec(t, "INSERT INTO presets (id, kind, target_value, label) VALUES ($1, 'distance', 500000, 'leaderboard test')", id)
 	}
 	for i := 0; i < count; i++ {
 		id := uuid.Must(uuid.NewV7())
@@ -72,7 +72,7 @@ func seedLeaderboard(t *testing.T, count int) *leaderboardFixture {
 		f.users = append(f.users, id)
 	}
 	// Finished rooms do not participate in the active join-code unique index.
-	f.exec(t, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'finished', 'ABCDEF')", f.room, f.raceType, f.users[0])
+	f.exec(t, "INSERT INTO rooms (id, preset_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'finished', 'ABCDEF')", f.room, f.raceType, f.users[0])
 	q := db.New(f.pool)
 	f.svc = app.NewLeaderboardService(q, app.NewFriendService(q, f.pool, app.FriendServiceConfig{}), app.LeaderboardServiceConfig{Now: func() time.Time { return f.now }})
 	return f
@@ -110,7 +110,7 @@ func (f *leaderboardFixture) resultMode(t *testing.T, mode string, user int, rac
 	race := uuid.Must(uuid.NewV7())
 	timeTrial := mode == "time_trial"
 	// The race timestamp deliberately differs from the participant's completion.
-	f.exec(t, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial, mode) VALUES ($1, $2, $3, $4, $5, $6, $7)", race, f.room, raceType, finished.Add(-time.Hour), f.now, timeTrial, mode)
+	f.exec(t, "INSERT INTO activities (id, room_id, preset_id, started_at, finished_at, time_trial, activity_type) VALUES ($1, $2, $3, $4, $5, $6, $7)", race, f.room, raceType, finished.Add(-time.Hour), f.now, timeTrial, mode)
 	f.exec(t, "INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, $4, $5, $6)", uuid.Must(uuid.NewV7()), race, f.users[user], status, finished, elapsed)
 }
 
@@ -182,10 +182,10 @@ func TestLeaderboardTimeTrialSeparationIntegration(t *testing.T) {
 	// Race board, and a warmup ranks on neither board.
 	f.result(t, 3, f.raceType, "finished", 2200, f.now)
 	f.resultMode(t, "warmup", 2, f.raceType, "finished", 100, f.now)
-	// The Warmup sentinel race type is never offered as a distance option.
-	types, err := db.New(f.pool).ListDistanceRaceTypes(context.Background())
+	// The warm-up sentinel preset is never offered as a distance option.
+	types, err := db.New(f.pool).ListDistancePresets(context.Background())
 	if err != nil || len(types) == 0 {
-		t.Fatalf("distance race types = %+v, %v", types, err)
+		t.Fatalf("distance presets = %+v, %v", types, err)
 	}
 	for _, rt := range types {
 		if rt.Kind != "distance" || rt.ID == uuid.MustParse("01950000-0000-7000-8000-000000000009") {

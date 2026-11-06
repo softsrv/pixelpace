@@ -1,9 +1,11 @@
--- name: GetRaceType :one
-SELECT * FROM race_types WHERE id = $1;
+-- name: GetPreset :one
+SELECT * FROM presets WHERE id = $1;
 
 -- name: InsertRoom :exec
-INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds)
-VALUES (@id, @race_type_id, @host_user_id, 'waiting', @join_code, @mode, sqlc.narg(duration_seconds));
+-- Writes only the new columns; the 000021 sync trigger fills the old twins
+-- until the contract migration drops them.
+INSERT INTO rooms (id, preset_id, host_user_id, status, join_code, activity_type, duration_seconds)
+VALUES (@id, @preset_id, @host_user_id, 'waiting', @join_code, @activity_type, sqlc.narg(duration_seconds));
 
 -- name: InsertRoomParticipant :exec
 INSERT INTO room_participants (id, room_id, user_id, ready)
@@ -73,17 +75,17 @@ WHERE rp.room_id = $1
 ORDER BY rp.joined_at, rp.id;
 
 -- name: GetRoomRaceID :one
-SELECT id FROM races WHERE room_id = $1 LIMIT 1;
+SELECT id FROM activities WHERE room_id = $1 LIMIT 1;
 
--- name: ListDistanceRaceTypes :many
-SELECT * FROM race_types WHERE kind = 'distance' ORDER BY target_value;
+-- name: ListDistancePresets :many
+SELECT * FROM presets WHERE kind = 'distance' ORDER BY target_value;
 
--- name: UpdateRoomRaceType :exec
-UPDATE rooms SET race_type_id = $2 WHERE id = $1;
+-- name: UpdateRoomPreset :exec
+UPDATE rooms SET preset_id = $2 WHERE id = $1;
 
 -- name: GetRoomLobby :one
-SELECT r.id, r.status, r.join_code, r.host_user_id, r.race_type_id, rt.label AS race_label, rt.kind AS race_kind, r.mode
-FROM rooms r JOIN race_types rt ON rt.id = r.race_type_id
+SELECT r.id, r.status, r.join_code, r.host_user_id, r.preset_id, p.label AS preset_label, p.kind AS preset_kind, r.activity_type
+FROM rooms r JOIN presets p ON p.id = r.preset_id
 WHERE r.id = $1;
 
 -- name: InsertRoomInvite :exec
@@ -97,10 +99,10 @@ SELECT invitee_user_id FROM room_invites WHERE room_id = $1;
 -- Invites stay listed only while their room is an open lobby the invitee has
 -- not already joined.
 -- name: ListPendingRoomInvites :many
-SELECT ri.id, ri.room_id, rt.label AS race_label, u.id AS inviter_id, u.display_name AS inviter_display_name
+SELECT ri.id, ri.room_id, p.label AS preset_label, u.id AS inviter_id, u.display_name AS inviter_display_name
 FROM room_invites ri
 JOIN rooms r ON r.id = ri.room_id
-JOIN race_types rt ON rt.id = r.race_type_id
+JOIN presets p ON p.id = r.preset_id
 JOIN users u ON u.id = ri.inviter_user_id
 WHERE ri.invitee_user_id = $1
   AND r.status = 'waiting'

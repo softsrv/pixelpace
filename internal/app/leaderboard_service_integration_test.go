@@ -90,7 +90,7 @@ func (f *leaderboardFixture) result(t *testing.T, user int, raceType uuid.UUID, 
 	f.resultIn(t, false, user, raceType, status, elapsed, finished)
 }
 
-// timeTrial records a result from a race that began with a single entrant.
+// timeTrial records a result from a race chosen as a time trial.
 func (f *leaderboardFixture) timeTrial(t *testing.T, user int, raceType uuid.UUID, status string, elapsed int32, finished time.Time) {
 	t.Helper()
 	f.resultIn(t, true, user, raceType, status, elapsed, finished)
@@ -98,9 +98,19 @@ func (f *leaderboardFixture) timeTrial(t *testing.T, user int, raceType uuid.UUI
 
 func (f *leaderboardFixture) resultIn(t *testing.T, timeTrial bool, user int, raceType uuid.UUID, status string, elapsed int32, finished time.Time) {
 	t.Helper()
+	mode := "race"
+	if timeTrial {
+		mode = "time_trial"
+	}
+	f.resultMode(t, mode, user, raceType, status, elapsed, finished)
+}
+
+func (f *leaderboardFixture) resultMode(t *testing.T, mode string, user int, raceType uuid.UUID, status string, elapsed int32, finished time.Time) {
+	t.Helper()
 	race := uuid.Must(uuid.NewV7())
+	timeTrial := mode == "time_trial"
 	// The race timestamp deliberately differs from the participant's completion.
-	f.exec(t, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial) VALUES ($1, $2, $3, $4, $5, $6)", race, f.room, raceType, finished.Add(-time.Hour), f.now, timeTrial)
+	f.exec(t, "INSERT INTO races (id, room_id, race_type_id, started_at, finished_at, time_trial, mode) VALUES ($1, $2, $3, $4, $5, $6, $7)", race, f.room, raceType, finished.Add(-time.Hour), f.now, timeTrial, mode)
 	f.exec(t, "INSERT INTO race_participants (id, race_id, user_id, status, finished_at, elapsed_milliseconds) VALUES ($1, $2, $3, $4, $5, $6)", uuid.Must(uuid.NewV7()), race, f.users[user], status, finished, elapsed)
 }
 
@@ -168,9 +178,14 @@ func TestLeaderboardTimeTrialSeparationIntegration(t *testing.T) {
 	f.timeTrial(t, 1, f.raceType, "dnf", 1, f.now)
 	f.timeTrial(t, 2, f.raceType, "finished", 2500, f.now)
 	f.timeTrial(t, 3, f.otherType, "finished", 1, f.now)
+	// A race-mode race with a single rower (the others dropped) stays on the
+	// Race board, and a warmup ranks on neither board.
+	f.result(t, 3, f.raceType, "finished", 2200, f.now)
+	f.resultMode(t, "warmup", 2, f.raceType, "finished", 100, f.now)
 	for _, window := range []string{"all-time", "month", "week"} {
 		f.checkMode(t, "race", "global", window, 0,
 			app.LeaderboardRow{UserID: f.users[1], Name: "Racer 1", ElapsedMilliseconds: 2000},
+			app.LeaderboardRow{UserID: f.users[3], Name: "Racer 3", ElapsedMilliseconds: 2200},
 			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 3000})
 		f.checkMode(t, "time-trial", "global", window, 0,
 			app.LeaderboardRow{UserID: f.users[0], Name: "Racer 0", ElapsedMilliseconds: 1000},
@@ -386,7 +401,7 @@ func TestMigration000020BackfillSessionMode(t *testing.T) {
 	userID2 := uuid.Must(uuid.NewV7())
 	for _, u := range []uuid.UUID{userID1, userID2} {
 		if _, err := tx.Exec(ctx, "INSERT INTO users (id, email, password_hash, display_name) VALUES ($1, $2, 'unused', $3)",
-			u, u.String()+"@example.com", "Racer "+u.String()[:4]); err != nil {
+			u, u.String()+"@example.com", "Racer "+u.String()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -404,9 +419,9 @@ func TestMigration000020BackfillSessionMode(t *testing.T) {
 		id   uuid.UUID
 		code string
 	}{
-		{roomRaceID, "RACE01"},
-		{roomTTID, "TT0001"},
-		{roomEmptyID, "EMPTY1"},
+		{roomRaceID, "RACEAB"},
+		{roomTTID, "TTRTRX"},
+		{roomEmptyID, "EMPTYX"},
 	} {
 		if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code) VALUES ($1, $2, $3, 'finished', $4)",
 			room.id, raceTypeID, userID1, room.code); err != nil {
@@ -591,39 +606,37 @@ func TestMigration000020BackfillSessionMode(t *testing.T) {
 		t.Fatalf("unexpected sentinel row: kind=%s, target=%d, label=%s", sentinelKind, sentinelTarget, sentinelLabel)
 	}
 
-	// Assert check constraints on rooms
-	// 1. Warmup requires non-null duration_seconds
-	warmupRoomID1 := uuid.Must(uuid.NewV7())
-	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'WARM01', 'warmup', NULL)",
-		warmupRoomID1, raceTypeID, userID1); err == nil {
+	// Assert check constraints on rooms. Each insert runs in a savepoint so a
+	// rejected row does not abort the surrounding transaction, and every join
+	// code is valid so only the mode/duration checks can reject a row.
+	insertRoom := func(code, mode string, duration any) error {
+		if _, err := tx.Exec(ctx, "SAVEPOINT room_check"); err != nil {
+			t.Fatal(err)
+		}
+		_, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', $4, $5, $6)",
+			uuid.Must(uuid.NewV7()), raceTypeID, userID1, code, mode, duration)
+		rollback := "RELEASE SAVEPOINT room_check"
+		if err != nil {
+			rollback = "ROLLBACK TO SAVEPOINT room_check"
+		}
+		if _, rerr := tx.Exec(ctx, rollback); rerr != nil {
+			t.Fatal(rerr)
+		}
+		return err
+	}
+	if err := insertRoom("WARMAB", "warmup", nil); err == nil {
 		t.Fatal("expected error inserting warmup room with NULL duration_seconds")
 	}
-
-	// 2. Non-warmup rejects non-null duration_seconds
-	raceRoomIDBad := uuid.Must(uuid.NewV7())
-	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'RACE99', 'race', 300)",
-		raceRoomIDBad, raceTypeID, userID1); err == nil {
+	if err := insertRoom("RACEXY", "race", 300); err == nil {
 		t.Fatal("expected error inserting race room with non-NULL duration_seconds")
 	}
-
-	// 3. Warmup duration must be between 60 and 1200 and divisible by 60
-	warmupRoomIDBadDur := uuid.Must(uuid.NewV7())
-	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'WARM02', 'warmup', 45)",
-		warmupRoomIDBadDur, raceTypeID, userID1); err == nil {
+	if err := insertRoom("WARMAC", "warmup", 45); err == nil {
 		t.Fatal("expected error inserting warmup room with duration 45")
 	}
-
-	// 4. Valid warmup succeeds
-	warmupRoomIDValid := uuid.Must(uuid.NewV7())
-	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'WARM03', 'warmup', 300)",
-		warmupRoomIDValid, raceTypeID, userID1); err != nil {
+	if err := insertRoom("WARMAD", "warmup", 300); err != nil {
 		t.Fatalf("expected valid warmup insert to succeed: %v", err)
 	}
-
-	// 5. Invalid mode rejected
-	invalidModeRoomID := uuid.Must(uuid.NewV7())
-	if _, err := tx.Exec(ctx, "INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds) VALUES ($1, $2, $3, 'waiting', 'INVAL1', 'invalid', NULL)",
-		invalidModeRoomID, raceTypeID, userID1); err == nil {
+	if err := insertRoom("BADMDX", "invalid", nil); err == nil {
 		t.Fatal("expected error inserting room with invalid mode")
 	}
 }

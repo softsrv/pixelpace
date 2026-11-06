@@ -18,7 +18,7 @@ FROM race_participants AS rp
 JOIN races AS r ON r.id = rp.race_id
 JOIN users AS u ON u.id = rp.user_id
 WHERE r.race_type_id = $1
-  AND r.time_trial = $4
+  AND r.mode = $4
   AND rp.status = 'finished'
   AND ($2::timestamptz IS NULL OR rp.finished_at >= $2)
   AND ($3::uuid[] IS NULL OR rp.user_id = ANY($3))
@@ -30,7 +30,7 @@ type LeaderboardPersonalBestParams struct {
 	RaceTypeID uuid.UUID          `json:"race_type_id"`
 	Column2    pgtype.Timestamptz `json:"column_2"`
 	Column3    []uuid.UUID        `json:"column_3"`
-	TimeTrial  bool               `json:"time_trial"`
+	Mode       string             `json:"mode"`
 }
 
 type LeaderboardPersonalBestRow struct {
@@ -44,7 +44,7 @@ func (q *Queries) LeaderboardPersonalBest(ctx context.Context, arg LeaderboardPe
 		arg.RaceTypeID,
 		arg.Column2,
 		arg.Column3,
-		arg.TimeTrial,
+		arg.Mode,
 	)
 	if err != nil {
 		return nil, err

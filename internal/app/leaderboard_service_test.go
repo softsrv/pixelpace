@@ -37,7 +37,9 @@ func TestLeaderboardServiceFilters(t *testing.T) {
 	now := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
 	actor, friend, raceType := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	queryErr := errors.New("query stopped")
-	for _, mode := range []string{"race", "time-trial"} {
+	// The board name maps to the stored session mode it selects.
+	for boardMode, storedMode := range map[string]string{"race": "race", "time-trial": "time_trial"} {
+		mode := boardMode
 		for _, scope := range []string{"global", "friends"} {
 			for _, tc := range []struct {
 				window string
@@ -58,7 +60,7 @@ func TestLeaderboardServiceFilters(t *testing.T) {
 					}}
 					store := leaderboardDB{queryFn: func(_ context.Context, _ string, args ...any) (pgx.Rows, error) {
 						queried = true
-						if len(args) != 4 || args[0] != raceType || args[1] != tc.bound || args[3] != (mode == "time-trial") {
+						if len(args) != 4 || args[0] != raceType || args[1] != tc.bound || args[3] != storedMode {
 							t.Fatalf("args = %v", args)
 						}
 						var wantFriends []uuid.UUID

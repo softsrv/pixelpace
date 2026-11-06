@@ -73,7 +73,7 @@ func (q *Queries) DissolveRoom(ctx context.Context, id uuid.UUID) error {
 }
 
 const getActiveRoomByJoinCode = `-- name: GetActiveRoomByJoinCode :one
-SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at FROM rooms
+SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds FROM rooms
 WHERE join_code = $1 AND status NOT IN ('finished', 'dissolved')
 FOR UPDATE
 `
@@ -89,6 +89,8 @@ func (q *Queries) GetActiveRoomByJoinCode(ctx context.Context, joinCode string) 
 		&i.JoinCode,
 		&i.CreatedAt,
 		&i.RaceStartsAt,
+		&i.Mode,
+		&i.DurationSeconds,
 	)
 	return i, err
 }
@@ -121,7 +123,7 @@ func (q *Queries) GetRemainingRoomParticipant(ctx context.Context, roomID uuid.U
 }
 
 const getRoomForUpdate = `-- name: GetRoomForUpdate :one
-SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at FROM rooms WHERE id = $1 FOR UPDATE
+SELECT id, race_type_id, host_user_id, status, join_code, created_at, race_starts_at, mode, duration_seconds FROM rooms WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, error) {
@@ -135,6 +137,8 @@ func (q *Queries) GetRoomForUpdate(ctx context.Context, id uuid.UUID) (Room, err
 		&i.JoinCode,
 		&i.CreatedAt,
 		&i.RaceStartsAt,
+		&i.Mode,
+		&i.DurationSeconds,
 	)
 	return i, err
 }
@@ -228,15 +232,17 @@ func (q *Queries) GetRoomRaceID(ctx context.Context, roomID uuid.UUID) (uuid.UUI
 }
 
 const insertRoom = `-- name: InsertRoom :exec
-INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code)
-VALUES ($1, $2, $3, 'waiting', $4)
+INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds)
+VALUES ($1, $2, $3, 'waiting', $4, $5, $6)
 `
 
 type InsertRoomParams struct {
-	ID         uuid.UUID `json:"id"`
-	RaceTypeID uuid.UUID `json:"race_type_id"`
-	HostUserID uuid.UUID `json:"host_user_id"`
-	JoinCode   string    `json:"join_code"`
+	ID              uuid.UUID   `json:"id"`
+	RaceTypeID      uuid.UUID   `json:"race_type_id"`
+	HostUserID      uuid.UUID   `json:"host_user_id"`
+	JoinCode        string      `json:"join_code"`
+	Mode            string      `json:"mode"`
+	DurationSeconds pgtype.Int4 `json:"duration_seconds"`
 }
 
 func (q *Queries) InsertRoom(ctx context.Context, arg InsertRoomParams) error {
@@ -245,6 +251,8 @@ func (q *Queries) InsertRoom(ctx context.Context, arg InsertRoomParams) error {
 		arg.RaceTypeID,
 		arg.HostUserID,
 		arg.JoinCode,
+		arg.Mode,
+		arg.DurationSeconds,
 	)
 	return err
 }

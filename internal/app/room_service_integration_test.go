@@ -57,7 +57,7 @@ func roomIntegrationUser(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 func roomIntegrationCreate(t *testing.T, pool *pgxpool.Pool, host uuid.UUID) (uuid.UUID, string) {
 	t.Helper()
 	ctx := context.Background()
-	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID)
+	roomID, code, err := NewRoomService(db.New(pool), pool).CreateRoom(ctx, host, roomTestID, ModeRace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 		}
 		return generateJoinCode()
 	}
-	_, code, err := s.CreateRoom(ctx, host, roomTestID)
+	_, code, err := s.CreateRoom(ctx, host, roomTestID, ModeRace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRoomIntegrationCreateCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if room.Status != "waiting" || room.HostUserID != host || room.JoinCode != code {
+	if room.Status != "waiting" || room.HostUserID != host || room.JoinCode != code || room.Mode != ModeRace || room.DurationSeconds.Valid {
 		t.Fatalf("created room: %+v", room)
 	}
 	participant, err := db.New(pool).GetRoomParticipant(ctx, db.GetRoomParticipantParams{RoomID: room.ID, UserID: host})
@@ -279,7 +279,7 @@ func TestRoomIntegrationAtomicFailures(t *testing.T) {
 	host, guest := roomIntegrationUser(t, pool), roomIntegrationUser(t, pool)
 	observed := &roomObservedPool{Pool: pool, failQuery: "InsertRoomParticipant"}
 	s := NewRoomService(db.New(observed), observed)
-	if _, _, err := s.CreateRoom(ctx, host, roomTestID); err == nil {
+	if _, _, err := s.CreateRoom(ctx, host, roomTestID, ModeRace, nil); err == nil {
 		t.Fatal("expected create failure")
 	}
 	var count int

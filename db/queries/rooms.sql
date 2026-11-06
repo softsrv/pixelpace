@@ -2,8 +2,8 @@
 SELECT * FROM race_types WHERE id = $1;
 
 -- name: InsertRoom :exec
-INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code)
-VALUES ($1, $2, $3, 'waiting', $4);
+INSERT INTO rooms (id, race_type_id, host_user_id, status, join_code, mode, duration_seconds)
+VALUES (@id, @race_type_id, @host_user_id, 'waiting', @join_code, @mode, sqlc.narg(duration_seconds));
 
 -- name: InsertRoomParticipant :exec
 INSERT INTO room_participants (id, room_id, user_id, ready)

@@ -19,7 +19,7 @@ import (
 
 // roomServicer defines the subset of app.RoomService that RoomHandler requires.
 type roomServicer interface {
-	CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID) (uuid.UUID, string, error)
+	CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error)
 	JoinRoom(ctx context.Context, userID uuid.UUID, joinCode string) (uuid.UUID, error)
 	Roster(ctx context.Context, callerUserID, roomID uuid.UUID) (app.RoomRoster, error)
 	LeaveRoom(ctx context.Context, userID, roomID uuid.UUID) error
@@ -117,7 +117,8 @@ func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid race type ID", http.StatusBadRequest)
 		return
 	}
-	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, raceTypeID)
+	mode := r.PostForm.Get("mode")
+	roomID, code, err := h.room.CreateRoom(r.Context(), user.ID, raceTypeID, mode, nil)
 	if err != nil {
 		writeRoomError(w, r, err)
 		return

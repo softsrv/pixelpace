@@ -26,7 +26,7 @@ import (
 
 // Each function field lets a test control the corresponding service operation.
 type stubRoomService struct {
-	createFn func(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, string, error)
+	createFn func(context.Context, uuid.UUID, uuid.UUID, string, *int32) (uuid.UUID, string, error)
 	joinFn   func(context.Context, uuid.UUID, string) (uuid.UUID, error)
 	leaveFn  func(context.Context, uuid.UUID, uuid.UUID) error
 	kickFn   func(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
@@ -99,8 +99,8 @@ func (b *fakeBeginner) Run(ctx context.Context, raceID uuid.UUID) error {
 	return err
 }
 
-func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
-	return s.createFn(ctx, userID, raceTypeID)
+func (s *stubRoomService) CreateRoom(ctx context.Context, userID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
+	return s.createFn(ctx, userID, raceTypeID, mode, warmupMinutes)
 }
 
 func (s *stubRoomService) JoinRoom(ctx context.Context, userID uuid.UUID, code string) (uuid.UUID, error) {
@@ -137,12 +137,16 @@ type roomCall struct {
 	raceID    uuid.UUID
 	targetID  uuid.UUID
 	code      string
+	mode      string
 }
 
 func recordingRoomService(record func(roomCall) error) *stubRoomService {
 	return &stubRoomService{
-		createFn: func(_ context.Context, userID, raceID uuid.UUID) (uuid.UUID, string, error) {
-			return stubRoomID, "ABC234", record(roomCall{operation: "create", userID: userID, raceID: raceID})
+		createFn: func(_ context.Context, userID, raceID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
+			if warmupMinutes != nil {
+				return uuid.Nil, "", fmt.Errorf("unexpected warmup minutes %d", *warmupMinutes)
+			}
+			return stubRoomID, "ABC234", record(roomCall{operation: "create", userID: userID, raceID: raceID, mode: mode})
 		},
 		joinFn: func(_ context.Context, userID uuid.UUID, code string) (uuid.UUID, error) {
 			return stubRoomID, record(roomCall{operation: "join", userID: userID, code: code})
@@ -174,7 +178,7 @@ type roomOperation struct {
 func roomOperations() []roomOperation {
 	roomID, raceID, targetID := uuid.New(), uuid.New(), uuid.New()
 	return []roomOperation{
-		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}}, roomCall{operation: "create", raceID: raceID}, http.StatusCreated},
+		{"create", (*handlers.RoomHandler).Create, "/rooms", url.Values{"race_type_id": {raceID.String()}, "mode": {app.ModeRace}}, roomCall{operation: "create", raceID: raceID, mode: app.ModeRace}, http.StatusCreated},
 		{"join", (*handlers.RoomHandler).Join, "/rooms/join", url.Values{"join_code": {" ABC234 "}}, roomCall{operation: "join", code: "ABC234"}, http.StatusOK},
 		{"leave", (*handlers.RoomHandler).Leave, "/rooms/" + roomID.String() + "/leave", url.Values{}, roomCall{operation: "leave", roomID: roomID}, http.StatusNoContent},
 		{"kick", (*handlers.RoomHandler).Kick, "/rooms/" + roomID.String() + "/kick", url.Values{"target_user_id": {targetID.String()}}, roomCall{operation: "kick", roomID: roomID, targetID: targetID}, http.StatusNoContent},
@@ -616,12 +620,22 @@ func TestRoomHandlersHTMXNavigation(t *testing.T) {
 				"start":  {"HX-Redirect", "/rooms/" + roomID.String() + "/race"},
 			}[op.name]
 			svc := recordingRoomService(func(roomCall) error { return nil })
-			rr := serveRoomRequest(t, op, svc, uuid.New(), op.form.Encode(), roomID.String(), true)
+			beginner := &fakeBeginner{}
+			h := handlers.NewRoomHandler(context.Background(), svc, beginner, nil, false)
+			rr := serveRoomRequestWith(t, h, op, uuid.New(), op.form.Encode(), roomID.String(), true)
+			h.Wait()
 			if rr.Code != op.status {
 				t.Fatalf("status = %d, want %d", rr.Code, op.status)
 			}
 			if got := rr.Header().Get(want[0]); got != want[1] {
 				t.Errorf("%s = %q, want %q", want[0], got, want[1])
+			}
+			// Creating a race only opens its lobby; the race begins on Start.
+			beginner.mu.Lock()
+			begun := len(beginner.rooms)
+			beginner.mu.Unlock()
+			if op.name == "create" && begun != 0 {
+				t.Errorf("create began %d races, want none", begun)
 			}
 		})
 	}

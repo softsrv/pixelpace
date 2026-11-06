@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/softsrv/starter/internal/db"
 )
@@ -45,9 +46,19 @@ func generateJoinCode() (string, error) {
 	return string(code), nil
 }
 
-// CreateRoom atomically creates a waiting room and its host participant. It
-// returns the room id, which addresses the roster, alongside the join code.
-func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID) (uuid.UUID, string, error) {
+// Session modes a room is created in. The mode is chosen when the room is
+// created and never inferred from how many participants it has.
+const (
+	ModeRace      = "race"
+	ModeTimeTrial = "time_trial"
+	ModeWarmup    = "warmup"
+)
+
+// CreateRoom atomically creates a waiting room in the given mode and its host
+// participant. warmupMinutes is the length of a warmup session and is nil for
+// every other mode. It returns the room id, which addresses the roster,
+// alongside the join code.
+func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32) (uuid.UUID, string, error) {
 	if _, err := s.q.GetRaceType(ctx, raceTypeID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, "", ErrInvalidRaceType
@@ -63,7 +74,7 @@ func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uui
 		}
 		// A unique violation aborts a PostgreSQL transaction. Each attempt
 		// therefore owns a fresh transaction, rolled back before retrying.
-		roomID, retry, err := s.createRoomAttempt(ctx, hostUserID, raceTypeID, code)
+		roomID, retry, err := s.createRoomAttempt(ctx, hostUserID, raceTypeID, mode, warmupMinutes, code)
 		if err == nil {
 			return roomID, code, nil
 		}
@@ -75,7 +86,11 @@ func (s *RoomService) CreateRoom(ctx context.Context, hostUserID, raceTypeID uui
 	return uuid.Nil, "", fmt.Errorf("create room after %d attempts: %w", maxJoinCodeAttempts, lastErr)
 }
 
-func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTypeID uuid.UUID, code string) (uuid.UUID, bool, error) {
+func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTypeID uuid.UUID, mode string, warmupMinutes *int32, code string) (uuid.UUID, bool, error) {
+	var durationSeconds pgtype.Int4
+	if warmupMinutes != nil {
+		durationSeconds = pgtype.Int4{Int32: *warmupMinutes * 60, Valid: true}
+	}
 	roomID, err := uuid.NewV7()
 	if err != nil {
 		return uuid.Nil, false, fmt.Errorf("generate room id: %w", err)
@@ -92,6 +107,7 @@ func (s *RoomService) createRoomAttempt(ctx context.Context, hostUserID, raceTyp
 	qtx := s.q.WithTx(tx)
 	if err := qtx.InsertRoom(ctx, db.InsertRoomParams{
 		ID: roomID, RaceTypeID: raceTypeID, HostUserID: hostUserID, JoinCode: code,
+		Mode: mode, DurationSeconds: durationSeconds,
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		retry := errors.As(err, &pgErr) && pgErr.Code == "23505"

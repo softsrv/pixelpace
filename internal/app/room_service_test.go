@@ -337,23 +337,31 @@ func TestRoomBeginRaceGuard(t *testing.T) {
 }
 
 func TestRoomCreate(t *testing.T) {
+	sevenMinutes := int32(7)
 	for _, tc := range []struct {
 		name                    string
 		raceErr, participantErr error
+		mode                    string
+		warmupMinutes           *int32
+		duration                pgtype.Int4
 	}{
-		{"success", nil, nil}, {"invalid race", pgx.ErrNoRows, nil}, {"participant failure", nil, errors.New("participant insert failed")},
+		{name: "success", mode: ModeRace},
+		{name: "time trial", mode: ModeTimeTrial},
+		{name: "warmup minutes stored as seconds", mode: ModeWarmup, warmupMinutes: &sevenMinutes, duration: pgtype.Int4{Int32: 420, Valid: true}},
+		{name: "invalid race", raceErr: pgx.ErrNoRows, mode: ModeRace},
+		{name: "participant failure", participantErr: errors.New("participant insert failed"), mode: ModeRace},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			steps := []roomDBStep{{name: "GetRaceType", args: []any{roomTestID}, values: []any{roomTestID, "distance", int64(500000), "500m"}, err: tc.raceErr}}
 			if tc.raceErr == nil {
 				steps = append(steps,
-					roomDBStep{name: "InsertRoom", args: []any{nil, roomTestID, roomTestHost, "ABCDEF"}},
+					roomDBStep{name: "InsertRoom", args: []any{nil, roomTestID, roomTestHost, "ABCDEF", tc.mode, tc.duration}},
 					roomDBStep{name: "InsertRoomParticipant", args: []any{nil, nil, roomTestHost}, err: tc.participantErr})
 			}
 			s, d := newRoomTestService(t, steps...)
 			s.newJoinCode = func() (string, error) { return "ABCDEF", nil }
 			var insertedRoomID uuid.UUID
-			roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+			roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, tc.mode, tc.warmupMinutes)
 			switch {
 			case tc.raceErr != nil:
 				if !errors.Is(err, ErrInvalidRaceType) || d.begins != 0 {
@@ -383,7 +391,7 @@ func TestRoomCreateDoesNotRetryOtherFailures(t *testing.T) {
 			s, d := newRoomTestService(t,
 				roomDBStep{name: "GetRaceType", values: []any{roomTestID, "distance", int64(500000), "500m"}},
 				roomDBStep{name: "InsertRoom", err: cause})
-			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+			_, _, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ModeRace, nil)
 			if !errors.Is(err, cause) || d.begins != 1 || d.rollbacks != 1 || d.commits != 0 {
 				t.Fatalf("unexpected retry: %v, tx %+v", err, d)
 			}
@@ -451,7 +459,7 @@ func TestRoomCreateRetryBound(t *testing.T) {
 	s, d := newRoomTestService(t, steps...)
 	calls := 0
 	s.newJoinCode = func() (string, error) { calls++; return "ABCDEF", nil }
-	roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID)
+	roomID, code, err := s.CreateRoom(context.Background(), roomTestHost, roomTestID, ModeRace, nil)
 	var pgErr *pgconn.PgError
 	if code != "" || roomID != uuid.Nil || !errors.As(err, &pgErr) || calls != 10 || d.begins != 10 || d.rollbacks != 10 || d.commits != 0 {
 		t.Fatalf("retry bound: code %q err %v calls %d tx %+v", code, err, calls, d)

@@ -66,7 +66,7 @@ func quickMatchIntegrationFinish(t *testing.T, pool *pgxpool.Pool, user, raceTyp
 	t.Helper()
 	ctx := context.Background()
 	q := db.New(pool)
-	_, code, err := NewRoomService(q, pool).CreateRoom(ctx, user, raceType)
+	_, code, err := NewRoomService(q, pool).CreateRoom(ctx, user, raceType, ModeRace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

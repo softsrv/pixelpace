@@ -88,6 +88,7 @@ type Race struct {
 	StartedAt  pgtype.Timestamptz `json:"started_at"`
 	FinishedAt pgtype.Timestamptz `json:"finished_at"`
 	TimeTrial  bool               `json:"time_trial"`
+	Mode       string             `json:"mode"`
 }
 
 type RaceParticipant struct {
@@ -130,13 +131,15 @@ type RefreshToken struct {
 }
 
 type Room struct {
-	ID           uuid.UUID          `json:"id"`
-	RaceTypeID   uuid.UUID          `json:"race_type_id"`
-	HostUserID   uuid.UUID          `json:"host_user_id"`
-	Status       string             `json:"status"`
-	JoinCode     string             `json:"join_code"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	RaceStartsAt pgtype.Timestamptz `json:"race_starts_at"`
+	ID              uuid.UUID          `json:"id"`
+	RaceTypeID      uuid.UUID          `json:"race_type_id"`
+	HostUserID      uuid.UUID          `json:"host_user_id"`
+	Status          string             `json:"status"`
+	JoinCode        string             `json:"join_code"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	RaceStartsAt    pgtype.Timestamptz `json:"race_starts_at"`
+	Mode            string             `json:"mode"`
+	DurationSeconds pgtype.Int4        `json:"duration_seconds"`
 }
 
 type RoomInvite struct {

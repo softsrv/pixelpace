@@ -22,21 +22,20 @@ function inert() {
 function modeOptions() {
   var select = dashboardHtml.match(/<select name="activity_type"[^>]*>([\s\S]*?)<\/select>/);
   assert.ok(select, 'dashboard.html has the activity_type select');
-  return Array.from(select[1].matchAll(/<option value="([^"]+)" data-submit-label="([^"]+)"/g), function (m) {
-    return { value: m[1], label: m[2], getAttribute: function (name) { return name === 'data-submit-label' ? m[2] : null; } };
+  return Array.from(select[1].matchAll(/<option value="([^"]+)"/g), function (m) {
+    return { value: m[1] };
   });
 }
 
-// Loads app.js and returns its document change listeners and the label element.
+// Loads app.js and returns its document change listeners.
 function load() {
   var change = [];
-  var label = { textContent: 'Create race' };
   runInNewContext(appJs, {
     document: {
       addEventListener: function (type, fn) { if (type === 'change') change.push(fn); },
       body: { addEventListener: function () {} },
       getElementById: function () { return inert(); },
-      querySelector: function (sel) { return sel === '#create-room-submit-label' ? label : null; },
+      querySelector: function () { return null; },
       querySelectorAll: function () { return []; },
       dispatchEvent: function () { return true; }
     },
@@ -52,7 +51,7 @@ function load() {
     console: console
   });
   assert.ok(change.length > 0, 'app.js registers a document change listener');
-  return { label: label, fire: function (target) { change.forEach(function (fn) { fn({ target: target }); }); } };
+  return { fire: function (target) { change.forEach(function (fn) { fn({ target: target }); }); } };
 }
 
 function modeSelect(options, value, form) {
@@ -63,20 +62,12 @@ function modeSelect(options, value, form) {
     closest: function (sel) { return sel === 'form' ? form : null; },
     options: options,
     selectedIndex: options.findIndex(function (o) { return o.value === value; }),
-    matches: function (sel) { return sel === 'select[data-submit-label-target]' || sel === 'select[name="activity_type"]'; },
-    getAttribute: function (name) { return name === 'data-submit-label-target' ? '#create-room-submit-label' : null; }
+    matches: function (sel) { return sel === 'select[name="activity_type"]'; }
   };
 }
 
-test('changing the mode swaps the race card button between Create race, Start time trial and Start warmup', function () {
-  var options = modeOptions();
-  var page = load();
-  page.fire(modeSelect(options, 'time_trial'));
-  assert.equal(page.label.textContent, 'Start time trial');
-  page.fire(modeSelect(options, 'warmup'));
-  assert.equal(page.label.textContent, 'Start warmup');
-  page.fire(modeSelect(options, 'race'));
-  assert.equal(page.label.textContent, 'Create race');
+test('the race card offers race, time trial and warmup', function () {
+  assert.deepEqual(modeOptions().map(function (o) { return o.value; }), ['race', 'time_trial', 'warmup']);
 });
 
 test('changing mode to warmup hides distance select and enables minutes input', function () {
@@ -131,8 +122,7 @@ test('changing mode to warmup hides distance select and enables minutes input', 
   assert.equal(minutesInput.disabled, true, 'minutes input disabled on time trial');
 });
 
-test('a change on another select leaves the button label alone', function () {
+test('a change on another select is ignored', function () {
   var page = load();
-  page.fire({ matches: function () { return false; } });
-  assert.equal(page.label.textContent, 'Create race');
+  assert.doesNotThrow(function () { page.fire({ matches: function () { return false; } }); });
 });

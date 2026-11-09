@@ -18,7 +18,7 @@ _Avoid_: Format, workout type, activity type
 
 **Preset**:
 Defines an activity's win condition and target, chosen from a **fixed preset catalog** — never a freeform value — so results stay comparable within a Leaderboard. Starts with **Fixed Distance** (500m / 1000m / 2000m / 5000m / 10000m — first to reach the target wins, ranked by elapsed time). Designed to extend to **Fixed Time** (5 / 10 / 20 minutes — most distance covered wins) and **Interval** (a sequence of Segments) without a schema redesign.
-_Note_: Wire names for the preset stay unchanged from the earlier Race Type naming: form field `race_type_id`, URL query parameter `race_type`, and endpoint `/rooms/{id}/race-type` (decision U1).
+_Note_: The UI labels the Preset choice **Piece** (rowing usage: "a 2k piece", "a 20-minute piece"); "Preset" stays the domain and code term. Wire names for the preset stay unchanged from the earlier Race Type naming: form field `race_type_id`, URL query parameter `race_type`, and endpoint `/rooms/{id}/race-type` (decision U1).
 _Avoid_: Race Type, race format, game mode
 
 **Race**:

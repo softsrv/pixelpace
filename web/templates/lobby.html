@@ -32,7 +32,7 @@
       <form class="space-y-2" hx-post="/rooms/{{.Lobby.RoomID}}/race-type" hx-trigger="change" hx-swap="none"
             data-error-target="#preset-error" data-error-message="Couldn't change the preset.">
         <label class="block space-y-2" for="preset-select">
-          <span class="pp-label pp-arcade">Preset</span>
+          <span class="pp-label pp-arcade">Piece</span>
           <select id="preset-select" name="race_type_id" class="pp-field">
             {{range .RaceTypes}}
             <option value="{{.ID}}"{{if eq .ID $.Lobby.PresetID}} selected{{end}}>{{.Label}}</option>

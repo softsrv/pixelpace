@@ -57,43 +57,34 @@ document.addEventListener('htmx:response:error', function (evt) {
   found.target.textContent = reason || found.source.getAttribute('data-error-message') || 'Something went wrong.';
 });
 
-// <select data-submit-label-target="#label"> writes the chosen option's
-// data-submit-label into that element, so a form's button names what it does
-// (the race card: 'Create race' / 'Start time trial' / 'Start warmup'). It also
-// toggles mode-specific form fields (hiding the distance select and showing the
-// minutes input for warmup). The race card is loaded by htmx, so this is a
-// document delegate.
+// The race card's activity-type select toggles mode-specific form fields
+// (hiding the distance select and showing the minutes input for warmup). The
+// select sits above the form and joins it through its form attribute. The race
+// card is loaded by htmx, so this is a document delegate.
 document.addEventListener('change', function (evt) {
   var select = evt.target;
-  if (!select || !select.matches || !select.matches('select[data-submit-label-target]')) return;
-  var option = select.options && select.options[select.selectedIndex];
-  var text = option && option.getAttribute('data-submit-label');
-  var label = document.querySelector(select.getAttribute('data-submit-label-target'));
-  if (label && text) label.textContent = text;
+  if (!select || !select.matches || !select.matches('select[name="activity_type"]')) return;
+  var form = select.form || (select.closest && select.closest('form'));
+  if (!form) return;
+  var isWarmup = select.value === 'warmup';
+  var distanceField = form.querySelector('#preset-field') || form.querySelector('[data-activity-type-field="distance"]');
+  var warmupField = form.querySelector('#warmup-minutes-field') || form.querySelector('[data-activity-type-field="warmup"]');
+  var distanceSelect = form.querySelector('select[name="race_type_id"]');
+  var minutesInput = form.querySelector('input[name="minutes"]');
 
-  if (select.name === 'activity_type') {
-    var form = select.form || (select.closest && select.closest('form'));
-    if (!form) return;
-    var isWarmup = select.value === 'warmup';
-    var distanceField = form.querySelector('#preset-field') || form.querySelector('[data-activity-type-field="distance"]');
-    var warmupField = form.querySelector('#warmup-minutes-field') || form.querySelector('[data-activity-type-field="warmup"]');
-    var distanceSelect = form.querySelector('select[name="race_type_id"]');
-    var minutesInput = form.querySelector('input[name="minutes"]');
-
-    if (distanceField) {
-      if (isWarmup) distanceField.classList.add('hidden');
-      else distanceField.classList.remove('hidden');
-    }
-    if (distanceSelect) {
-      distanceSelect.disabled = isWarmup;
-    }
-    if (warmupField) {
-      if (isWarmup) warmupField.classList.remove('hidden');
-      else warmupField.classList.add('hidden');
-    }
-    if (minutesInput) {
-      minutesInput.disabled = !isWarmup;
-    }
+  if (distanceField) {
+    if (isWarmup) distanceField.classList.add('hidden');
+    else distanceField.classList.remove('hidden');
+  }
+  if (distanceSelect) {
+    distanceSelect.disabled = isWarmup;
+  }
+  if (warmupField) {
+    if (isWarmup) warmupField.classList.remove('hidden');
+    else warmupField.classList.add('hidden');
+  }
+  if (minutesInput) {
+    minutesInput.disabled = !isWarmup;
   }
 });
 

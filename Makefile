@@ -1,13 +1,6 @@
 APP_NAME         := app
 BIN_DIR          := ./bin
 MODULE           := github.com/softsrv/starter
-SMTP4DEV_NAME    := $(APP_NAME)-smtp4dev
-SMTP4DEV_SMTP    := 2525
-SMTP4DEV_WEB     := 5000
-VALKEY_NAME      := $(APP_NAME)-valkey
-VALKEY_PORT      := 6379
-DEV_NAME         := $(APP_NAME)-dev
-DEV_IMAGE        := $(APP_NAME)-dev
 # The one owner of the sqlc version: CI installs it via `make sqlc-install`,
 # and sqlc-check refuses any other version (it is recorded in the headers of
 # the generated files under internal/db).
@@ -24,87 +17,28 @@ export
 # Make-only: keep the bare `export` above from running `go env` for every recipe.
 unexport SQLC_INSTALL_DIR SQLC
 
-.PHONY: dev dev-deps dev-container dev-logs dev-stop run build test fmt lint \
+.PHONY: dev dev-logs dev-stop air run build test fmt lint \
         daisyui-install pixi-install tailwind tailwind-watch \
-        smtp4dev smtp4dev-stop valkey valkey-stop \
         migrate-up migrate-down migrate-create migrate-status \
         sqlc-install sqlc-generate sqlc-check \
         docker-build docker-run prod clean
 
 ## ── Development ─────────────────────────────────────────────────────────────
 
-# Hot reload in Docker: starts smtp4dev and Valkey, applies migrations, then
-# runs air in a detached container with the source tree mounted at /src. air
-# rebuilds the CSS and the binary on every change. Prints only the container
-# ID; follow the output with `make dev-logs` and stop it with `make dev-stop`.
-dev: dev-deps
-	@$(MAKE) --no-print-directory -s dev-container
-
-# Quiet on success; prints everything if a step fails.
-dev-deps:
-	@out=$$($(MAKE) --no-print-directory -s smtp4dev valkey migrate-up 2>&1) || { echo "$$out" >&2; exit 1; }
-
-# Inside the container "localhost" is the container itself, so services the
-# .env points at on this machine are reached through host.docker.internal.
-dockerhost = $(subst 127.0.0.1,host.docker.internal,$(subst localhost,host.docker.internal,$(1)))
-
-# The app reads .env itself, mounted at /config/.env (CONFIG_FILE in
-# Dockerfile.dev). Only the host-service addresses are passed as variables,
-# rewritten for the container; the environment overrides the file.
-DEV_HOST_VARS := DATABASE_URL VALKEY_ADDR SMTP_HOST
-
-dev-container: export DATABASE_URL := $(call dockerhost,$(DATABASE_URL))
-dev-container: export VALKEY_ADDR := $(call dockerhost,$(or $(VALKEY_ADDR),localhost:$(VALKEY_PORT)))
-dev-container: export SMTP_HOST := $(call dockerhost,$(SMTP_HOST))
-dev-container:
+# The whole dev stack via compose.yaml: Postgres, Valkey, smtp4dev, a one-shot
+# migrate, and the app running air with the source tree mounted at /src, so
+# every change rebuilds the CSS and the binary and restarts the app. Detached;
+# follow the app with `make dev-logs`, stop everything with `make dev-stop`
+# or `docker compose down`.
+dev:
 	@test -f .env || { echo "no .env: copy .env.example to .env first" >&2; exit 1; }
-	@docker build -q -t $(DEV_IMAGE) - < Dockerfile.dev >/dev/null
-	@docker rm -fv $(DEV_NAME) >/dev/null 2>&1 || true
-	@docker run -d --init --name $(DEV_NAME) \
-	  --add-host=host.docker.internal:host-gateway \
-	  -p $(or $(PORT),8080):$(or $(PORT),8080) \
-	  -v "$(CURDIR)":/src \
-	  -v "$(CURDIR)/.env":/config/.env:ro \
-	  -v /src/tmp \
-	  -v $(APP_NAME)-dev-gomod:/go/pkg/mod \
-	  -v $(APP_NAME)-dev-gocache:/root/.cache/go-build \
-	  $(addprefix -e ,$(DEV_HOST_VARS)) \
-	  $(DEV_IMAGE)
+	docker compose up -d --build
 
 dev-logs:
-	docker logs -f $(DEV_NAME)
+	docker compose logs -f app
 
 dev-stop:
-	docker rm -fv $(DEV_NAME) 2>/dev/null || true
-
-smtp4dev:
-	@if [ -z "$$(docker ps -q -f name=^$(SMTP4DEV_NAME)$$)" ]; then \
-	  docker rm -f $(SMTP4DEV_NAME) 2>/dev/null || true; \
-	  docker run -d --name $(SMTP4DEV_NAME) \
-	    -p $(SMTP4DEV_SMTP):25 \
-	    -p $(SMTP4DEV_WEB):80 \
-	    rnwood/smtp4dev; \
-	  echo "smtp4dev started — SMTP: localhost:$(SMTP4DEV_SMTP)  Web UI: http://localhost:$(SMTP4DEV_WEB)"; \
-	else \
-	  echo "smtp4dev already running"; \
-	fi
-
-smtp4dev-stop:
-	docker rm -f $(SMTP4DEV_NAME) 2>/dev/null || true
-
-valkey:
-	@if [ -z "$$(docker ps -q -f name=^$(VALKEY_NAME)$$)" ]; then \
-	  docker rm -f $(VALKEY_NAME) 2>/dev/null || true; \
-	  docker run -d --name $(VALKEY_NAME) \
-	    -p $(VALKEY_PORT):6379 \
-	    valkey/valkey; \
-	  echo "valkey started — localhost:$(VALKEY_PORT)"; \
-	else \
-	  echo "valkey already running"; \
-	fi
-
-valkey-stop:
-	docker rm -f $(VALKEY_NAME) 2>/dev/null || true
+	docker compose down
 
 air:
 	air

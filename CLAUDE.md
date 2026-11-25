@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-make dev              # Detached app-dev container (Dockerfile.dev) running air with the repo mounted; prints the container ID
-make dev-logs         # Follow the dev container's output
-make dev-stop         # Stop and remove the dev container
+make dev              # docker compose up -d --build: Postgres, Valkey, smtp4dev, one-shot migrate, and the app running air with the repo mounted (compose.yaml)
+make dev-logs         # Follow the app container's output
+make dev-stop         # docker compose down (plain `docker compose down` works too; add -v to wipe the dev database)
 make run              # Run without hot-reload
 make build            # Compile to ./bin/app
 make test             # Run unit tests
@@ -109,7 +109,7 @@ pgxpool config: max 25 conns (`DB_MAX_CONNS`), min 5, max lifetime 1h, idle time
 
 Copy `.env.example` to `.env`. The app loads it itself at startup with godotenv (`loadConfigFile` in `cmd/app/main.go`): `CONFIG_FILE` names the file (it must then exist), else `./.env` is read if present; variables already in the environment override the file. Containers mount it at `/config/.env` (the images set `CONFIG_FILE`). Required vars: `DATABASE_URL`, `JWT_SECRET` (≥32 bytes), `APP_BASE_URL`, and all `SMTP_*` vars. `APP_ENV=production` gates JSON logging, secure cookies, and suppresses debug error detail.
 
-For local development, `make dev` starts smtp4dev automatically — SMTP is available at `localhost:2525`, web UI at `http://localhost:5000`.
+For local development, `make dev` brings up the compose stack in `compose.yaml`; the app container's `DATABASE_URL`, `VALKEY_ADDR` and SMTP settings are overridden to the stack's own Postgres (also on `localhost:5432`, user/password/db `pixelpace`), Valkey and smtp4dev (SMTP `localhost:2525`, web UI `http://localhost:5000`). `deploy/docker-compose.yml` is the deployment stack.
 
 ## Tech constraints
 

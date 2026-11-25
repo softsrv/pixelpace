@@ -1,21 +1,23 @@
-# Runs the published app image with a private Valkey for live race fan-out.
-# Postgres is external: DATABASE_URL and the other settings come from .env
-# (see .env.example). To use the Valkey below, set VALKEY_ADDR=valkey:6379;
-# services reach each other by name on the project's network.
-# Migrations never run on startup; apply them first with
+# Deployment: runs the published app image with a private Valkey for live race
+# fan-out. (The repo-root compose.yaml is the local development stack.)
+# Postgres is external: DATABASE_URL and the other settings come from the
+# repo-root .env (see .env.example), or the file PIXELPACE_CONFIG names. To use
+# the Valkey below, set VALKEY_ADDR=valkey:6379; services reach each other by
+# name on the project's network. Relative paths resolve against this
+# directory. Migrations never run on startup; apply them first with
 #
-#   docker compose run --rm migrate
+#   docker compose -f deploy/docker-compose.yml run --rm migrate
 #
-# then start everything with `docker compose up -d`.
+# then start everything with `docker compose -f deploy/docker-compose.yml up -d`.
 services:
   app:
     image: trriplejay/pixelpace:${PIXELPACE_TAG:-latest}
-    build: .
+    build: ..
     # The app reads its settings from this dotenv file, mounted where the
     # image's CONFIG_FILE points. PIXELPACE_CONFIG picks a different host
     # file. The variables below override the file.
     volumes:
-      - ${PIXELPACE_CONFIG:-./.env}:/config/.env:ro
+      - ${PIXELPACE_CONFIG:-../.env}:/config/.env:ro
     environment:
       CONFIG_FILE: /config/.env
       PORT: "8080"
@@ -47,7 +49,9 @@ services:
   migrate:
     image: migrate/migrate:v4.18.3
     profiles: [tools]
+    # DATABASE_URL comes from the same config file the app reads.
+    env_file: ${PIXELPACE_CONFIG:-../.env}
     volumes:
-      - ./db/migrations:/migrations:ro
-    entrypoint: ["migrate", "-path", "/migrations", "-database", "${DATABASE_URL:?set DATABASE_URL in .env}"]
+      - ../db/migrations:/migrations:ro
+    entrypoint: ["sh", "-c", 'exec migrate -path /migrations -database "$$DATABASE_URL" "$$@"', "migrate"]
     command: ["up"]

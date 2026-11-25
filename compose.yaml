@@ -1,0 +1,98 @@
+# Local development stack: `make dev` (docker compose up -d --build) starts it,
+# `docker compose down` stops it. (deploy/docker-compose.yml is the deployment
+# stack.)
+#
+# The app runs air in the dev image with the repo mounted at /src, so every
+# change to Go, templates, CSS or JS rebuilds and restarts it. It reads .env
+# itself from /config/.env; the variables under app.environment override the
+# file so the app uses the services below instead of whatever .env points at.
+# Migrations are applied by the one-shot migrate service before the app starts.
+#
+# Postgres data lives in the pgdata volume and survives `docker compose down`;
+# `docker compose down -v` wipes it (and the Go caches).
+name: pixelpace
+
+x-dev-database-url: &dev-database-url postgres://pixelpace:pixelpace@postgres:5432/pixelpace?sslmode=disable
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    init: true
+    volumes:
+      - .:/src
+      - ./.env:/config/.env:ro
+      # Keep air's build output inside the container, off the host tree.
+      - /src/tmp
+      - gomod:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+    environment:
+      DATABASE_URL: *dev-database-url
+      VALKEY_ADDR: valkey:6379
+      SMTP_HOST: smtp4dev
+      SMTP_PORT: "25"
+      PORT: "8080"
+    ports:
+      - "127.0.0.1:${PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      smtp4dev:
+        condition: service_started
+    # The app drains in-flight requests and race starts for up to 30s.
+    stop_grace_period: 35s
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: pixelpace
+      POSTGRES_PASSWORD: pixelpace
+      POSTGRES_DB: pixelpace
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Published on loopback so host tools (psql, make migrate-*, make run,
+    # make test-integration's TEST_DATABASE_URL) can reach it.
+    ports:
+      - "127.0.0.1:${DEV_PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "pixelpace", "-d", "pixelpace"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: applies pending migrations, then exits. A no-op at head.
+  migrate:
+    image: migrate/migrate:v4.18.3
+    volumes:
+      - ./db/migrations:/migrations:ro
+    command: ["-path", "/migrations", "-database", *dev-database-url, "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Pub/sub only: nothing is stored, so persistence is off.
+  valkey:
+    image: valkey/valkey:8-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${VALKEY_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Catches outgoing mail: web UI at http://localhost:5000.
+  smtp4dev:
+    image: rnwood/smtp4dev
+    ports:
+      - "127.0.0.1:${SMTP4DEV_SMTP_PORT:-2525}:25"
+      - "127.0.0.1:${SMTP4DEV_WEB_PORT:-5000}:80"
+
+volumes:
+  pgdata:
+  gomod:
+  gocache:
